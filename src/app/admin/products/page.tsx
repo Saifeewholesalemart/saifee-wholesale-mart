@@ -755,7 +755,7 @@ function ProductsContent() {
     const meta = getProductTradeMode(prod);
     setAdjDirection('IN');
     setAdjCartonQty(meta.tradeMode === 'PIECES' ? 0 : 1);
-    setAdjLooseQty(meta.tradeMode === 'PIECES' ? 10 : 0);
+    setAdjLooseQty(meta.tradeMode === 'PIECES' ? 1 : 0);
     setAdjReason('Physical Stock Audit Reconciliation');
     setAdjNotes('');
     setAdjError('');
@@ -768,8 +768,8 @@ function ProductsContent() {
     if (!showStockModal) return;
     const meta = getProductTradeMode(showStockModal);
     const totalBase = meta.tradeMode === 'PIECES'
-      ? adjLooseQty
-      : calculateBaseQuantity(adjCartonQty, adjLooseQty, meta.packSize);
+      ? (adjLooseQty || 0)
+      : calculateBaseQuantity(adjCartonQty || 0, adjLooseQty || 0, meta.packSize);
 
     if (totalBase <= 0) {
       setAdjError('Please enter a valid quantity greater than zero');
@@ -785,11 +785,12 @@ function ProductsContent() {
         adjNotes,
         undefined,
         undefined,
-        adjCartonQty,
-        adjLooseQty
+        meta.tradeMode === 'PIECES' ? 0 : adjCartonQty,
+        meta.tradeMode === 'PIECES' ? adjLooseQty : adjLooseQty
       );
       setShowStockModal(null);
-      showToast(`Stock adjusted: ${adjDirection === 'IN' ? '+' : '-'}${totalBase} Pieces`);
+      const formattedQty = formatProductStockDisplay(totalBase, showStockModal, true);
+      showToast(`Stock adjusted: ${adjDirection === 'IN' ? '+' : '-'}${formattedQty}`);
     } catch (err: any) {
       setAdjError(err.message || 'Stock adjustment failed');
     }
@@ -2381,42 +2382,112 @@ function ProductsContent() {
                 </button>
               </div>
 
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700 block mb-1">
-                  Adjustment Quantity ({showStockModal.base_unit || 'Unit'}s)
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  value={adjCartonQty}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10) || 0;
-                    setAdjCartonQty(val);
-                    setAdjLooseQty(0);
-                  }}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-base font-black text-slate-900"
-                  required
-                />
-              </div>
+              {/* Trading Unit-Aware Quantity Inputs */}
+              {(() => {
+                const meta = getProductTradeMode(showStockModal);
+                if (meta.tradeMode === 'PIECES') {
+                  return (
+                    <div className="space-y-1">
+                      <label className="font-semibold text-slate-700 block mb-1">
+                        Adjustment Quantity (Pieces) *
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={adjLooseQty || ''}
+                        onChange={(e) => {
+                          const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                          setAdjLooseQty(val);
+                          setAdjCartonQty(0);
+                        }}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-base font-black text-slate-900"
+                        placeholder="Enter pieces quantity"
+                        required
+                      />
+                    </div>
+                  );
+                } else if (meta.tradeMode === 'BOTH') {
+                  return (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="font-semibold text-slate-700 block mb-1">
+                          Cartons (Boxes)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={adjCartonQty || ''}
+                          onChange={(e) => {
+                            const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                            setAdjCartonQty(val);
+                          }}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-base font-black text-slate-900"
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="font-semibold text-slate-700 block mb-1">
+                          Loose (Pieces)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={adjLooseQty || ''}
+                          onChange={(e) => {
+                            const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                            setAdjLooseQty(val);
+                          }}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-base font-black text-slate-900"
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+                  );
+                } else {
+                  // Carton only
+                  return (
+                    <div className="space-y-1">
+                      <label className="font-semibold text-slate-700 block mb-1">
+                        Adjustment Quantity (Cartons / Boxes) *
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={adjCartonQty || ''}
+                        onChange={(e) => {
+                          const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                          setAdjCartonQty(val);
+                          setAdjLooseQty(0);
+                        }}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-base font-black text-slate-900"
+                        placeholder="Enter carton quantity"
+                        required
+                      />
+                    </div>
+                  );
+                }
+              })()}
 
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
                 <div className="flex justify-between items-center text-xs font-semibold">
                   <span className="text-slate-600">Current Available:</span>
                   <span className="font-black text-slate-900">
-                    {formatQuantityDisplay(
-                      inventory.find(i => i.product_id === showStockModal.id)?.available_qty || 0,
-                      showStockModal.units_per_box_carton || 24,
-                      showStockModal.trading_unit,
-                      showStockModal.base_unit,
-                      true
-                    )}
+                    {(() => {
+                      const avail = inventory.find(i => i.product_id === showStockModal.id)?.available_qty || 0;
+                      return formatProductStockDisplay(avail, showStockModal, true);
+                    })()}
                   </span>
                 </div>
                 <div className="flex justify-between items-center text-xs font-semibold">
                   <span className="text-slate-600">Adjustment Base Units:</span>
                   <span className={`font-black ${adjDirection === 'IN' ? 'text-emerald-700' : 'text-rose-700'}`}>
-                    {adjDirection === 'IN' ? '+' : '-'}
-                    {calculateBaseQuantity(adjCartonQty, adjLooseQty, showStockModal.units_per_box_carton || 24)} {showStockModal.base_unit || 'Piece'}s
+                    {(() => {
+                      const meta = getProductTradeMode(showStockModal);
+                      const totalBase = meta.tradeMode === 'PIECES'
+                        ? (adjLooseQty || 0)
+                        : calculateBaseQuantity(adjCartonQty || 0, adjLooseQty || 0, meta.packSize);
+                      return `${adjDirection === 'IN' ? '+' : '-'}${formatProductStockDisplay(totalBase, showStockModal, true)}`;
+                    })()}
                   </span>
                 </div>
               </div>

@@ -702,7 +702,7 @@ export default function CentralItemDetailHub({
     const meta = getProductTradeMode(product);
     setAdjDirection('IN');
     setAdjCartonQty(meta.tradeMode === 'PIECES' ? 0 : 1);
-    setAdjLooseQty(meta.tradeMode === 'PIECES' ? 10 : 0);
+    setAdjLooseQty(meta.tradeMode === 'PIECES' ? 1 : 0);
     setAdjReason('Physical Stock Audit Reconciliation');
     setAdjNotes('');
     setAdjBatchNumber('');
@@ -716,8 +716,8 @@ export default function CentralItemDetailHub({
     const meta = getProductTradeMode(product);
     const unitsPerPack = meta.packSize;
     const totalBase = meta.tradeMode === 'PIECES'
-      ? adjLooseQty
-      : calculateBaseQuantity(adjCartonQty, adjLooseQty, unitsPerPack);
+      ? (adjLooseQty || 0)
+      : calculateBaseQuantity(adjCartonQty || 0, adjLooseQty || 0, unitsPerPack);
 
     if (totalBase <= 0) {
       setAdjError('Please enter a valid quantity greater than zero');
@@ -738,7 +738,7 @@ export default function CentralItemDetailHub({
       );
       setShowStockModal(false);
       setAdjCartonQty(meta.tradeMode === 'PIECES' ? 0 : 1);
-      setAdjLooseQty(meta.tradeMode === 'PIECES' ? 10 : 0);
+      setAdjLooseQty(meta.tradeMode === 'PIECES' ? 1 : 0);
       setAdjNotes('');
       const formattedQty = formatProductStockDisplay(totalBase, product, true);
       showToast(`Stock adjusted successfully: ${adjDirection === 'IN' ? '+' : '-'}${formattedQty}`);
@@ -2799,32 +2799,55 @@ export default function CentralItemDetailHub({
               </div>
 
               {tradeMeta.allowCarton ? (
-                <div className="grid grid-cols-2 gap-3">
+                tradeMeta.allowPieces ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">
+                        Cartons (Boxes)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={adjCartonQty || ''}
+                        onChange={(e) => setAdjCartonQty(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-base font-black text-slate-900"
+                        placeholder="0"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">
+                        Loose (Pieces)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={adjLooseQty || ''}
+                        onChange={(e) => setAdjLooseQty(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-base font-black text-slate-900"
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+                ) : (
                   <div>
                     <label className="font-semibold text-slate-700 block mb-1">
-                      Cartons (Boxes)
+                      Adjustment Quantity (Cartons / Boxes) *
                     </label>
                     <input
                       type="number"
-                      min="0"
-                      value={adjCartonQty}
-                      onChange={(e) => setAdjCartonQty(parseInt(e.target.value, 10) || 0)}
+                      min="1"
+                      value={adjCartonQty || ''}
+                      onChange={(e) => {
+                        const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                        setAdjCartonQty(val);
+                        setAdjLooseQty(0);
+                      }}
                       className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-base font-black text-slate-900"
+                      placeholder="Enter carton quantity"
+                      required
                     />
                   </div>
-                  <div>
-                    <label className="font-semibold text-slate-700 block mb-1">
-                      Loose (Pieces)
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={adjLooseQty}
-                      onChange={(e) => setAdjLooseQty(parseInt(e.target.value, 10) || 0)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-base font-black text-slate-900"
-                    />
-                  </div>
-                </div>
+                )
               ) : (
                 <div>
                   <label className="font-semibold text-slate-700 block mb-1">
@@ -2833,9 +2856,14 @@ export default function CentralItemDetailHub({
                   <input
                     type="number"
                     min="1"
-                    value={adjLooseQty}
-                    onChange={(e) => setAdjLooseQty(parseInt(e.target.value, 10) || 0)}
+                    value={adjLooseQty || ''}
+                    onChange={(e) => {
+                      const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                      setAdjLooseQty(val);
+                      setAdjCartonQty(0);
+                    }}
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none text-base font-black text-slate-900"
+                    placeholder="Enter pieces quantity"
                     required
                   />
                 </div>
