@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
 import { Search, ShoppingBag, Plus, Minus, FileText, History, DollarSign, ArrowRight, RotateCcw, Package, AlertTriangle } from 'lucide-react';
-import { Product, Order, Invoice, Payment, formatQuantityDisplay, splitBaseQuantity, calculateItemAmounts, PendingOrderItemWarning } from '@/lib/db';
+import { Product, Order, Invoice, Payment, formatQuantityDisplay, splitBaseQuantity, calculateItemAmounts, PendingOrderItemWarning, getProductTradeMode } from '@/lib/db';
 import LastBillingRatesModal from '@/components/LastBillingRatesModal';
 import SmartSearchBar from '@/components/SmartSearchBar';
 import PendingItemWarningCard, { CartPendingSummaryBanner } from '@/components/orders/PendingItemWarningCard';
@@ -415,7 +415,13 @@ export default function RetailerDashboard() {
                 const looseRate = p.loose_price_mode === 'manual' && p.loose_selling_price != null
                   ? p.loose_selling_price
                   : (cartonRate / unitsPerPack);
-                const allowLoose = p.allow_loose_sale !== false;
+
+                const tradeModeInfo = getProductTradeMode(p);
+                const allowCarton = tradeModeInfo.allowCarton;
+                const allowPieces = tradeModeInfo.allowPieces;
+                const isCartonOnly = allowCarton && !allowPieces;
+                const isPieceOnly = !allowCarton && allowPieces;
+                const isBoth = allowCarton && allowPieces;
 
                 return (
                   <div key={p.id} className="erp-card bg-white p-4 flex flex-col gap-3 rounded-xl border border-slate-200">
@@ -426,14 +432,24 @@ export default function RetailerDashboard() {
                           <span className="px-2 py-0.5 rounded text-xs font-black bg-emerald-50 text-emerald-800 border border-emerald-300">
                             MRP: ₹{activeMrp || p.mrp}
                           </span>
-                          {allowLoose && (
+                          {isCartonOnly && (
+                            <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded text-xs font-bold shrink-0">
+                              {p.trading_unit || 'Carton'} Only
+                            </span>
+                          )}
+                          {isPieceOnly && (
                             <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded text-xs font-bold shrink-0">
-                              Loose
+                              {p.base_unit || 'Pieces'} Only
+                            </span>
+                          )}
+                          {isBoth && (
+                            <span className="px-2 py-0.5 bg-cyan-50 text-cyan-800 border border-cyan-300 rounded text-xs font-bold shrink-0">
+                              Carton &amp; Pieces
                             </span>
                           )}
                         </div>
                         <span className="text-xs text-slate-600 font-medium block mt-1">
-                          Brand: {p.brand} | Packing: {p.pack_size} ({unitsPerPack} {p.base_unit || 'Pcs'}/{p.trading_unit})
+                          Brand: {p.brand} | Packing: <strong className="text-slate-700 font-bold">{isPieceOnly ? `1 ${p.base_unit || 'Piece'}` : (p.pack_size || `${unitsPerPack} ${p.base_unit || 'Pcs'}/${p.trading_unit}`)}</strong>
                         </span>
                         
                         {lots.length > 1 ? (
@@ -479,51 +495,60 @@ export default function RetailerDashboard() {
                     {/* Pricing and Steppers */}
                     <div className="border-t border-slate-100 pt-2 space-y-2">
                       <div className="flex items-center justify-between text-xs">
-                        <div>
-                          <span className="text-xs text-slate-500 block uppercase font-bold">Wholesale {p.trading_unit}</span>
-                          <span className="text-sm font-black text-indigo-700">₹{cartonRate.toFixed(2)}/{p.trading_unit}</span>
-                          {p.carton_discount ? (
-                            <span className="text-[11px] font-bold text-emerald-600 block">
-                              ₹{(cartonRate - p.carton_discount).toFixed(2)} net (-₹{p.carton_discount} disc)
-                            </span>
-                          ) : null}
-                        </div>
-                        {allowLoose && (
-                          <div className="text-right">
-                            <span className="text-xs text-slate-500 block uppercase font-bold">Loose Piece</span>
+                        {allowCarton && (
+                          <div>
+                            <span className="text-xs text-slate-500 block uppercase font-bold">Wholesale {p.trading_unit}</span>
+                            <span className="text-sm font-black text-indigo-700">₹{cartonRate.toFixed(2)}/{p.trading_unit}</span>
+                            {p.carton_discount ? (
+                              <span className="text-[11px] font-bold text-emerald-600 block">
+                                ₹{(cartonRate - p.carton_discount).toFixed(2)} net (-₹{p.carton_discount} disc)
+                              </span>
+                            ) : null}
+                          </div>
+                        )}
+                        {allowPieces && (
+                          <div className={allowCarton ? "text-right" : ""}>
+                            <span className="text-xs text-slate-500 block uppercase font-bold">{isPieceOnly ? (p.base_unit || 'Piece') : 'Loose Piece'}</span>
                             <span className="text-sm font-black text-emerald-700">₹{looseRate.toFixed(2)}/{p.base_unit || 'Piece'}</span>
+                            {isPieceOnly && p.loose_discount ? (
+                              <span className="text-[11px] font-bold text-emerald-600 block">
+                                ₹{(looseRate - p.loose_discount).toFixed(2)} net (-₹{p.loose_discount} disc)
+                              </span>
+                            ) : null}
                           </div>
                         )}
                       </div>
 
                       {/* Dual Stepper buttons */}
-                      <div className="grid grid-cols-2 gap-2 pt-1">
-                        <div className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-100">
-                          <span className="text-xs font-bold text-slate-700 uppercase">{p.trading_unit}s:</span>
-                          <div className="flex items-center gap-1.5">
-                            {cartonQty > 0 && (
+                      <div className={`grid ${allowCarton && allowPieces ? 'grid-cols-2' : 'grid-cols-1'} gap-2 pt-1`}>
+                        {allowCarton && (
+                          <div className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-100">
+                            <span className="text-xs font-bold text-slate-700 uppercase">{p.trading_unit}s:</span>
+                            <div className="flex items-center gap-1.5">
+                              {cartonQty > 0 && (
+                                <button
+                                  onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
+                                  className="w-7 h-7 bg-white hover:bg-slate-200 border border-slate-200 rounded-md flex items-center justify-center text-slate-700 font-bold cursor-pointer"
+                                >
+                                  <Minus className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              <span className={`text-xs font-black w-6 text-center ${cartonQty > 0 ? 'text-indigo-700' : 'text-slate-400'}`}>
+                                {cartonQty}
+                              </span>
                               <button
-                                onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
-                                className="w-7 h-7 bg-white hover:bg-slate-200 border border-slate-200 rounded-md flex items-center justify-center text-slate-700 font-bold cursor-pointer"
+                                onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
+                                className="w-7 h-7 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md flex items-center justify-center font-bold cursor-pointer"
                               >
-                                <Minus className="w-3.5 h-3.5" />
+                                <Plus className="w-3.5 h-3.5" />
                               </button>
-                            )}
-                            <span className={`text-xs font-black w-6 text-center ${cartonQty > 0 ? 'text-indigo-700' : 'text-slate-400'}`}>
-                              {cartonQty}
-                            </span>
-                            <button
-                              onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
-                              className="w-7 h-7 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md flex items-center justify-center font-bold cursor-pointer"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                            </button>
+                            </div>
                           </div>
-                        </div>
+                        )}
 
-                        {allowLoose ? (
+                        {allowPieces && (
                           <div className="flex items-center justify-between bg-emerald-50/50 p-2 rounded-lg border border-emerald-100">
-                            <span className="text-xs font-bold text-emerald-900 uppercase">Loose ({p.base_unit || 'Pc'}):</span>
+                            <span className="text-xs font-bold text-emerald-900 uppercase">{isPieceOnly ? (p.base_unit || 'Pieces') : `Loose (${p.base_unit || 'Pc'}):`}</span>
                             <div className="flex items-center gap-1.5">
                               {looseQty > 0 && (
                                 <button
@@ -543,10 +568,6 @@ export default function RetailerDashboard() {
                                 <Plus className="w-3.5 h-3.5" />
                               </button>
                             </div>
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-center text-xs text-slate-500 bg-slate-50 rounded-lg border border-slate-100 italic font-medium">
-                            Carton Only
                           </div>
                         )}
                       </div>

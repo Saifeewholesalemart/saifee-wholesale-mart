@@ -1172,7 +1172,7 @@ export function getProductTradeMode(product?: Partial<Product> | null): {
 
   if (product.allow_carton !== undefined || product.allow_pieces !== undefined) {
     const allowCarton = Boolean(product.allow_carton);
-    const allowPieces = product.allow_pieces !== undefined ? Boolean(product.allow_pieces) : true;
+    const allowPieces = product.allow_pieces !== undefined ? Boolean(product.allow_pieces) : !allowCarton;
     let tradeMode: TradeMode = 'PIECES';
     if (allowCarton && allowPieces) tradeMode = 'BOTH';
     else if (allowCarton) tradeMode = 'CARTONS';
@@ -1188,9 +1188,20 @@ export function getProductTradeMode(product?: Partial<Product> | null): {
 
   // Fallback inferred from legacy fields
   const tradingUnitLower = (product.trading_unit || '').toLowerCase();
-  const isCtnOrBox = tradingUnitLower.includes('carton') || tradingUnitLower.includes('box') || tradingUnitLower.includes('case');
-  if (packSize > 1 || isCtnOrBox) {
-    const allowPieces = product.allow_loose_sale !== false;
+  const isCtnOrBox = tradingUnitLower.includes('carton') || tradingUnitLower.includes('box') || tradingUnitLower.includes('case') || tradingUnitLower.includes('bag') || tradingUnitLower.includes('bundle') || tradingUnitLower.includes('dozen');
+  const isPieceOnly = tradingUnitLower === 'piece' || tradingUnitLower === 'pieces' || tradingUnitLower === 'pcs' || tradingUnitLower === 'packet' || tradingUnitLower === 'unit' || tradingUnitLower === 'bottle';
+
+  if (isPieceOnly || (packSize <= 1 && !isCtnOrBox)) {
+    return {
+      tradeMode: 'PIECES',
+      allowCarton: false,
+      allowPieces: true,
+      packSize: 1,
+    };
+  }
+
+  if (isCtnOrBox) {
+    const allowPieces = product.allow_loose_sale === true;
     return {
       tradeMode: allowPieces ? 'BOTH' : 'CARTONS',
       allowCarton: true,
@@ -1200,10 +1211,10 @@ export function getProductTradeMode(product?: Partial<Product> | null): {
   }
 
   return {
-    tradeMode: 'PIECES',
-    allowCarton: false,
+    tradeMode: 'BOTH',
+    allowCarton: true,
     allowPieces: true,
-    packSize: 1,
+    packSize,
   };
 }
 
