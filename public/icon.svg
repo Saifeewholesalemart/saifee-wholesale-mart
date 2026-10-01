@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#4f46e5;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="url(#grad)" />
+  <!-- Warehouse/Carton Icon -->
+  <path d="M256 90 L400 170 L400 340 L256 422 L112 340 L112 170 Z" fill="none" stroke="#ffffff" stroke-width="24" stroke-linejoin="round"/>
+  <path d="M256 90 L256 422" fill="none" stroke="#ffffff" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M112 170 L256 250 L400 170" fill="none" stroke="#ffffff" stroke-width="20" stroke-linejoin="round"/>
+  <path d="M184 210 L184 380" fill="none" stroke="#ffffff" stroke-width="12" stroke-linejoin="round" opacity="0.6"/>
+  <path d="M328 210 L328 380" fill="none" stroke="#ffffff" stroke-width="12" stroke-linejoin="round" opacity="0.6"/>
+</svg>
