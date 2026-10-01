@@ -13,8 +13,11 @@ ADD COLUMN IF NOT EXISTS assigned_category_ids JSONB DEFAULT '[]'::jsonb,
 ADD COLUMN IF NOT EXISTS category_access_mode TEXT DEFAULT 'all' CHECK (category_access_mode IN ('all', 'custom')),
 ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
 
--- 2. Enhance `retailers` Table for Authentication & Scope
+-- 2. Enhance `retailers` Table for Authentication, Location & Scope
 ALTER TABLE retailers 
+ADD COLUMN IF NOT EXISTS city TEXT DEFAULT 'Mumbai',
+ADD COLUMN IF NOT EXISTS pincode TEXT,
+ADD COLUMN IF NOT EXISTS state TEXT DEFAULT 'Maharashtra',
 ADD COLUMN IF NOT EXISTS password_hash TEXT,
 ADD COLUMN IF NOT EXISTS category_access_mode TEXT DEFAULT 'all' CHECK (category_access_mode IN ('all', 'custom')),
 ADD COLUMN IF NOT EXISTS assigned_category_ids JSONB DEFAULT '[]'::jsonb,
