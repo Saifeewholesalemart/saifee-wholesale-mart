@@ -1119,7 +1119,7 @@ function ProductsContent() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[780px] text-left text-xs border-collapse">
+            <table className="w-full min-w-[880px] text-left text-xs border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/70 text-xs font-bold text-slate-600 uppercase tracking-wider">
                   <th className="p-3.5 w-10 text-center">
@@ -1139,6 +1139,7 @@ function ProductsContent() {
                   <th className="p-3.5">Company / Brand</th>
                   <th className="p-3.5">SKU / Barcode</th>
                   <th className="p-3.5">Available Stock</th>
+                  <th className="p-3.5">Purchase Price</th>
                   <th className="p-3.5">Selling Price</th>
                   <th className="p-3.5">Status</th>
                   <th className="p-3.5 text-right">Actions</th>
@@ -1218,6 +1219,35 @@ function ProductsContent() {
                                   </span>
                                 )}
                               </div>
+                            </div>
+                          );
+                        })()}
+                      </td>
+
+                      {/* 5. Purchase Price */}
+                      <td className="p-3.5">
+                        {(() => {
+                          const meta = getProductTradeMode(prod);
+                          const purchaseRate = prod.purchase_price || 0;
+                          const loosePurchase = prod.loose_purchase_price || (meta.packSize > 1 ? (purchaseRate / meta.packSize) : purchaseRate);
+                          return (
+                            <div className="space-y-0.5">
+                              {meta.tradeMode === 'PIECES' ? (
+                                <span className="font-bold text-slate-800 text-sm block">
+                                  ₹{purchaseRate}<span className="text-xs text-slate-500 font-medium">/Piece</span>
+                                </span>
+                              ) : (
+                                <>
+                                  <span className="font-bold text-slate-800 text-sm block">
+                                    ₹{purchaseRate}<span className="text-xs text-slate-500 font-medium">/Carton</span>
+                                  </span>
+                                  {meta.allowPieces && (
+                                    <span className="text-xs text-slate-500 font-semibold block">
+                                      ₹{Number(loosePurchase).toFixed(2)}/Piece
+                                    </span>
+                                  )}
+                                </>
+                              )}
                             </div>
                           );
                         })()}
