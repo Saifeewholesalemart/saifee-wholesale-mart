@@ -411,7 +411,9 @@ export default function AIPurchaseImport() {
           discount: line.discount || 0,
           free_quantity: line.free_quantity || 0,
           mrp: line.mrp || resolvedProd?.mrp || 0,
-          gst_percent: line.gst_percent || resolvedProd?.gst_percent || 18,
+          gst_percent: (line.gst_percent !== undefined && line.gst_percent !== null) 
+            ? Number(line.gst_percent) 
+            : ((resolvedProd?.gst_percent !== undefined && resolvedProd?.gst_percent !== null) ? Number(resolvedProd.gst_percent) : 0),
           hsn: line.hsn || resolvedProd?.hsn || '',
           batch: line.batch || '',
           expiry_date: line.expiry_date || '',
@@ -589,7 +591,7 @@ export default function AIPurchaseImport() {
           mrp: mrp,
           purchase_price: purchaseRate,
           selling_price: sellingPrice,
-          gst_percent: line.gst_percent || 18,
+          gst_percent: (line.gst_percent !== undefined && line.gst_percent !== null) ? Number(line.gst_percent) : 0,
           hsn: line.hsn || '1905',
           active: true
         });
@@ -602,7 +604,9 @@ export default function AIPurchaseImport() {
         confidence: 'GREEN' as const,
         resolved_from: 'CREATE_NEW' as const,
         resolution_time: new Date().toISOString(),
-        gst_percent: targetProduct.gst_percent || line.gst_percent || 18,
+        gst_percent: (targetProduct.gst_percent !== undefined && targetProduct.gst_percent !== null) 
+          ? Number(targetProduct.gst_percent) 
+          : ((line.gst_percent !== undefined && line.gst_percent !== null) ? Number(line.gst_percent) : 0),
         hsn: targetProduct.hsn || line.hsn || '',
         mrp: targetProduct.mrp || line.mrp || 0,
         selling_price: line.selling_price || targetProduct.selling_price || 0,
@@ -718,7 +722,7 @@ export default function AIPurchaseImport() {
             compName,
             packSize,
             l.hsn || '1905',
-            l.gst_percent || 18,
+            (l.gst_percent !== undefined && l.gst_percent !== null) ? Number(l.gst_percent) : 0,
             mrp,
             sPrice
           );
@@ -762,7 +766,7 @@ export default function AIPurchaseImport() {
           discount: l.discount || 0,
           free_quantity: l.free_quantity || 0,
           mrp: l.mrp || 0,
-          gst_percent: l.gst_percent || 18,
+          gst_percent: (l.gst_percent !== undefined && l.gst_percent !== null) ? Number(l.gst_percent) : 0,
           hsn: l.hsn || '',
           batch: l.batch || '',
           expiry_date: l.expiry_date || ''
@@ -1566,7 +1570,8 @@ export default function AIPurchaseImport() {
 
                       const discLine = (line.discount || 0) * pieceInwardQty;
                       const taxable = Math.max(0, (piecePurchaseRate * pieceInwardQty) - discLine);
-                      const gstAmount = taxable * ((line.gst_percent || 18) / 100);
+                      const lineGstPct = (line.gst_percent !== undefined && line.gst_percent !== null) ? Number(line.gst_percent) : 0;
+                      const gstAmount = taxable * (lineGstPct / 100);
                       const totalVal = taxable + gstAmount;
 
                       return (
@@ -1839,7 +1844,7 @@ export default function AIPurchaseImport() {
 
                           {/* 9. GST */}
                           <td className="py-4 px-3 text-center border-l border-slate-50">
-                            <span className="font-bold text-slate-700 text-xs block">{line.gst_percent || 18}%</span>
+                            <span className="font-bold text-slate-700 text-xs block">{(line.gst_percent !== undefined && line.gst_percent !== null) ? Number(line.gst_percent) : 0}%</span>
                             <span className="text-[11px] text-slate-500 block font-mono font-bold mt-0.5">
                               ₹{gstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>

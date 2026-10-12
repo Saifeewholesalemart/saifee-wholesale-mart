@@ -422,6 +422,7 @@ export interface OrderItem {
   cancelled_pieces?: number;
   packed_pieces?: number;
   packed_cartons?: number;
+  packed_loose?: number;
   packing_notes?: string;
   unit_rate?: number;
 
@@ -464,6 +465,8 @@ export interface Order {
   delivered_at?: string;
   admin_notes?: string;
   review_notes?: string;
+  order_notes?: string;
+  cancellation_reason?: string;
   dispatch_transport_mode?: string;
   dispatch_vehicle_number?: string;
   dispatch_delivery_person?: string;
@@ -473,6 +476,14 @@ export interface Order {
   challan_id?: string;
   business_id?: string;
   updated_at?: string;
+
+  // Role-Scoped Metadata (for Salesperson Scoped Views)
+  is_scoped_view?: boolean;
+  total_visible_items?: number;
+  total_visible_pieces?: number;
+  total_visible_cartons?: number;
+  total_visible_loose?: number;
+  total_original_items_count?: number;
 }
 
 export interface FulfilmentItemSourceBreakdown {
@@ -599,6 +610,8 @@ export interface InvoiceItem {
   rate_override_applied?: boolean;
   manual_rate_applied?: boolean;
   manual_rate_reason?: string;
+  unit_rate?: number;
+  gst_percent?: number;
 }
 
 export interface Invoice {
@@ -623,6 +636,10 @@ export interface Invoice {
   paid_amount: number;
   outstanding_amount: number;
   payment_status?: 'Paid' | 'Partial' | 'Unpaid' | string;
+  status?: string;
+  invoice_status?: string;
+  company_id?: string;
+  created_at?: string;
   items?: InvoiceItem[];
   has_manual_rates?: boolean;
   payment_mode?: string;
@@ -787,6 +804,10 @@ export interface BillingRateRecord {
   id: string;
   order_number: string;
   invoice_number?: string;
+  invoice_id?: string;
+  retailer_id?: string;
+  retailer_name?: string;
+  retailer_city?: string;
   date: string;
   quantity: number; // base units
   carton_qty?: number;
@@ -798,6 +819,7 @@ export interface BillingRateRecord {
   units_per_box_carton?: number;
   packing: string;
   catalogue_rate: number;
+  purchase_rate?: number;
   carton_rate?: number;
   loose_rate?: number;
   discount: number;
@@ -805,10 +827,18 @@ export interface BillingRateRecord {
   loose_discount?: number;
   applied_rate: number;
   final_applied_rate: number;
+  gst_percent?: number;
+  gst_amount?: number;
+  taxable_amount?: number;
+  invoice_total?: number;
+  salesperson?: string;
+  channel?: string;
   manual_rate_applied?: boolean;
   manual_rate_reason?: string;
   rate_source?: string; // 'Admin Manual Override' | 'Agreed Order Rate' | 'Catalogue Dealer Rate'
   business_id?: string;
+  company_id?: string;
+  invoice_status?: string;
 }
 
 export interface FifoBatchSuggestion {
@@ -1419,6 +1449,63 @@ export function formatQuantityDisplay(
 }
 
 /**
+ * Formats quantity respecting product trading unit cleanly (e.g. "4 Boxes", "12 Pieces", "2 Cartons", "1 Box").
+ */
+export function formatTradingQuantity(
+  totalBaseQty: number = 0,
+  unitsPerTradingUnit: number = 1,
+  tradingUnit: string = 'Piece',
+  baseUnit: string = 'Piece'
+): string {
+  const total = Math.max(0, Math.floor(Number(totalBaseQty) || 0));
+  const packSize = Math.max(1, Math.floor(Number(unitsPerTradingUnit) || 1));
+  const tUnit = (tradingUnit || '').trim();
+  const bUnit = (baseUnit || '').trim();
+
+  const getCleanUnitLabel = (unitName: string, count: number): string => {
+    const lower = (unitName || '').toLowerCase().trim();
+    if (lower === 'box' || lower === 'boxes') return count === 1 ? 'Box' : 'Boxes';
+    if (lower === 'carton' || lower === 'cartons' || lower === 'ctn' || lower === 'ctns') return count === 1 ? 'Carton' : 'Cartons';
+    if (lower === 'piece' || lower === 'pieces' || lower === 'pc' || lower === 'pcs' || lower === 'unit' || lower === 'units') return count === 1 ? 'Piece' : 'Pieces';
+    if (lower === 'bottle' || lower === 'bottles') return count === 1 ? 'Bottle' : 'Bottles';
+    if (lower === 'packet' || lower === 'packets' || lower === 'pkt' || lower === 'pkts') return count === 1 ? 'Packet' : 'Packets';
+    if (lower === 'case' || lower === 'cases') return count === 1 ? 'Case' : 'Cases';
+    if (lower === 'bag' || lower === 'bags') return count === 1 ? 'Bag' : 'Bags';
+    if (lower === 'strip' || lower === 'strips') return count === 1 ? 'Strip' : 'Strips';
+    if (lower === 'pouch' || lower === 'pouches') return count === 1 ? 'Pouch' : 'Pouches';
+    if (lower === 'bundle' || lower === 'bundles') return count === 1 ? 'Bundle' : 'Bundles';
+    if (lower === 'dozen' || lower === 'dozens') return count === 1 ? 'Dozen' : 'Dozens';
+    if (!unitName) return count === 1 ? 'Piece' : 'Pieces';
+    if (count === 1) return unitName;
+    return unitName.endsWith('s') || unitName.endsWith('S') ? unitName : `${unitName}s`;
+  };
+
+  const isPieceUnit = (u: string) => {
+    const l = (u || '').toLowerCase().trim();
+    return l === 'piece' || l === 'pieces' || l === 'pc' || l === 'pcs' || l === 'unit' || l === 'units';
+  };
+
+  if (packSize > 1 && !isPieceUnit(tUnit)) {
+    const fullPacks = Math.floor(total / packSize);
+    const loose = total % packSize;
+    const tLabel = getCleanUnitLabel(tUnit || 'Carton', fullPacks);
+    const bLabel = getCleanUnitLabel(bUnit || 'Piece', loose);
+
+    if (fullPacks > 0 && loose > 0) {
+      return `${fullPacks} ${tLabel} + ${loose} ${bLabel}`;
+    } else if (fullPacks > 0) {
+      return `${fullPacks} ${tLabel}`;
+    } else {
+      return `${loose} ${bLabel}`;
+    }
+  }
+
+  const primaryUnit = tUnit || bUnit || 'Piece';
+  const label = getCleanUnitLabel(primaryUnit, total);
+  return `${total} ${label}`;
+}
+
+/**
  * Formats item quantity as simple piece count.
  */
 export function formatItemQuantityDisplay(
@@ -1544,9 +1631,11 @@ export function calculateItemQuantities(item: OrderItem, product?: Product): Ord
   const activeOrderedBase = Math.max(0, orderedBase - cancelledBase);
 
   // 3. Confirmed pieces
-  let confirmedBase = activeOrderedBase;
+  let confirmedBase = 0;
   if (item.confirmed_qty !== undefined) {
     confirmedBase = Math.min(activeOrderedBase, Math.max(0, Math.floor(item.confirmed_qty)));
+  } else if (item.packed_qty !== undefined && item.packed_qty > 0) {
+    confirmedBase = Math.min(activeOrderedBase, Math.max(0, Math.floor(item.packed_qty)));
   }
 
   // 4. Dispatched / Fulfilled pieces
@@ -1671,6 +1760,7 @@ export interface OrderQuantities {
   pendingValue: number;
   computedStatus: OrderComputedStatus;
   statusBadge: { label: string; colorClass: string; bgClass: string; borderClass: string };
+  statusBadgeText?: string;
 }
 
 export function calculateOrderQuantities(order: Order, products: Product[] = []): OrderQuantities {
@@ -1712,32 +1802,32 @@ export function calculateOrderQuantities(order: Order, products: Product[] = [])
 
   if (order.status === 'Cancelled' || (orderedBase > 0 && cancelledBase >= orderedBase)) {
     computedStatus = 'Cancelled';
-  } else if (totalUnfulfilledBase === 0 && (dispatchedBase > 0 || order.status === 'Delivered')) {
+  } else if (totalUnfulfilledBase === 0 && (dispatchedBase > 0 || order.status === 'Delivered' || order.status === 'Completed')) {
     computedStatus = 'Completed';
   } else if (dispatchedBase > 0 && dispatchedBase === confirmedBase && pendingConfirmationBase > 0) {
     computedStatus = 'Partially Fulfilled';
   } else if (dispatchedBase > 0 && dispatchedBase < confirmedBase) {
     computedStatus = 'Partially Dispatched';
-  } else if (order.status === 'Packed') {
+  } else if (order.status === 'Packed' || order.status === 'PACKED_AND_SEALED') {
     computedStatus = 'Packed';
-  } else if (dispatchedBase === 0 && confirmedBase === activeOrderedBase && activeOrderedBase > 0) {
+  } else if (order.status === 'Confirmed' || (dispatchedBase === 0 && confirmedBase === activeOrderedBase && activeOrderedBase > 0 && (order.confirmed_at || order.status !== 'Submitted'))) {
     computedStatus = 'Confirmed';
-  } else if (dispatchedBase === 0 && confirmedBase > 0 && confirmedBase < activeOrderedBase) {
+  } else if (order.status === 'Partially Confirmed' || (dispatchedBase === 0 && confirmedBase > 0 && confirmedBase < activeOrderedBase)) {
     computedStatus = 'Partially Confirmed';
   } else {
     computedStatus = 'Pending Confirmation';
   }
 
   let statusBadge: { label: string; colorClass: string; bgClass: string; borderClass: string } = {
-    label: computedStatus,
-    colorClass: 'text-amber-700',
+    label: computedStatus === 'Pending Confirmation' ? 'ORDER PLACED / PENDING CONFIRMATION' : computedStatus,
+    colorClass: 'text-amber-800',
     bgClass: 'bg-amber-50',
-    borderClass: 'border-amber-200'
+    borderClass: 'border-amber-300'
   };
 
   switch (computedStatus) {
     case 'Pending Confirmation':
-      statusBadge = { label: 'Pending Confirmation', colorClass: 'text-amber-800', bgClass: 'bg-amber-50', borderClass: 'border-amber-200' };
+      statusBadge = { label: 'ORDER PLACED / PENDING CONFIRMATION', colorClass: 'text-amber-800', bgClass: 'bg-amber-50', borderClass: 'border-amber-300' };
       break;
     case 'Partially Confirmed':
       statusBadge = { label: 'Partially Confirmed', colorClass: 'text-blue-800', bgClass: 'bg-blue-50', borderClass: 'border-blue-200' };
@@ -1788,7 +1878,8 @@ export function calculateOrderQuantities(order: Order, products: Product[] = [])
     fulfilledValue: Math.round(fulfilledValue),
     pendingValue: Math.round(pendingValue),
     computedStatus,
-    statusBadge
+    statusBadge,
+    statusBadgeText: statusBadge.label
   };
 }
 
@@ -1888,6 +1979,8 @@ export interface CartItemToCheck {
   looseQty?: number;
   quantity?: number;
   packSize?: string;
+  variantId?: string;
+  variantValue?: string;
   selectedMrp?: number;
   tradingUnit?: string;
   baseUnit?: string;
@@ -1902,7 +1995,8 @@ export function getPendingItemsForRetailer(
   orders: Order[] = [],
   products: Product[] = [],
   cartItems: CartItemToCheck[] = [],
-  companyId?: string
+  companyId?: string,
+  excludeOrderId?: string
 ): PendingOrderItemWarning[] {
   if (!retailerId || !orders || orders.length === 0 || !cartItems || cartItems.length === 0) {
     return [];
@@ -1911,9 +2005,18 @@ export function getPendingItemsForRetailer(
   // Filter open orders for this exact retailer and company
   const relevantOrders = orders.filter(ord => {
     if (ord.retailer_id !== retailerId) return false;
+    if (excludeOrderId && ord.id === excludeOrderId) return false;
     if (companyId && ord.business_id && ord.business_id !== companyId) return false;
-    // Exclude completed or fully cancelled orders
-    if (ord.status === 'Cancelled' || ord.status === 'Completed' || ord.status === 'Delivered') return false;
+    // Exclude completed, delivered, draft, or fully cancelled orders
+    if (
+      ord.status === 'Cancelled' || 
+      ord.status === 'Completed' || 
+      ord.status === 'Delivered' || 
+      ord.status === 'Fully Fulfilled' || 
+      ord.status === 'Draft'
+    ) {
+      return false;
+    }
     return true;
   });
 
@@ -1927,8 +2030,8 @@ export function getPendingItemsForRetailer(
     if (!prod) return;
 
     const unitsPerPack = prod.units_per_box_carton || 1;
-    const tradingUnit = cartItem.tradingUnit || prod.trading_unit || 'Carton';
-    const baseUnit = cartItem.baseUnit || prod.base_unit || 'Unit';
+    const tradingUnit = cartItem.tradingUnit || prod.trading_unit || 'Box';
+    const baseUnit = cartItem.baseUnit || prod.base_unit || 'Piece';
 
     const newCartons = Number(cartItem.cartonQty || 0);
     const newLoose = Number(cartItem.looseQty || 0);
@@ -1940,7 +2043,7 @@ export function getPendingItemsForRetailer(
     }
     if (newOrderBase <= 0 && newCartons <= 0 && newLoose <= 0) return;
 
-    const newOrderDisplay = formatQuantityDisplay(newOrderBase, unitsPerPack, tradingUnit, baseUnit);
+    const newOrderDisplay = formatTradingQuantity(newOrderBase, unitsPerPack, tradingUnit, baseUnit);
 
     const pendingRefs: PendingOrderRef[] = [];
     let totalPendingBase = 0;
@@ -1951,10 +2054,17 @@ export function getPendingItemsForRetailer(
       const matchingItems = (ord.items || []).filter(ordItem => {
         if (ordItem.product_id !== cartItem.productId) return false;
 
-        // Exact variant / pack_size check
-        const ordPack = prod.pack_size;
+        // Exact variant / pack_size check (e.g., "100g" vs "300g")
+        const ordPack = (ordItem as any).pack_size || prod.pack_size;
         const cartPack = cartItem.packSize || prod.pack_size;
-        if (ordPack && cartPack && ordPack.trim().toLowerCase() !== cartPack.trim().toLowerCase()) return false;
+        if (ordPack && cartPack && ordPack.trim().toLowerCase() !== cartPack.trim().toLowerCase()) {
+          return false;
+        }
+
+        // Exact variant ID check if applicable
+        if (cartItem.variantId && (ordItem as any).variant_id && (ordItem as any).variant_id !== cartItem.variantId) {
+          return false;
+        }
 
         // If selected MRP is provided, check compatibility
         if (cartItem.selectedMrp && ordItem.selected_mrp && ordItem.selected_mrp !== cartItem.selectedMrp) {
@@ -1971,6 +2081,12 @@ export function getPendingItemsForRetailer(
           totalPendingCartons += itemQuantities.totalUnfulfilledCartons;
 
           const channelInfo = deriveOrderChannel(ord);
+          const formattedPendingItemDisplay = formatTradingQuantity(
+            itemQuantities.totalUnfulfilledBase, 
+            unitsPerPack, 
+            ordItem.trading_unit || tradingUnit, 
+            ordItem.base_unit || baseUnit
+          );
 
           pendingRefs.push({
             orderId: ord.id,
@@ -1988,7 +2104,7 @@ export function getPendingItemsForRetailer(
             displayOrdered: itemQuantities.displayOrdered,
             displayConfirmed: itemQuantities.displayConfirmed,
             displayDispatched: itemQuantities.displayDispatched,
-            displayPending: itemQuantities.displayPending,
+            displayPending: formattedPendingItemDisplay,
             unitPrice: itemQuantities.effectiveRate,
             itemTotalValue: itemQuantities.totalValue
           });
@@ -2012,7 +2128,7 @@ export function getPendingItemsForRetailer(
         newOrderDisplay,
         totalPendingCartons: Math.round(totalPendingCartons * 100) / 100,
         totalPendingBase,
-        totalPendingDisplay: formatQuantityDisplay(totalPendingBase, unitsPerPack, tradingUnit, baseUnit),
+        totalPendingDisplay: formatTradingQuantity(totalPendingBase, unitsPerPack, tradingUnit, baseUnit),
         pendingOrders: pendingRefs
       });
     }
@@ -2033,14 +2149,16 @@ export function checkSingleItemPendingWarning(
   looseQty: number = 0,
   packSize?: string,
   selectedMrp?: number,
-  companyId?: string
+  companyId?: string,
+  excludeOrderId?: string
 ): PendingOrderItemWarning | null {
   const warnings = getPendingItemsForRetailer(
     retailerId,
     orders,
     products,
     [{ productId, cartonQty, looseQty, packSize, selectedMrp }],
-    companyId
+    companyId,
+    excludeOrderId
   );
   return warnings.length > 0 ? warnings[0] : null;
 }
@@ -2118,7 +2236,10 @@ const SEED_COMPANIES: Company[] = [
 
 const SEED_SUPPLIERS: Supplier[] = [
   { id: 's-prashant-medico', name: 'Prashant Medico', gstin: '27PRASH1234M1Z5', address: 'Shop 1, Main Road, Station Area, Indore, MP', active: true, business_id: 'biz-saifee' },
-  { id: 's-johnson-aadesh', name: 'Johnson Aadesh Enterprises', gstin: '27JOHNA5678E1Z2', address: 'Shop 12, Commercial Complex, Wholesale Hub, Indore, MP', active: true, business_id: 'biz-saifee' }
+  { id: 's-johnson-aadesh', name: 'Johnson Aadesh Enterprises', gstin: '27JOHNA5678E1Z2', address: 'Shop 12, Commercial Complex, Wholesale Hub, Indore, MP', active: true, business_id: 'biz-saifee' },
+  { id: 's-abc-pharma', name: 'ABC Pharma', gstin: '27ABCPH9012F1Z3', address: 'Sector 3, Sanwer Road Industrial Area, Indore, MP', active: true, business_id: 'biz-saifee' },
+  { id: 's-xyz-distributors', name: 'XYZ Distributors', gstin: '27XYZDI3456G1Z4', address: 'Plot 88, Transport Nagar, Indore, MP', active: true, business_id: 'biz-saifee' },
+  { id: 's-shree-medical', name: 'Shree Medical', gstin: '27SHREE7890H1Z5', address: 'Dawa Bazaar, RNT Marg, Indore, MP', active: true, business_id: 'biz-saifee' }
 ];
 
 const SEED_RETAILERS: Retailer[] = [
@@ -2130,21 +2251,20 @@ const SEED_RETAILERS: Retailer[] = [
 ];
 
 const SEED_PROFILES: Profile[] = [
-  { id: 'p-admin-1', email: 'admin@saifee.com', name: 'Saifee Admin Manager', role: 'admin', active: true },
-  { id: 'p-dist-sales-1', email: 'rajesh.sales@saifee.com', name: 'Rajesh Kumar (Distributor Sales)', role: 'sales_dist', active: true },
-  { id: 'p-dist-sales-2', email: 'amit.sales@saifee.com', name: 'Amit Sharma (Distributor Sales)', role: 'sales_dist', active: true },
-  { id: 'p-dist-sales-3', email: 'rahul.sales@saifee.com', name: 'Rahul Verma (Distributor Sales)', role: 'sales_dist', active: true },
-  { id: 'p-co-sales-1', email: 'suresh.parle@parle.com', name: 'Suresh N. (Parle Salesperson)', role: 'sales_co', company_id: 'c-parle', active: true },
-  { id: 'p-co-sales-2', email: 'anil.britannia@britannia.com', name: 'Anil K. (Britannia Salesperson)', role: 'sales_co', company_id: 'c-britannia', active: true },
-  { id: 'p-co-sales-3', email: 'vikas.hul@hul.com', name: 'Vikas J. (HUL Salesperson)', role: 'sales_co', company_id: 'c-hul', active: true },
-  { id: 'p-retailer-ganesh', email: 'ganesh.supermarket@gmail.com', name: 'Ganesh Patel (Shree Ganesh Super Market)', role: 'retailer', retailer_id: 'ret-shree-ganesh', active: true },
-  { id: 'p-retailer-om', email: 'om.kirana.indore@gmail.com', name: 'Om Prakash (Om Kirana & General Store)', role: 'retailer', retailer_id: 'ret-om-kirana', active: true },
-  { id: 'p-retailer-gupta', email: 'gupta.provisions@gmail.com', name: 'Ramesh Gupta (Gupta Provision Store)', role: 'retailer', retailer_id: 'ret-gupta-provision', active: true },
-  { id: 'p-retailer-apna', email: 'apna.bazaar.indore@gmail.com', name: 'Sunil Jain (Apna Bazaar Mart)', role: 'retailer', retailer_id: 'ret-apna-bazaar', active: true },
-  { id: 'p-retailer-laxmi', email: 'laxmi.dailyneeds@gmail.com', name: 'Mahesh Sharma (Laxmi Trading)', role: 'retailer', retailer_id: 'ret-laxmi-traders', active: true },
-  { id: 'p-staff-packer-1', email: 'ramesh.packer@saifee.local', name: 'Ramesh Solanki', full_name: 'Ramesh Solanki', mobile: '9826660001', contact_no: '9826660001', role: 'staff', profile_type: 'STAFF', custom_role: 'Packer', active: true, status: 'ACTIVE' },
-  { id: 'p-staff-biller-1', email: 'deepak.biller@saifee.local', name: 'Deepak Sharma', full_name: 'Deepak Sharma', mobile: '9826770002', contact_no: '9826770002', role: 'staff', profile_type: 'STAFF', custom_role: 'Biller', active: true, status: 'ACTIVE' },
-  { id: 'p-staff-loader-1', email: 'mukesh.loader@saifee.local', name: 'Mukesh Yadav', full_name: 'Mukesh Yadav', mobile: '9826880003', contact_no: '9826880003', role: 'staff', profile_type: 'STAFF', custom_role: 'Tempo Loader', active: true, status: 'ACTIVE' }
+  { id: 'p-admin-1', email: 'admin@saifee.com', name: 'Saifee Admin Manager', full_name: 'Saifee Admin Manager', mobile: '9826012345', contact_no: '9826012345', password: 'admin', password_hash: 'admin', role: 'admin', profile_type: 'ADMIN', active: true, status: 'ACTIVE' },
+  { id: 'p-dist-sales-1', email: 'rajesh.sales@saifee.com', name: 'Rajesh Kumar (Distributor Sales)', full_name: 'Rajesh Kumar', mobile: '9826011111', contact_no: '9826011111', password: 'sales', password_hash: 'sales', role: 'sales_dist', profile_type: 'SALESPERSON', sales_role_type: 'DISTRIBUTOR', active: true, status: 'ACTIVE' },
+  { id: 'p-dist-sales-2', email: 'amit.sales@saifee.com', name: 'Amit Sharma (Distributor Sales)', full_name: 'Amit Sharma', mobile: '9826012222', contact_no: '9826012222', password: 'sales', password_hash: 'sales', role: 'sales_dist', profile_type: 'SALESPERSON', sales_role_type: 'DISTRIBUTOR', active: true, status: 'ACTIVE' },
+  { id: 'p-co-sales-1', email: 'suresh.parle@parle.com', name: 'Suresh N. (Parle Salesperson)', full_name: 'Suresh N.', mobile: '9826022222', contact_no: '9826022222', password: 'sales', password_hash: 'sales', role: 'sales_co', profile_type: 'SALESPERSON', sales_role_type: 'COMPANY', company_id: 'c-parle', active: true, status: 'ACTIVE' },
+  { id: 'p-co-sales-2', email: 'anil.britannia@britannia.com', name: 'Anil K. (Britannia Salesperson)', full_name: 'Anil K.', mobile: '9826055555', contact_no: '9826055555', password: 'sales', password_hash: 'sales', role: 'sales_co', profile_type: 'SALESPERSON', sales_role_type: 'COMPANY', company_id: 'c-britannia', active: true, status: 'ACTIVE' },
+  { id: 'p-co-sales-3', email: 'vikas.hul@hul.com', name: 'Vikas J. (HUL Salesperson)', full_name: 'Vikas J.', mobile: '9826066666', contact_no: '9826066666', password: 'sales', password_hash: 'sales', role: 'sales_co', profile_type: 'SALESPERSON', sales_role_type: 'COMPANY', company_id: 'c-hul', active: true, status: 'ACTIVE' },
+  { id: 'p-retailer-ganesh', email: 'ganesh.supermarket@gmail.com', name: 'Ganesh Patel (Shree Ganesh Super Market)', full_name: 'Ganesh Patel', mobile: '9826110001', contact_no: '9826110001', password: 'retail', password_hash: 'retail', role: 'retailer', profile_type: 'RETAILER', retailer_id: 'ret-shree-ganesh', active: true, status: 'ACTIVE' },
+  { id: 'p-retailer-om', email: 'om.kirana.indore@gmail.com', name: 'Om Prakash (Om Kirana & General Store)', full_name: 'Om Prakash', mobile: '9826220002', contact_no: '9826220002', password: 'retail', password_hash: 'retail', role: 'retailer', profile_type: 'RETAILER', retailer_id: 'ret-om-kirana', active: true, status: 'ACTIVE' },
+  { id: 'p-retailer-gupta', email: 'gupta.provisions@gmail.com', name: 'Ramesh Gupta (Gupta Provision Store)', full_name: 'Ramesh Gupta', mobile: '9826330003', contact_no: '9826330003', password: 'retail', password_hash: 'retail', role: 'retailer', profile_type: 'RETAILER', retailer_id: 'ret-gupta-provision', active: true, status: 'ACTIVE' },
+  { id: 'p-retailer-apna', email: 'apna.bazaar.indore@gmail.com', name: 'Sunil Jain (Apna Bazaar Mart)', full_name: 'Sunil Jain', mobile: '9826440004', contact_no: '9826440004', password: 'retail', password_hash: 'retail', role: 'retailer', profile_type: 'RETAILER', retailer_id: 'ret-apna-bazaar', active: true, status: 'ACTIVE' },
+  { id: 'p-retailer-laxmi', email: 'laxmi.dailyneeds@gmail.com', name: 'Mahesh Sharma (Laxmi Trading)', full_name: 'Mahesh Sharma', mobile: '9826550005', contact_no: '9826550005', password: 'retail', password_hash: 'retail', role: 'retailer', profile_type: 'RETAILER', retailer_id: 'ret-laxmi-traders', active: true, status: 'ACTIVE' },
+  { id: 'p-staff-packer-1', email: 'ramesh.packer@saifee.local', name: 'Ramesh Solanki', full_name: 'Ramesh Solanki', mobile: '1234567890', contact_no: '1234567890', password: 'packer', password_hash: 'packer', role: 'staff', profile_type: 'STAFF', custom_role: 'Packer', active: true, status: 'ACTIVE' },
+  { id: 'p-staff-biller-1', email: 'deepak.biller@saifee.local', name: 'Deepak Sharma', full_name: 'Deepak Sharma', mobile: '9826770002', contact_no: '9826770002', password: 'staff', password_hash: 'staff', role: 'staff', profile_type: 'STAFF', custom_role: 'Biller', active: true, status: 'ACTIVE' },
+  { id: 'p-staff-loader-1', email: 'mukesh.loader@saifee.local', name: 'Mukesh Yadav', full_name: 'Mukesh Yadav', mobile: '9826880003', contact_no: '9826880003', password: 'staff', password_hash: 'staff', role: 'staff', profile_type: 'STAFF', custom_role: 'Tempo Loader', active: true, status: 'ACTIVE' }
 ];
 
 // Clean FMCG Master Categories (Retained for live catalog entry)
@@ -2732,12 +2852,46 @@ class FMCGDatabase {
     this.currentUserId = id;
   }
 
-  getProfiles(): Profile[] {
-    return this.getStore<Profile>('fmcg_profiles', SEED_PROFILES);
-  }
-
   saveProfiles(profiles: Profile[]): void {
     this.saveStore('fmcg_profiles', profiles);
+  }
+
+  getProfiles(): Profile[] {
+    const saved = this.getStore<Profile>('fmcg_profiles', SEED_PROFILES);
+    let needsUpdate = false;
+    const merged = [...saved];
+
+    SEED_PROFILES.forEach(seed => {
+      const idx = merged.findIndex(p => p.id === seed.id);
+      if (idx === -1) {
+        merged.push({ ...seed });
+        needsUpdate = true;
+      } else {
+        if (
+          merged[idx].mobile !== seed.mobile ||
+          merged[idx].password !== seed.password ||
+          merged[idx].profile_type !== seed.profile_type ||
+          merged[idx].role !== seed.role
+        ) {
+          merged[idx] = {
+            ...merged[idx],
+            mobile: seed.mobile,
+            contact_no: seed.contact_no || seed.mobile,
+            password: seed.password,
+            password_hash: seed.password_hash || seed.password,
+            profile_type: seed.profile_type,
+            role: seed.role,
+            sales_role_type: seed.sales_role_type || merged[idx].sales_role_type
+          };
+          needsUpdate = true;
+        }
+      }
+    });
+
+    if (needsUpdate) {
+      this.saveStore('fmcg_profiles', merged);
+    }
+    return merged;
   }
 
   updateProfile(id: string, updates: Partial<Profile>): Profile | null {
@@ -2745,7 +2899,7 @@ class FMCGDatabase {
     const idx = profiles.findIndex(p => p.id === id);
     if (idx === -1) return null;
     profiles[idx] = { ...profiles[idx], ...updates, updated_at: new Date().toISOString() };
-    this.saveProfiles(profiles);
+    this.saveStore('fmcg_profiles', profiles);
     return profiles[idx];
   }
 
@@ -4018,8 +4172,9 @@ class FMCGDatabase {
       return true;
     });
 
-    // 3. For Company Salesperson (sales_co), if linked to company/companies, filter to categories associated with those companies
-    if (profile.role === 'sales_co') {
+    // 3. For Company Salesperson (sales_co / COMPANY), if linked to company/companies, filter to categories associated with those companies
+    const isCompanyScope = profile.role === 'sales_co' || profile.sales_role_type === 'COMPANY' || profile.trade_scope === 'RESTRICTED';
+    if (isCompanyScope) {
       const allowedCompanyIds = new Set<string>();
       if (Array.isArray(profile.assigned_company_ids) && profile.assigned_company_ids.length > 0) {
         profile.assigned_company_ids.forEach(id => allowedCompanyIds.add(id));
@@ -4069,8 +4224,9 @@ class FMCGDatabase {
     const prod = this.getProducts().find(p => p.id === productId);
     if (!prod) return false;
 
-    // Strict Company Filter for Company Salesperson (sales_co / CH_CO_SALES)
-    if (profile.role === 'sales_co') {
+    // Strict Company Filter for Company Salesperson (sales_co / COMPANY)
+    const isCompanyScope = profile.role === 'sales_co' || profile.sales_role_type === 'COMPANY' || profile.trade_scope === 'RESTRICTED';
+    if (isCompanyScope) {
       const allowedCompanyIds = new Set<string>();
       if (Array.isArray(profile.assigned_company_ids) && profile.assigned_company_ids.length > 0) {
         profile.assigned_company_ids.forEach(id => allowedCompanyIds.add(id));
@@ -4124,6 +4280,72 @@ class FMCGDatabase {
     }
 
     return false;
+  }
+
+  getScopedOrdersForSalesperson(salespersonId: string, options?: { retailerId?: string; orderId?: string; targetBusinessId?: string }): Order[] {
+    const activeBiz = options?.targetBusinessId || this.getActiveBusinessCompanyId();
+    const profile = this.getProfiles().find(p => p.id === salespersonId);
+    let orders = this.getOrders(activeBiz);
+
+    if (options?.retailerId) {
+      orders = orders.filter(o => o.retailer_id === options.retailerId);
+    }
+    if (options?.orderId) {
+      orders = orders.filter(o => o.id === options.orderId);
+    }
+
+    if (!profile) return orders;
+
+    // 1. Distributor Salesperson / Admin (Full Access: all orders & all line items across all brands)
+    const isFullAccess = profile.role === 'admin' || profile.role === 'sales_dist' || profile.sales_role_type === 'DISTRIBUTOR' || profile.trade_scope === 'ALL';
+    if (isFullAccess) {
+      return orders.map(ord => ({
+        ...ord,
+        is_scoped_view: false,
+        total_visible_items: ord.items?.length || 0,
+        total_visible_pieces: ord.items?.reduce((sum, it) => sum + (it.base_qty ?? it.quantity ?? 0), 0) || 0,
+        total_visible_cartons: ord.items?.reduce((sum, it) => sum + (it.carton_qty || 0), 0) || 0,
+        total_visible_loose: ord.items?.reduce((sum, it) => sum + (it.loose_qty || 0), 0) || 0,
+        total_original_items_count: ord.items?.length || 0
+      }));
+    }
+
+    // 2. Company Salesperson (Restricted Brand/Category Scope)
+    const scopedResults: Order[] = [];
+
+    orders.forEach(order => {
+      if (!order.items || order.items.length === 0) return;
+
+      // Filter line items based strictly on salesperson's assigned companies & categories
+      const visibleItems = order.items.filter(item => this.isProductVisibleToSalesperson(item.product_id, salespersonId));
+
+      if (visibleItems.length > 0) {
+        // Recalculate scoped order totals based exclusively on visible assigned items
+        const scopedTotalAmount = visibleItems.reduce((sum, it) => sum + (it.total_amount || 0), 0);
+        const scopedBaseQty = visibleItems.reduce((sum, it) => sum + (it.base_qty ?? it.quantity ?? 0), 0);
+        const scopedCartons = visibleItems.reduce((sum, it) => sum + (it.carton_qty || 0), 0);
+        const scopedLoose = visibleItems.reduce((sum, it) => sum + (it.loose_qty || 0), 0);
+
+        scopedResults.push({
+          ...order,
+          total_amount: Math.round(scopedTotalAmount * 100) / 100,
+          items: visibleItems,
+          is_scoped_view: true,
+          total_visible_items: visibleItems.length,
+          total_visible_pieces: scopedBaseQty,
+          total_visible_cartons: scopedCartons,
+          total_visible_loose: scopedLoose,
+          total_original_items_count: order.items.length
+        });
+      }
+    });
+
+    return scopedResults;
+  }
+
+  getScopedOrderByIdForSalesperson(orderId: string, salespersonId: string, targetBusinessId?: string): Order | null {
+    const orders = this.getScopedOrdersForSalesperson(salespersonId, { orderId, targetBusinessId });
+    return orders.length > 0 ? orders[0] : null;
   }
 
   // ----------------------------------------------------
@@ -5759,7 +5981,7 @@ class FMCGDatabase {
       if (!order.items) return;
 
       order.items.forEach(item => {
-        const itemBaseQty = item.base_qty ?? item.quantity;
+        const itemBaseQty = item.base_qty ?? item.quantity ?? ((item.carton_qty || 0) * (item.units_per_box_carton || 1) + (item.loose_qty || 0));
         if (item.cancelled_qty === undefined) item.cancelled_qty = 0;
         if (item.confirmed_qty === undefined) item.confirmed_qty = 0;
         if (item.packed_qty === undefined) item.packed_qty = 0;
@@ -5798,13 +6020,37 @@ class FMCGDatabase {
         const cancelled = Math.min(itemBaseQty, Math.max(0, item.cancelled_qty || 0));
         item.cancelled_qty = cancelled;
         const activeBase = Math.max(0, itemBaseQty - cancelled);
-        item.confirmed_qty = Math.min(activeBase, Math.max(0, item.confirmed_qty || 0));
+
+        // If confirmed_qty is not explicitly set or was 0 on an active confirmed/packing/packed order, default to activeBase
+        if (order.status === 'Submitted' || order.status === 'Draft' || order.status === 'Under Review') {
+          item.confirmed_qty = item.confirmed_qty || 0;
+        } else if (item.confirmed_qty === undefined || (item.confirmed_qty === 0 && order.status !== 'Cancelled' && activeBase > 0)) {
+          item.confirmed_qty = activeBase;
+        } else {
+          item.confirmed_qty = Math.min(activeBase, Math.max(0, item.confirmed_qty || 0));
+        }
+
+        // For orders marked Packed, PACKED_AND_SEALED, Completed, or Dispatched, synchronize packed_qty ONLY IF NOT EXPLICITLY SET (i.e. undefined or null)
+        if (['Packed', 'PACKED_AND_SEALED', 'Completed', 'Dispatched', 'Delivered'].includes(order.status)) {
+          if (item.packed_qty === undefined || item.packed_qty === null) {
+            item.packed_qty = item.confirmed_qty !== undefined ? item.confirmed_qty : activeBase;
+            item.packed_pieces = item.packed_qty;
+          }
+          if (item.packed_cartons === undefined || item.packed_cartons === null) {
+            item.packed_cartons = item.carton_qty ?? Math.floor((item.packed_qty || 0) / (item.units_per_box_carton || 1));
+          }
+        }
+
         const dispatchedOrDelivered = Math.max(item.dispatched_qty || 0, item.delivered_qty || 0);
         item.pending_qty = Math.max(0, itemBaseQty - dispatchedOrDelivered - cancelled);
       });
       
       const orderCalc = calculateOrderQuantities(order, products);
-      if (orderCalc.computedStatus === 'Cancelled') {
+      if (order.status === 'PACKING_IN_PROGRESS' || order.status === 'Packing') {
+        // preserve active packing in progress
+      } else if (order.status === 'Partially Fulfilled' || order.status === 'Packed') {
+        // preserve packed or partial shortage status
+      } else if (orderCalc.computedStatus === 'Cancelled') {
         order.status = 'Cancelled';
       } else if (orderCalc.computedStatus === 'Completed') {
         order.status = 'Completed';
@@ -5826,113 +6072,46 @@ class FMCGDatabase {
     });
   }
 
-  private ensureCustomCompletedOrders(targetBusinessId: string = 'biz-saifee'): Order[] {
-    // Check existing products ONLY - strictly do NOT create any new item
-    const existingProducts = this.getProducts(targetBusinessId);
-    if (existingProducts.length === 0) return [];
+  /**
+   * Helper to identify auto-generated mock/dummy orders
+   */
+  public isDummyOrder(order: Order): boolean {
+    if (!order) return false;
+    if (order.id && order.id.startsWith('ord-active-')) return true;
+    if (order.order_number && (order.order_number.startsWith('SO-2026-') || order.order_number.startsWith('SO-'))) return true;
+    if (order.admin_notes && order.admin_notes.includes('ready for packing')) return true;
+    if (order.items && order.items.some(it => it.id && it.id.includes('ord-active-'))) return true;
+    if (order.order_date && order.order_date.startsWith('2026-09-')) return true;
+    if (order.retailer_id === 'ret-laxmi-traders' && (order.order_date?.includes('09') || order.order_date?.includes('2026-09'))) return true;
+    return false;
+  }
 
-    const retailers = this.getRetailers(targetBusinessId);
-    if (retailers.length === 0) return [];
-
-    const newOrders: Order[] = [];
-
-    retailers.forEach((ret, idx) => {
-      // Pick existing items only (1 to 3 items per order)
-      const itemCount = Math.min(existingProducts.length, ((idx % 3) + 1));
-      const chosenProds: Product[] = [];
-      for (let i = 0; i < itemCount; i++) {
-        chosenProds.push(existingProducts[(idx + i) % existingProducts.length]);
-      }
-
-      const orderId = `ord-comp-${Date.now()}-${idx + 1}`;
-      const orderNum = `SO-2026-${String(100 + idx + 1).padStart(5, '0')}`;
-      const dayNum = String(10 + idx * 3).padStart(2, '0');
-      const orderDate = `2026-09-${dayNum}`;
-
-      let orderTotal = 0;
-      const orderItems: OrderItem[] = chosenProds.map((prod, pIdx) => {
-        const cartonQty = (idx + pIdx + 1) * 2;
-        const unitsPerCtn = prod.units_per_box_carton || 1;
-        const baseQty = cartonQty * unitsPerCtn;
-        const rate = prod.selling_price || prod.mrp || 100;
-        const finalPrice = rate * cartonQty;
-        const gstPct = prod.gst_percent || 18;
-        const gstAmt = (finalPrice * gstPct) / 100;
-        const itemTotal = finalPrice + gstAmt;
-        orderTotal += itemTotal;
-
-        return {
-          id: `oi-${orderId}-${pIdx + 1}`,
-          order_id: orderId,
-          product_id: prod.id,
-          product_name: prod.name,
-          quantity: baseQty,
-          trading_unit: prod.trading_unit || 'Carton',
-          base_unit: prod.base_unit || 'Piece',
-          units_per_trading_unit: unitsPerCtn,
-          units_per_box_carton: unitsPerCtn,
-          carton_qty: cartonQty,
-          loose_qty: 0,
-          base_qty: baseQty,
-          carton_rate: rate,
-          rate: rate,
-          base_price: rate,
-          discount: 0,
-          final_price: finalPrice,
-          gst_percent: gstPct,
-          gst_amount: gstAmt,
-          total_amount: itemTotal,
-          ordered_qty: baseQty,
-          confirmed_qty: baseQty,
-          packed_qty: baseQty,
-          dispatched_qty: baseQty,
-          delivered_qty: baseQty,
-          fulfilled_qty: baseQty,
-          pending_qty: 0,
-          status: 'COMPLETED'
-        };
-      });
-
-      const completedOrder: Order = {
-        id: orderId,
-        order_number: orderNum,
-        retailer_id: ret.id,
-        source: 'retailer_direct',
-        channel: 'Retailer Direct',
-        created_at: `${orderDate}T10:00:00.000Z`,
-        order_date: orderDate,
-        total_amount: Math.round(orderTotal * 100) / 100,
-        status: 'Completed',
-        confirmed_at: `${orderDate}T11:00:00.000Z`,
-        packed_at: `${orderDate}T14:00:00.000Z`,
-        dispatched_at: `${orderDate}T16:00:00.000Z`,
-        delivered_at: `${orderDate}T18:00:00.000Z`,
-        admin_notes: 'Completed order delivered to retailer store',
-        business_id: targetBusinessId,
-        items: orderItems
-      };
-
-      newOrders.push(completedOrder);
-    });
-
-    if (newOrders.length > 0) {
-      const allOrders = this.getStore<Order>('fmcg_orders', SEED_ORDERS);
-      this.saveOrders([...allOrders, ...newOrders], targetBusinessId);
+  /**
+   * Purge only auto-generated dummy/mock orders without touching user-created orders
+   */
+  public clearDummyOrders(targetBusinessId?: string): { clearedCount: number } {
+    const all = this.getStore<Order>('fmcg_orders', SEED_ORDERS);
+    const nonDummyOrders = all.filter(o => !this.isDummyOrder(o));
+    const clearedCount = all.length - nonDummyOrders.length;
+    
+    if (clearedCount > 0) {
+      this.saveStore('fmcg_orders', nonDummyOrders);
     }
-    return newOrders;
+    return { clearedCount };
   }
 
   getOrders(targetBusinessId?: string): Order[] {
     const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
     let all = this.getStore<Order>('fmcg_orders', SEED_ORDERS);
-    let scopedOrders = all.filter(o => (o.business_id || 'biz-saifee') === activeBiz);
 
-    if (scopedOrders.length === 0) {
-      const generated = this.ensureCustomCompletedOrders(activeBiz);
-      if (generated.length > 0) {
-        scopedOrders = generated;
-      }
+    // Auto-purge any legacy auto-generated dummy orders from storage
+    const cleanAll = all.filter(o => !this.isDummyOrder(o));
+    if (cleanAll.length !== all.length) {
+      this.saveStore('fmcg_orders', cleanAll);
+      all = cleanAll;
     }
+
+    let scopedOrders = all.filter(o => (o.business_id || 'biz-saifee') === activeBiz);
 
     const fulfilments = this.getFulfilments(activeBiz);
     const hashBefore = JSON.stringify(scopedOrders);
@@ -5945,7 +6124,8 @@ class FMCGDatabase {
   }
 
   getAllOrders(): Order[] {
-    return this.getStore<Order>('fmcg_orders', SEED_ORDERS);
+    const all = this.getStore<Order>('fmcg_orders', SEED_ORDERS);
+    return all.filter(o => !this.isDummyOrder(o));
   }
 
   saveOrders(orders: Order[], targetBusinessId?: string): void {
@@ -6468,7 +6648,9 @@ class FMCGDatabase {
       const unitsPerPack = rawItem.units_per_trading_unit || rawItem.units_per_box_carton || prod?.units_per_box_carton || 1;
       const tradingUnit = rawItem.trading_unit || prod?.trading_unit || 'Carton';
       const baseUnit = rawItem.base_unit || prod?.base_unit || 'Piece';
-      const gstPercent = prod?.gst_percent ?? 18;
+      const gstPercent = (rawItem.gst_percent !== undefined && rawItem.gst_percent !== null)
+        ? Number(rawItem.gst_percent)
+        : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
 
       const cartonQty = rawItem.carton_qty !== undefined
         ? rawItem.carton_qty
@@ -6853,7 +7035,9 @@ class FMCGDatabase {
           const updatedOrderItems: OrderItem[] = processedItems.map(pi => {
             const existingOrderItem = order.items?.find(it => it.product_id === pi.product_id);
             const prod = products.find(p => p.id === pi.product_id);
-            const gstPercent = prod?.gst_percent ?? 18;
+            const gstPercent = (pi.gst_percent !== undefined && pi.gst_percent !== null)
+              ? Number(pi.gst_percent)
+              : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
             const gstAmount = (pi.cgst || 0) + (pi.sgst || 0) + (pi.igst || 0);
 
             const baseQty = pi.base_qty ?? pi.quantity ?? 0;
@@ -6932,37 +7116,51 @@ class FMCGDatabase {
   /**
    * Fetches the last billing records for a specific retailer and exact product variant/packing.
    * Strictly matches retailer_id, product_id (exact variant), and trading_unit.
+   * Excludes cancelled invoices.
    * Returns newest-first records capped at limit (default 5).
    */
   getLastBillingRates(
     retailerId: string,
     productId: string,
     tradingUnit?: string,
-    limit: number = 5
+    limit: number = 5,
+    companyId?: string
   ): BillingRateRecord[] {
     const invoices = this.getInvoices();
     const orders = this.getOrders();
     const fulfilments = this.getFulfilments();
     const products = this.getProducts();
+    const retailers = this.getRetailers();
     const targetProd = products.find(p => p.id === productId);
+    const targetRetailer = retailers.find(r => r.id === retailerId);
 
     const records: BillingRateRecord[] = [];
 
-    // Filter invoices for this specific retailer
-    const retailerInvoices = invoices.filter(inv => inv.retailer_id === retailerId);
+    // Filter invoices for this specific retailer (excluding cancelled invoices)
+    const retailerInvoices = invoices.filter(inv => {
+      if (inv.retailer_id !== retailerId) return false;
+      if (companyId && (inv as any).company_id && (inv as any).company_id !== companyId) return false;
+      if (inv.status === 'Cancelled' || (inv as any).invoice_status === 'Cancelled') return false;
+      return true;
+    });
 
     retailerInvoices.forEach(inv => {
       inv.items?.forEach(item => {
         // Strict matching of exact product variant ID
         if (item.product_id === productId) {
-          if (tradingUnit && item.trading_unit !== tradingUnit) return;
+          if (tradingUnit && item.trading_unit && item.trading_unit !== tradingUnit) return;
 
           // Find matching order number if possible
           let orderNum = '';
+          let salesperson = '';
+          let channel = '';
+
           if (inv.order_ref_id) {
             const ord = orders.find(o => o.id === inv.order_ref_id);
             if (ord) {
               orderNum = ord.order_number;
+              salesperson = ord.created_by || '';
+              channel = ord.channel || ord.source || '';
             } else {
               const ful = fulfilments.find(f => f.id === inv.order_ref_id);
               if (ful) {
@@ -6970,19 +7168,23 @@ class FMCGDatabase {
                   o.items?.some(oi => ful.items?.some(fi => fi.order_item_id === oi.id))
                 );
                 orderNum = origOrder ? origOrder.order_number : ful.fulfilment_number;
+                if (origOrder) {
+                  salesperson = origOrder.created_by || '';
+                  channel = origOrder.channel || origOrder.source || '';
+                }
               } else {
                 orderNum = inv.order_ref_id.startsWith('ORD-') ? inv.order_ref_id : 'POS-SALE';
               }
             }
           }
           if (!orderNum) {
-            orderNum = inv.invoice_number.replace('INV', 'ORD');
+            orderNum = (inv.source_order_numbers && inv.source_order_numbers[0]) || inv.invoice_number.replace('INV', 'ORD');
           }
 
           const catRate = item.catalogue_rate || targetProd?.selling_price || item.rate;
-          const disc = item.discount || 0;
-          const appliedRate = item.rate;
-          const finalAppliedRate = item.rate - disc;
+          const disc = item.discount || item.carton_discount || 0;
+          const appliedRate = item.rate || item.unit_rate || item.carton_rate || 0;
+          const finalAppliedRate = Math.max(0, appliedRate - disc);
 
           let rateSource = 'Catalogue Dealer Rate';
           if (item.manual_rate_applied) {
@@ -6991,27 +7193,39 @@ class FMCGDatabase {
             rateSource = 'Agreed Order Rate';
           }
 
-          const unitsPerPack = item.units_per_trading_unit || targetProd?.units_per_box_carton || 1;
+          const unitsPerPack = item.units_per_trading_unit || item.units_per_box_carton || targetProd?.units_per_box_carton || 1;
           const { cartonQty, looseQty } = splitBaseQuantity(item.quantity, unitsPerPack);
           const cartonRate = item.carton_rate ?? item.rate;
           const looseRate = item.loose_rate ?? targetProd?.loose_selling_price ?? (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
           const cartonDisc = item.carton_discount ?? item.discount ?? 0;
           const looseDisc = item.loose_discount ?? 0;
 
+          const gstPct = (item.gst_percent !== undefined && item.gst_percent !== null)
+            ? Number(item.gst_percent)
+            : ((targetProd?.gst_percent !== undefined && targetProd?.gst_percent !== null) ? Number(targetProd.gst_percent) : 0);
+          const taxable = (item.carton_qty !== undefined ? item.carton_qty : cartonQty) * finalAppliedRate;
+          const gstAmt = taxable * (gstPct / 100);
+
           records.push({
             id: item.id || `rec-${inv.id}-${Math.random()}`,
             order_number: orderNum,
             invoice_number: inv.invoice_number,
-            date: inv.date,
+            invoice_id: inv.id,
+            retailer_id: inv.retailer_id,
+            retailer_name: targetRetailer?.shop_name || targetRetailer?.owner_name || 'Retailer Customer',
+            retailer_city: targetRetailer?.city || 'Nagpur',
+            date: inv.date || (inv as any).created_at,
             quantity: item.quantity,
             carton_qty: item.carton_qty ?? cartonQty,
             loose_qty: item.loose_qty ?? looseQty,
             base_qty: item.base_qty ?? item.quantity,
-            trading_unit: item.trading_unit,
+            trading_unit: item.trading_unit || 'Carton',
             base_unit: item.base_unit || targetProd?.base_unit || 'Packet',
             units_per_trading_unit: unitsPerPack,
-            packing: item.packing || targetProd?.pack_size || '',
+            units_per_box_carton: unitsPerPack,
+            packing: item.packing || targetProd?.pack_size || targetProd?.packing_display || '',
             catalogue_rate: catRate,
+            purchase_rate: item.purchase_rate !== undefined ? item.purchase_rate : ((item as any).cost_price ?? (item as any).purchase_price ?? targetProd?.purchase_price ?? 0),
             carton_rate: cartonRate,
             loose_rate: looseRate,
             discount: disc,
@@ -7019,9 +7233,156 @@ class FMCGDatabase {
             loose_discount: looseDisc,
             applied_rate: appliedRate,
             final_applied_rate: finalAppliedRate,
+            gst_percent: gstPct,
+            gst_amount: gstAmt,
+            taxable_amount: taxable,
+            invoice_total: inv.grand_total,
+            salesperson,
+            channel,
             manual_rate_applied: item.manual_rate_applied || false,
             manual_rate_reason: item.manual_rate_reason,
-            rate_source: rateSource
+            rate_source: rateSource,
+            company_id: (inv as any).company_id,
+            invoice_status: inv.status || 'Generated'
+          });
+        }
+      });
+    });
+
+    // Sort descending by date (newest first)
+    records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    return records.slice(0, limit);
+  }
+
+  /**
+   * Fetches the last billing records across ALL retailers for exact product variant/packing.
+   * Strictly matches product_id (exact variant) and optional company_id.
+   * Excludes cancelled invoices.
+   * Returns newest-first records capped at limit (default 5).
+   */
+  getAllRetailersLastBillingRates(
+    productId: string,
+    tradingUnit?: string,
+    limit: number = 5,
+    companyId?: string
+  ): BillingRateRecord[] {
+    const invoices = this.getInvoices();
+    const orders = this.getOrders();
+    const fulfilments = this.getFulfilments();
+    const products = this.getProducts();
+    const retailers = this.getRetailers();
+    const targetProd = products.find(p => p.id === productId);
+
+    const records: BillingRateRecord[] = [];
+
+    // Filter invoices across all retailers (scoped to company if provided, excluding cancelled invoices)
+    const validInvoices = invoices.filter(inv => {
+      if (companyId && (inv as any).company_id && (inv as any).company_id !== companyId) return false;
+      if (inv.status === 'Cancelled' || (inv as any).invoice_status === 'Cancelled') return false;
+      return true;
+    });
+
+    validInvoices.forEach(inv => {
+      const retailer = retailers.find(r => r.id === inv.retailer_id);
+
+      inv.items?.forEach(item => {
+        if (item.product_id === productId) {
+          if (tradingUnit && item.trading_unit && item.trading_unit !== tradingUnit) return;
+
+          let orderNum = '';
+          let salesperson = '';
+          let channel = '';
+
+          if (inv.order_ref_id) {
+            const ord = orders.find(o => o.id === inv.order_ref_id);
+            if (ord) {
+              orderNum = ord.order_number;
+              salesperson = ord.created_by || '';
+              channel = ord.channel || ord.source || '';
+            } else {
+              const ful = fulfilments.find(f => f.id === inv.order_ref_id);
+              if (ful) {
+                const origOrder = orders.find(o =>
+                  o.items?.some(oi => ful.items?.some(fi => fi.order_item_id === oi.id))
+                );
+                orderNum = origOrder ? origOrder.order_number : ful.fulfilment_number;
+                if (origOrder) {
+                  salesperson = origOrder.created_by || '';
+                  channel = origOrder.channel || origOrder.source || '';
+                }
+              } else {
+                orderNum = inv.order_ref_id.startsWith('ORD-') ? inv.order_ref_id : 'POS-SALE';
+              }
+            }
+          }
+          if (!orderNum) {
+            orderNum = (inv.source_order_numbers && inv.source_order_numbers[0]) || inv.invoice_number.replace('INV', 'ORD');
+          }
+
+          const catRate = item.catalogue_rate || targetProd?.selling_price || item.rate;
+          const disc = item.discount || item.carton_discount || 0;
+          const appliedRate = item.rate || item.unit_rate || item.carton_rate || 0;
+          const finalAppliedRate = Math.max(0, appliedRate - disc);
+
+          let rateSource = 'Catalogue Dealer Rate';
+          if (item.manual_rate_applied) {
+            rateSource = 'Admin Manual Override';
+          } else if (item.order_time_rate !== undefined && Math.abs(item.order_time_rate - catRate) > 0.01) {
+            rateSource = 'Agreed Order Rate';
+          }
+
+          const unitsPerPack = item.units_per_trading_unit || item.units_per_box_carton || targetProd?.units_per_box_carton || 1;
+          const { cartonQty, looseQty } = splitBaseQuantity(item.quantity, unitsPerPack);
+          const cartonRate = item.carton_rate ?? item.rate;
+          const looseRate = item.loose_rate ?? targetProd?.loose_selling_price ?? (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
+          const cartonDisc = item.carton_discount ?? item.discount ?? 0;
+          const looseDisc = item.loose_discount ?? 0;
+
+          const gstPct = (item.gst_percent !== undefined && item.gst_percent !== null)
+            ? Number(item.gst_percent)
+            : ((targetProd?.gst_percent !== undefined && targetProd?.gst_percent !== null) ? Number(targetProd.gst_percent) : 0);
+          const taxable = (item.carton_qty !== undefined ? item.carton_qty : cartonQty) * finalAppliedRate;
+          const gstAmt = taxable * (gstPct / 100);
+
+          records.push({
+            id: item.id || `rec-${inv.id}-${Math.random()}`,
+            order_number: orderNum,
+            invoice_number: inv.invoice_number,
+            invoice_id: inv.id,
+            retailer_id: inv.retailer_id,
+            retailer_name: retailer?.shop_name || retailer?.owner_name || 'Retailer Customer',
+            retailer_city: retailer?.city || 'Nagpur',
+            date: inv.date || (inv as any).created_at,
+            quantity: item.quantity,
+            carton_qty: item.carton_qty ?? cartonQty,
+            loose_qty: item.loose_qty ?? looseQty,
+            base_qty: item.base_qty ?? item.quantity,
+            trading_unit: item.trading_unit || 'Carton',
+            base_unit: item.base_unit || targetProd?.base_unit || 'Piece',
+            units_per_trading_unit: unitsPerPack,
+            units_per_box_carton: unitsPerPack,
+            packing: item.packing || targetProd?.pack_size || targetProd?.packing_display || '',
+            catalogue_rate: catRate,
+            purchase_rate: item.purchase_rate !== undefined ? item.purchase_rate : ((item as any).cost_price ?? (item as any).purchase_price ?? targetProd?.purchase_price ?? 0),
+            carton_rate: cartonRate,
+            loose_rate: looseRate,
+            discount: disc,
+            carton_discount: cartonDisc,
+            loose_discount: looseDisc,
+            applied_rate: appliedRate,
+            final_applied_rate: finalAppliedRate,
+            gst_percent: gstPct,
+            gst_amount: gstAmt,
+            taxable_amount: taxable,
+            invoice_total: inv.grand_total,
+            salesperson,
+            channel,
+            manual_rate_applied: item.manual_rate_applied || false,
+            manual_rate_reason: item.manual_rate_reason,
+            rate_source: rateSource,
+            company_id: (inv as any).company_id,
+            invoice_status: inv.status || 'Generated'
           });
         }
       });
@@ -7214,7 +7575,9 @@ class FMCGDatabase {
       const looseRate = item.loose_rate ?? prod.loose_selling_price ?? (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
       const cartonDisc = item.carton_discount ?? 0;
       const looseDisc = item.loose_discount ?? 0;
-      const gstPercent = item.gst_percent ?? prod.gst_percent ?? 18;
+      const gstPercent = (item.gst_percent !== undefined && item.gst_percent !== null)
+        ? Number(item.gst_percent)
+        : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
 
       const taxableVal = (cartonQty * Math.max(0, cartonRate - cartonDisc)) + (looseQty * Math.max(0, looseRate - looseDisc));
       const lineDisc = (cartonQty * cartonDisc) + (looseQty * looseDisc);
@@ -7541,14 +7904,22 @@ class FMCGDatabase {
   // TRANSACTION LOGIC ENGINE
   // ----------------------------------------------------
 
-  createOrder(orderData: Omit<Order, 'id' | 'order_number' | 'status' | 'order_date'>): Order {
+  createOrder(orderData: {
+    retailer_id: string;
+    source: 'distributor_salesperson' | 'company_salesperson' | 'retailer_direct' | 'counter_sale';
+    channel?: OrderChannel;
+    created_by?: string;
+    order_notes?: string;
+    business_id?: string;
+    items?: (Partial<OrderItem> & { product_id: string; quantity?: number })[];
+  } | Omit<Order, 'id' | 'order_number' | 'status' | 'order_date'> | any): Order {
     const orders = this.getOrders();
     const products = this.getProducts();
     const orderNum = `ORD-${new Date().getFullYear()}-${String(orders.length + 1).padStart(5, '0')}`;
     
     let totalOrderAmount = 0;
 
-    const processedItems: OrderItem[] = (orderData.items || []).map(item => {
+    const processedItems: OrderItem[] = (orderData.items || []).map((item: any) => {
       const prod = products.find(p => p.id === item.product_id);
       const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
       const tradingUnit = item.trading_unit || prod?.trading_unit || 'Carton';
@@ -7576,6 +7947,7 @@ class FMCGDatabase {
 
       return {
         ...item,
+        id: item.id || `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
         quantity: baseQty, // stored in integer base units
         carton_qty: cartonQty,
         loose_qty: looseQty,
@@ -7606,6 +7978,7 @@ class FMCGDatabase {
       order_number: orderNum,
       status: 'Submitted',
       order_date: new Date().toISOString(),
+      order_notes: (orderData as any).order_notes || (orderData as any).notes || '',
       total_amount: Math.round(totalOrderAmount),
       items: processedItems
     };
@@ -7613,6 +7986,10 @@ class FMCGDatabase {
     orders.push(newOrder);
     this.saveOrders(orders);
     return newOrder;
+  }
+
+  getOrder(orderId: string): Order | undefined {
+    return this.getOrders().find(o => o.id === orderId || o.order_number === orderId);
   }
 
   /**
@@ -7677,7 +8054,9 @@ class FMCGDatabase {
         const unitsPerPack = orderItem.units_per_trading_unit || orderItem.units_per_box_carton || prod?.units_per_box_carton || 1;
         const tradingUnit = orderItem.trading_unit || prod?.trading_unit || 'Carton';
         const baseUnit = orderItem.base_unit || prod?.base_unit || 'Piece';
-        const gstPercent = orderItem.gst_percent ?? prod?.gst_percent ?? 18;
+        const gstPercent = (orderItem.gst_percent !== undefined && orderItem.gst_percent !== null)
+          ? Number(orderItem.gst_percent)
+          : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
 
         const cartonQty = orderItem.carton_qty !== undefined
           ? orderItem.carton_qty
@@ -8142,7 +8521,7 @@ class FMCGDatabase {
     const mrp = itemData.selectedMrp || prod.mrp;
     const cartonRate = itemData.unitRate !== undefined ? itemData.unitRate : prod.selling_price;
     const looseRate = prod.loose_selling_price || (Math.round((cartonRate / unitsPerPack) * 100) / 100);
-    const gstPercent = prod.gst_percent || 18;
+    const gstPercent = (prod.gst_percent !== undefined && prod.gst_percent !== null) ? Number(prod.gst_percent) : 0;
 
     const amounts = calculateItemAmounts(cQty, lQty, cartonRate, looseRate, 0, 0, gstPercent);
 
@@ -8404,6 +8783,648 @@ class FMCGDatabase {
 
     this.saveFulfilments(fulfilments);
     return newFulfilment;
+  }
+
+  /**
+   * Splits an order during floor packing:
+   * 1. Updates original order with packed quantities and sets status to 'Packed'.
+   * 2. If shortage exists, automatically splits remaining items into a new Backorder record with status 'Partially Fulfilled' (or 'PARTIAL_PENDING').
+   */
+  splitOrderAndCreateBackorder(
+    orderId: string,
+    packedItems: {
+      itemId: string;
+      packedQty: number; // in base units
+      reason?: string;
+    }[],
+    adminUser?: { id: string; name: string }
+  ): { packedOrder: Order; backorder: Order | null } | null {
+    const orders = this.getOrders();
+    const order = orders.find(o => o.id === orderId);
+    if (!order) return null;
+
+    const products = this.getProducts();
+    const backorderItems: OrderItem[] = [];
+    let packedOrderTotal = 0;
+    let backorderTotal = 0;
+
+    order.items?.forEach(item => {
+      const prod = products.find(p => p.id === item.product_id);
+      const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const originalBase = item.ordered_qty ?? item.base_qty ?? item.quantity ?? 0;
+      const target = packedItems.find(p => p.itemId === item.id);
+      const packedQty = target !== undefined ? Math.max(0, Math.min(originalBase, target.packedQty)) : originalBase;
+      const shortageQty = Math.max(0, originalBase - packedQty);
+
+      const cartonRate = item.manual_billing_rate || item.carton_rate || item.order_time_rate || item.base_price || prod?.selling_price || 0;
+      const looseRate = item.loose_rate || prod?.loose_selling_price || (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
+      const prodGst = (item.gst_percent !== undefined && item.gst_percent !== null) ? Number(item.gst_percent) : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+
+      // Update current order item to packed
+      const packedSplit = splitBaseQuantity(packedQty, unitsPerPack);
+      const packedAmounts = calculateItemAmounts(
+        packedSplit.cartonQty,
+        packedSplit.looseQty,
+        cartonRate,
+        looseRate,
+        item.carton_discount || item.discount || 0,
+        item.loose_discount || 0,
+        prodGst
+      );
+
+      item.packed_qty = packedQty;
+      item.confirmed_qty = packedQty;
+      item.quantity = packedQty;
+      item.base_qty = packedQty;
+      item.ordered_qty = originalBase;
+      item.remaining_qty = shortageQty;
+      item.carton_qty = packedSplit.cartonQty;
+      item.loose_qty = packedSplit.looseQty;
+      item.status = shortageQty > 0 ? 'PARTIALLY_PACKED' : 'PACKED';
+
+      packedOrderTotal += packedAmounts.totalAmount;
+
+      // If shortage exists, create backorder item
+      if (shortageQty > 0) {
+        const backorderSplit = splitBaseQuantity(shortageQty, unitsPerPack);
+        const backorderAmounts = calculateItemAmounts(
+          backorderSplit.cartonQty,
+          backorderSplit.looseQty,
+          cartonRate,
+          looseRate,
+          item.carton_discount || item.discount || 0,
+          item.loose_discount || 0,
+          prodGst
+        );
+
+        backorderItems.push({
+          id: `oi-bo-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          order_id: '',
+          product_id: item.product_id,
+          product_name: prod?.name || (item as any).name || 'Product Item',
+          quantity: shortageQty,
+          base_qty: shortageQty,
+          ordered_qty: shortageQty,
+          fulfilled_qty: 0,
+          remaining_qty: shortageQty,
+          confirmed_qty: 0,
+          packed_qty: 0,
+          carton_qty: backorderSplit.cartonQty,
+          loose_qty: backorderSplit.looseQty,
+          trading_unit: item.trading_unit || prod?.trading_unit || 'Carton',
+          base_unit: item.base_unit || prod?.base_unit || 'Piece',
+          units_per_trading_unit: unitsPerPack,
+          rate: cartonRate,
+          carton_rate: cartonRate,
+          loose_rate: looseRate,
+          discount: item.discount || 0,
+          carton_discount: item.carton_discount || 0,
+          loose_discount: item.loose_discount || 0,
+          gst_percent: prodGst,
+          reason: target?.reason || 'Short-packed during packing floor processing',
+          status: 'PARTIAL_PENDING'
+        } as any);
+
+        backorderTotal += backorderAmounts.totalAmount;
+      }
+    });
+
+    order.total_amount = Math.round(packedOrderTotal);
+    order.status = 'Packed';
+    order.packed_at = new Date().toISOString();
+    (order as any).packed_by = adminUser?.name || 'Admin Warehouse Staff';
+
+    let newBackorder: Order | null = null;
+    if (backorderItems.length > 0) {
+      const boId = `ord-bo-${Date.now()}`;
+      const boNumber = `${order.order_number}-BO`;
+      backorderItems.forEach(bi => { bi.order_id = boId; });
+
+      newBackorder = {
+        id: boId,
+        order_number: boNumber,
+        retailer_id: order.retailer_id,
+        business_id: order.business_id,
+        source: order.source || 'distributor_salesperson',
+        order_date: new Date().toISOString(),
+        status: 'Partially Fulfilled',
+        total_amount: Math.round(backorderTotal),
+        items: backorderItems as any,
+        admin_notes: `Automatic Backorder split from Order ${order.order_number} (Unfulfilled shortage).`,
+        parent_order_id: order.id,
+        created_at: new Date().toISOString(),
+        created_by: adminUser?.id || this.currentUserId
+      } as Order;
+
+      orders.push(newBackorder);
+    }
+
+    this.saveOrders(orders);
+
+    this.addItemActivityLog({
+      product_id: order.items?.[0]?.product_id || '',
+      action: 'Packing Verified & Backorder Split',
+      details: newBackorder 
+        ? `Order ${order.order_number} packed and moved to Packed Orders. Shortage split into Backorder ${newBackorder.order_number} (${backorderItems.length} items).`
+        : `Order ${order.order_number} fully packed and moved to Packed Orders.`,
+      reference_id: order.id,
+      user_id: adminUser?.id || this.currentUserId,
+      user_name: adminUser?.name || 'Admin User'
+    });
+
+    return { packedOrder: order, backorder: newBackorder };
+  }
+
+  /**
+   * Applies administrative financial and rate overrides to a Packed order before invoicing
+   */
+  updateOrderFinancialOverrides(
+    orderId: string,
+    itemOverrides: {
+      itemId: string;
+      billedQty?: number;
+      rate?: number;
+      discount?: number;
+      reason?: string;
+    }[],
+    adminUser?: { id: string; name: string }
+  ): Order | null {
+    const orders = this.getOrders();
+    const order = orders.find(o => o.id === orderId);
+    if (!order) return null;
+
+    const products = this.getProducts();
+    let updatedTotal = 0;
+
+    order.items?.forEach(item => {
+      const target = itemOverrides.find(o => o.itemId === item.id);
+      const prod = products.find(p => p.id === item.product_id);
+      const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+
+      if (target) {
+        if (target.billedQty !== undefined && target.billedQty >= 0) {
+          item.packed_qty = target.billedQty;
+          item.confirmed_qty = target.billedQty;
+          item.quantity = target.billedQty;
+          item.base_qty = target.billedQty;
+          const split = splitBaseQuantity(target.billedQty, unitsPerPack);
+          item.carton_qty = split.cartonQty;
+          item.loose_qty = split.looseQty;
+        }
+        if (target.rate !== undefined && target.rate > 0) {
+          item.manual_billing_rate = target.rate;
+          item.manual_rate_applied = true;
+          item.manual_rate_reason = target.reason || 'Admin Financial Override';
+          item.carton_rate = target.rate;
+          item.loose_rate = Math.round((target.rate / Math.max(1, unitsPerPack)) * 100) / 100;
+        }
+        if (target.discount !== undefined && target.discount >= 0) {
+          item.discount = target.discount;
+          item.carton_discount = target.discount;
+        }
+      }
+
+      const currentQty = item.base_qty ?? item.quantity ?? 0;
+      const currentRate = item.manual_billing_rate || item.carton_rate || item.order_time_rate || item.base_price || prod?.selling_price || 0;
+      const looseRate = item.loose_rate || prod?.loose_selling_price || (Math.round((currentRate / Math.max(1, unitsPerPack)) * 100) / 100);
+      const split = splitBaseQuantity(currentQty, unitsPerPack);
+      const prodGst = (item.gst_percent !== undefined && item.gst_percent !== null) ? Number(item.gst_percent) : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+
+      const amounts = calculateItemAmounts(
+        split.cartonQty,
+        split.looseQty,
+        currentRate,
+        looseRate,
+        item.carton_discount || item.discount || 0,
+        item.loose_discount || 0,
+        prodGst
+      );
+
+      (item as any).taxable_value = amounts.taxableAmount;
+      (item as any).cgst = amounts.gstAmount / 2;
+      (item as any).sgst = amounts.gstAmount / 2;
+      (item as any).igst = 0;
+      (item as any).total_amount = amounts.totalAmount;
+      updatedTotal += amounts.totalAmount;
+    });
+
+    order.total_amount = Math.round(updatedTotal);
+    this.saveOrders(orders);
+
+    this.addItemActivityLog({
+      product_id: order.items?.[0]?.product_id || '',
+      action: 'Financial Overrides Applied',
+      details: `Admin overrides applied to Order ${order.order_number}. New Order Total: ₹${order.total_amount}`,
+      reference_id: order.id,
+      user_id: adminUser?.id || this.currentUserId,
+      user_name: adminUser?.name || 'Admin User'
+    });
+
+    return order;
+  }
+
+  /**
+   * Merges multiple backorders of a retailer into a single clean fresh Order
+   */
+  mergeBackorderIntoNewOrder(
+    retailerId: string,
+    sourceOrderIds: string[],
+    adminUser?: { id: string; name: string }
+  ): Order | null {
+    const orders = this.getOrders();
+    const sourceOrders = orders.filter(o => sourceOrderIds.includes(o.id) && o.retailer_id === retailerId);
+    if (sourceOrders.length === 0) return null;
+
+    const products = this.getProducts();
+    const newItems: OrderItem[] = [];
+    let orderTotal = 0;
+
+    sourceOrders.forEach(so => {
+      so.items?.forEach(item => {
+        const prod = products.find(p => p.id === item.product_id);
+        const remQty = item.remaining_qty !== undefined ? item.remaining_qty : ((item.ordered_qty ?? item.base_qty ?? item.quantity) - (item.fulfilled_qty || 0) - (item.cancelled_qty || 0));
+        if (remQty > 0) {
+          const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+          const split = splitBaseQuantity(remQty, unitsPerPack);
+          const cartonRate = item.manual_billing_rate || item.carton_rate || item.order_time_rate || item.base_price || prod?.selling_price || 0;
+          const looseRate = item.loose_rate || prod?.loose_selling_price || (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
+          const prodGst = (item.gst_percent !== undefined && item.gst_percent !== null) ? Number(item.gst_percent) : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+
+          const amounts = calculateItemAmounts(
+            split.cartonQty,
+            split.looseQty,
+            cartonRate,
+            looseRate,
+            item.carton_discount || item.discount || 0,
+            item.loose_discount || 0,
+            prodGst
+          );
+
+          newItems.push({
+            id: `oi-merged-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            order_id: '',
+            product_id: item.product_id,
+            product_name: prod?.name || (item as any).name || 'Product Item',
+            quantity: remQty,
+            base_qty: remQty,
+            ordered_qty: remQty,
+            fulfilled_qty: 0,
+            remaining_qty: remQty,
+            confirmed_qty: remQty,
+            packed_qty: 0,
+            carton_qty: split.cartonQty,
+            loose_qty: split.looseQty,
+            trading_unit: item.trading_unit || prod?.trading_unit || 'Carton',
+            base_unit: item.base_unit || prod?.base_unit || 'Piece',
+            units_per_trading_unit: unitsPerPack,
+            rate: cartonRate,
+            carton_rate: cartonRate,
+            loose_rate: looseRate,
+            discount: item.discount || 0,
+            carton_discount: item.carton_discount || 0,
+            loose_discount: item.loose_discount || 0,
+            gst_percent: prodGst,
+            status: 'PENDING'
+          } as any);
+
+          orderTotal += amounts.totalAmount;
+          // Mark source item fulfilled/closed
+          item.remaining_qty = 0;
+          item.status = 'COMPLETED';
+        }
+      });
+      so.status = 'Completed';
+    });
+
+    if (newItems.length === 0) return null;
+
+    const newOrdId = `ord-${Date.now()}`;
+    const newOrdNumber = `SO-${new Date().getFullYear()}-${String(orders.length + 1).padStart(5, '0')}`;
+    newItems.forEach(ni => { ni.order_id = newOrdId; });
+
+    const newOrder: Order = {
+      id: newOrdId,
+      order_number: newOrdNumber,
+      retailer_id: retailerId,
+      business_id: sourceOrders[0]?.business_id,
+      source: 'distributor_salesperson',
+      order_date: new Date().toISOString(),
+      status: 'Confirmed',
+      total_amount: Math.round(orderTotal),
+      items: newItems,
+      admin_notes: `Consolidated from merged Backorders: ${sourceOrders.map(o => o.order_number).join(', ')}`,
+      created_at: new Date().toISOString(),
+      created_by: adminUser?.id || this.currentUserId
+    };
+
+    orders.push(newOrder);
+    this.saveOrders(orders);
+
+    this.addItemActivityLog({
+      product_id: newItems[0]?.product_id || '',
+      action: 'Backorders Merged',
+      details: `Merged ${sourceOrders.length} backorders into new Order ${newOrdNumber} with ${newItems.length} items.`,
+      reference_id: newOrdId,
+      user_id: adminUser?.id || this.currentUserId,
+      user_name: adminUser?.name || 'Admin User'
+    });
+
+    return newOrder;
+  }
+
+  /**
+   * Cancels / Voids a Backorder demand cleanly without invoicing
+   */
+  cancelBackorder(
+    orderId: string,
+    reason: string,
+    adminUser?: { id: string; name: string }
+  ): Order | null {
+    const orders = this.getOrders();
+    const order = orders.find(o => o.id === orderId);
+    if (!order) return null;
+
+    order.status = 'Cancelled';
+    (order as any).admin_notes = `${(order as any).admin_notes || (order as any).notes || ''} [Cancelled: ${reason || 'Voided by Admin'}]`;
+    order.items?.forEach(i => {
+      i.cancelled_qty = i.remaining_qty || i.quantity || 0;
+      i.remaining_qty = 0;
+      i.status = 'CANCELLED';
+    });
+
+    this.saveOrders(orders);
+
+    this.addItemActivityLog({
+      product_id: order.items?.[0]?.product_id || '',
+      action: 'Backorder Cancelled',
+      details: `Backorder ${order.order_number} cancelled. Reason: ${reason || 'Voided by Admin'}`,
+      reference_id: order.id,
+      user_id: adminUser?.id || this.currentUserId,
+      user_name: adminUser?.name || 'Admin User'
+    });
+
+    return order;
+  }
+
+  /**
+   * Saves consolidated packing across all pending orders and active backorders of a retailer in one transaction:
+   * 1. Allocates packed quantities across source orders & backorders (FIFO: backorders first, then oldest pending order).
+   * 2. Marks fulfilled orders as 'Packed', with packed_at and packed_by set.
+   * 3. Marks fulfilled backorders as 'Completed' or updates their remaining balance.
+   * 4. If any shortages remain across the consolidated lot, creates or updates a Backorder record (status: 'Partially Fulfilled' / 'PARTIAL_PENDING') under this retailer.
+   */
+  saveConsolidatedRetailerPacking(
+    retailerId: string,
+    orderIds: string[],
+    backorderIds: string[],
+    packedAllocationsBySku: {
+      productId: string;
+      totalPackedQty: number;
+      reason?: string;
+    }[],
+    adminUser?: { id: string; name: string }
+  ): {
+    packedOrders: Order[];
+    fulfilledBackorders: Order[];
+    rolledBackorder: Order | null;
+  } | null {
+    const orders = this.getOrders();
+    const targetOrders = orders.filter(o => orderIds.includes(o.id) && o.retailer_id === retailerId);
+    const targetBackorders = orders.filter(o => backorderIds.includes(o.id) && o.retailer_id === retailerId);
+
+    if (targetOrders.length === 0 && targetBackorders.length === 0) return null;
+
+    const products = this.getProducts();
+    const packedOrders: Order[] = [];
+    const fulfilledBackorders: Order[] = [];
+    const shortageBackorderItems: OrderItem[] = [];
+    let shortageBackorderTotal = 0;
+
+    // Remaining packed pool per product_id that we can distribute FIFO
+    const packedPool: Record<string, { available: number; reason: string }> = {};
+    packedAllocationsBySku.forEach(p => {
+      packedPool[p.productId] = {
+        available: Math.max(0, p.totalPackedQty),
+        reason: p.reason || 'Out of Stock'
+      };
+    });
+
+    // 1. First allocate packed quantities to prior backorders (FIFO)
+    targetBackorders.forEach(bo => {
+      let boAllFulfilled = true;
+
+      bo.items?.forEach(item => {
+        const prod = products.find(p => p.id === item.product_id);
+        const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+        const requiredQty = item.remaining_qty !== undefined && item.remaining_qty > 0 
+          ? item.remaining_qty 
+          : ((item.ordered_qty ?? item.base_qty ?? item.quantity ?? 0) - (item.fulfilled_qty || 0));
+
+        const pool = packedPool[item.product_id];
+        const canPack = pool ? Math.min(requiredQty, pool.available) : 0;
+        if (pool) {
+          pool.available -= canPack;
+        }
+
+        const remainingShortage = Math.max(0, requiredQty - canPack);
+        item.fulfilled_qty = (item.fulfilled_qty || 0) + canPack;
+        item.packed_qty = (item.packed_qty || 0) + canPack;
+        item.remaining_qty = remainingShortage;
+
+        if (remainingShortage > 0) {
+          boAllFulfilled = false;
+          item.status = 'PARTIAL_PENDING';
+
+          const cartonRate = item.manual_billing_rate || item.carton_rate || item.order_time_rate || item.base_price || prod?.selling_price || 0;
+          const looseRate = item.loose_rate || prod?.loose_selling_price || (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
+          const prodGst = (item.gst_percent !== undefined && item.gst_percent !== null) ? Number(item.gst_percent) : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+          const split = splitBaseQuantity(remainingShortage, unitsPerPack);
+          const amounts = calculateItemAmounts(
+            split.cartonQty,
+            split.looseQty,
+            cartonRate,
+            looseRate,
+            item.carton_discount || item.discount || 0,
+            item.loose_discount || 0,
+            prodGst
+          );
+
+          shortageBackorderItems.push({
+            id: `oi-bo-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            order_id: '',
+            product_id: item.product_id,
+            product_name: prod?.name || (item as any).name || 'Product Item',
+            quantity: remainingShortage,
+            base_qty: remainingShortage,
+            ordered_qty: remainingShortage,
+            fulfilled_qty: 0,
+            remaining_qty: remainingShortage,
+            confirmed_qty: 0,
+            packed_qty: 0,
+            carton_qty: split.cartonQty,
+            loose_qty: split.looseQty,
+            trading_unit: item.trading_unit || prod?.trading_unit || 'Carton',
+            base_unit: item.base_unit || prod?.base_unit || 'Piece',
+            units_per_trading_unit: unitsPerPack,
+            rate: cartonRate,
+            carton_rate: cartonRate,
+            loose_rate: looseRate,
+            discount: item.discount || 0,
+            carton_discount: item.carton_discount || 0,
+            loose_discount: item.loose_discount || 0,
+            gst_percent: prodGst,
+            reason: pool?.reason || (item as any).reason || 'Short-packed during consolidated packing',
+            status: 'PARTIAL_PENDING'
+          } as any);
+          shortageBackorderTotal += amounts.totalAmount;
+        } else {
+          item.status = 'COMPLETED';
+        }
+      });
+
+      if (boAllFulfilled) {
+        bo.status = 'Completed';
+        fulfilledBackorders.push(bo);
+      } else {
+        bo.status = 'Partially Fulfilled';
+      }
+    });
+
+    // 2. Next allocate packed quantities to active pending orders (FIFO)
+    targetOrders.forEach(ord => {
+      let orderPackedTotal = 0;
+
+      ord.items?.forEach(item => {
+        const prod = products.find(p => p.id === item.product_id);
+        const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+        const ordBase = item.ordered_qty ?? item.base_qty ?? item.quantity ?? 0;
+
+        const pool = packedPool[item.product_id];
+        const canPack = pool ? Math.min(ordBase, pool.available) : 0;
+        if (pool) {
+          pool.available -= canPack;
+        }
+
+        const shortage = Math.max(0, ordBase - canPack);
+        const cartonRate = item.manual_billing_rate || item.carton_rate || item.order_time_rate || item.base_price || prod?.selling_price || 0;
+        const looseRate = item.loose_rate || prod?.loose_selling_price || (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
+        const prodGst = (item.gst_percent !== undefined && item.gst_percent !== null) ? Number(item.gst_percent) : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+
+        const packedSplit = splitBaseQuantity(canPack, unitsPerPack);
+        const packedAmounts = calculateItemAmounts(
+          packedSplit.cartonQty,
+          packedSplit.looseQty,
+          cartonRate,
+          looseRate,
+          item.carton_discount || item.discount || 0,
+          item.loose_discount || 0,
+          prodGst
+        );
+
+        item.packed_qty = canPack;
+        item.confirmed_qty = canPack;
+        item.quantity = canPack;
+        item.base_qty = canPack;
+        item.ordered_qty = ordBase;
+        item.remaining_qty = shortage;
+        item.carton_qty = packedSplit.cartonQty;
+        item.loose_qty = packedSplit.looseQty;
+        item.status = shortage > 0 ? 'PARTIALLY_PACKED' : 'PACKED';
+
+        orderPackedTotal += packedAmounts.totalAmount;
+
+        if (shortage > 0) {
+          const shortageSplit = splitBaseQuantity(shortage, unitsPerPack);
+          const shortageAmounts = calculateItemAmounts(
+            shortageSplit.cartonQty,
+            shortageSplit.looseQty,
+            cartonRate,
+            looseRate,
+            item.carton_discount || item.discount || 0,
+            item.loose_discount || 0,
+            prodGst
+          );
+
+          shortageBackorderItems.push({
+            id: `oi-bo-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            order_id: '',
+            product_id: item.product_id,
+            product_name: prod?.name || (item as any).name || 'Product Item',
+            quantity: shortage,
+            base_qty: shortage,
+            ordered_qty: shortage,
+            fulfilled_qty: 0,
+            remaining_qty: shortage,
+            confirmed_qty: 0,
+            packed_qty: 0,
+            carton_qty: shortageSplit.cartonQty,
+            loose_qty: shortageSplit.looseQty,
+            trading_unit: item.trading_unit || prod?.trading_unit || 'Carton',
+            base_unit: item.base_unit || prod?.base_unit || 'Piece',
+            units_per_trading_unit: unitsPerPack,
+            rate: cartonRate,
+            carton_rate: cartonRate,
+            loose_rate: looseRate,
+            discount: item.discount || 0,
+            carton_discount: item.carton_discount || 0,
+            loose_discount: item.loose_discount || 0,
+            gst_percent: prodGst,
+            reason: pool?.reason || 'Short-packed during consolidated packing',
+            status: 'PARTIAL_PENDING'
+          } as any);
+          shortageBackorderTotal += shortageAmounts.totalAmount;
+        }
+      });
+
+      ord.total_amount = Math.round(orderPackedTotal);
+      ord.status = 'Packed';
+      ord.packed_at = new Date().toISOString();
+      (ord as any).packed_by = adminUser?.name || 'Admin Warehouse Staff';
+      packedOrders.push(ord);
+    });
+
+    // 3. Roll remaining shortage into a consolidated Backorder record
+    let newBackorder: Order | null = null;
+    if (shortageBackorderItems.length > 0) {
+      const boId = `ord-bo-${Date.now()}`;
+      const firstOrdNum = targetOrders[0]?.order_number || targetBackorders[0]?.order_number || 'ORD';
+      const boNumber = `${firstOrdNum}-BO`;
+      shortageBackorderItems.forEach(bi => { bi.order_id = boId; });
+
+      newBackorder = {
+        id: boId,
+        order_number: boNumber,
+        retailer_id: retailerId,
+        business_id: targetOrders[0]?.business_id || targetBackorders[0]?.business_id,
+        source: targetOrders[0]?.source || 'distributor_salesperson',
+        order_date: new Date().toISOString(),
+        status: 'Partially Fulfilled',
+        total_amount: Math.round(shortageBackorderTotal),
+        items: shortageBackorderItems as any,
+        admin_notes: `Consolidated Backorder from batch packing (${targetOrders.length} orders, ${targetBackorders.length} prior backorders).`,
+        created_at: new Date().toISOString(),
+        created_by: adminUser?.id || this.currentUserId
+      } as Order;
+
+      orders.push(newBackorder);
+    }
+
+    this.saveOrders(orders);
+
+    this.addItemActivityLog({
+      product_id: targetOrders[0]?.items?.[0]?.product_id || '',
+      action: 'Consolidated Packing Completed',
+      details: `Consolidated packing completed for retailer (${targetOrders.length} orders packed, ${fulfilledBackorders.length} backorders fulfilled). ${newBackorder ? `Shortage rolled into Backorder ${newBackorder.order_number} (${shortageBackorderItems.length} SKUs).` : '100% full supply achieved.'}`,
+      reference_id: targetOrders[0]?.id || retailerId,
+      user_id: adminUser?.id || this.currentUserId,
+      user_name: adminUser?.name || 'Admin User'
+    });
+
+    return {
+      packedOrders,
+      fulfilledBackorders,
+      rolledBackorder: newBackorder
+    };
   }
 
   getOrCreateActiveFulfilment(retailerId: string): Fulfilment {
@@ -8748,7 +9769,7 @@ class FMCGDatabase {
           allocLoosePrice,
           oiCartonDisc,
           oiLooseDisc,
-          prod.gst_percent
+          (prod.gst_percent !== undefined && prod.gst_percent !== null) ? Number(prod.gst_percent) : 0
         );
 
         let itemCGST = 0;
@@ -8789,6 +9810,7 @@ class FMCGDatabase {
           carton_discount: oiCartonDisc,
           loose_discount: oiLooseDisc,
           taxable_value: amounts.taxableAmount,
+          gst_percent: (prod.gst_percent !== undefined && prod.gst_percent !== null) ? Number(prod.gst_percent) : 0,
           cgst: itemCGST,
           sgst: itemSGST,
           igst: itemIGST,
@@ -9569,6 +10591,217 @@ class FMCGDatabase {
   }
 
   /**
+   * Deletes a purchase and safely reverts inventory stock, batches, and ledger
+   */
+  deletePurchase(purchaseId: string): boolean {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const purchases = this.getPurchases(activeBiz);
+    const targetIdx = purchases.findIndex(p => p.id === purchaseId);
+    if (targetIdx === -1) return false;
+
+    const purchase = purchases[targetIdx];
+    const inventory = this.getInventory(activeBiz);
+    const batches = this.getBatches(activeBiz);
+    const ledgers = this.getLedger(activeBiz);
+    const targetGodownId = purchase.receiving_godown_id;
+
+    (purchase.items || []).forEach(item => {
+      const baseQty = item.quantity ?? item.base_qty ?? 0;
+      if (baseQty > 0) {
+        // 1. Revert main inventory
+        const inv = inventory.find(i => i.product_id === item.product_id && (i.godown_id === targetGodownId || !i.godown_id));
+        if (inv) {
+          inv.physical_qty = Math.max(0, inv.physical_qty - baseQty);
+          inv.available_qty = Math.max(0, inv.physical_qty - (inv.reserved_qty || 0));
+          inv.updated_at = new Date().toISOString();
+        }
+
+        // 2. Revert batch inventory
+        if (item.batch) {
+          const batch = batches.find(b => b.product_id === item.product_id && (b.godown_id === targetGodownId || !b.godown_id) && b.batch_number === item.batch);
+          if (batch) {
+            batch.quantity = Math.max(0, batch.quantity - baseQty);
+          }
+        }
+
+        // 3. Stock ledger audit entry
+        ledgers.push({
+          id: `led-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          product_id: item.product_id,
+          godown_id: targetGodownId,
+          change_qty: -baseQty,
+          direction: 'OUT',
+          reason: `Purchase Cancelled / Deleted (${purchase.invoice_number})`,
+          reference_id: purchase.id,
+          user_id: this.currentUserId,
+          business_id: activeBiz,
+          created_at: new Date().toISOString()
+        });
+      }
+    });
+
+    purchases.splice(targetIdx, 1);
+    this.savePurchases(purchases, activeBiz);
+    this.saveInventory(inventory, activeBiz);
+    this.saveBatches(batches, activeBiz);
+    this.saveLedger(ledgers, activeBiz);
+
+    return true;
+  }
+
+  /**
+   * Updates an existing purchase, recalculating stock deltas and batch quantities
+   */
+  updatePurchase(purchaseId: string, updatedData: Partial<Purchase>): Purchase | null {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const purchases = this.getPurchases(activeBiz);
+    const targetIdx = purchases.findIndex(p => p.id === purchaseId);
+    if (targetIdx === -1) return null;
+
+    const oldPurchase = purchases[targetIdx];
+    const inventory = this.getInventory(activeBiz);
+    const batches = this.getBatches(activeBiz);
+    const ledgers = this.getLedger(activeBiz);
+    const products = this.getProducts(activeBiz);
+    const godowns = this.getGodowns(activeBiz);
+    const oldGodownId = oldPurchase.receiving_godown_id;
+    const targetGodownId = updatedData.receiving_godown_id || oldGodownId;
+    const targetGodownName = godowns.find(g => g.id === targetGodownId)?.name || 'Main Godown';
+
+    // 1. Revert old purchase items from inventory and batches
+    (oldPurchase.items || []).forEach(item => {
+      const oldBaseQty = item.quantity ?? item.base_qty ?? 0;
+      if (oldBaseQty > 0) {
+        const inv = inventory.find(i => i.product_id === item.product_id && (i.godown_id === oldGodownId || !i.godown_id));
+        if (inv) {
+          inv.physical_qty = Math.max(0, inv.physical_qty - oldBaseQty);
+          inv.available_qty = Math.max(0, inv.physical_qty - (inv.reserved_qty || 0));
+        }
+        if (item.batch) {
+          const batch = batches.find(b => b.product_id === item.product_id && (b.godown_id === oldGodownId || !b.godown_id) && b.batch_number === item.batch);
+          if (batch) {
+            batch.quantity = Math.max(0, batch.quantity - oldBaseQty);
+          }
+        }
+      }
+    });
+
+    // 2. Apply new purchase items
+    const newItems = (updatedData.items || oldPurchase.items || []).map(item => {
+      const prod = products.find(p => p.id === item.product_id);
+      const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const tradingUnit = item.trading_unit || prod?.trading_unit || 'Carton';
+      const baseUnit = item.base_unit || prod?.base_unit || 'Piece';
+
+      let cQty = item.carton_qty !== undefined ? item.carton_qty : 0;
+      let lQty = item.loose_qty !== undefined ? item.loose_qty : 0;
+      let totalBaseQty = 0;
+
+      if (item.carton_qty === undefined && item.loose_qty === undefined && item.quantity !== undefined) {
+        totalBaseQty = item.quantity + (item.free_quantity || 0);
+        const split = splitBaseQuantity(totalBaseQty, unitsPerPack);
+        cQty = split.cartonQty;
+        lQty = split.looseQty;
+      } else {
+        totalBaseQty = calculateBaseQuantity(cQty, lQty, unitsPerPack) + (item.free_quantity || 0);
+      }
+
+      const effectiveBatch = (item.batch && item.batch.trim())
+        ? item.batch.trim()
+        : (updatedData.invoice_number?.trim() ? `LOT-${updatedData.invoice_number.trim()}` : (oldPurchase.invoice_number?.trim() ? `LOT-${oldPurchase.invoice_number.trim()}` : `LOT-${new Date().toISOString().split('T')[0]}`));
+      const effectiveExpiry = item.expiry_date || '';
+
+      // Update product master pricing if provided
+      if (prod) {
+        if (item.purchase_rate > 0) prod.purchase_price = item.purchase_rate;
+        if (item.mrp > 0) prod.mrp = item.mrp;
+        if (item.gst_percent !== undefined) prod.gst_percent = item.gst_percent;
+        if (item.selling_price && item.selling_price > 0) prod.selling_price = item.selling_price;
+        prod.updated_at = new Date().toISOString();
+      }
+
+      // Add to inventory
+      let inv = inventory.find(i => i.product_id === item.product_id && (i.godown_id === targetGodownId || !i.godown_id));
+      if (inv) {
+        inv.godown_id = targetGodownId;
+        inv.physical_qty += totalBaseQty;
+        inv.available_qty = inv.physical_qty - (inv.reserved_qty || 0);
+        inv.updated_at = new Date().toISOString();
+      } else {
+        inv = {
+          id: `inv-${item.product_id}-${targetGodownId}`,
+          product_id: item.product_id,
+          godown_id: targetGodownId,
+          physical_qty: totalBaseQty,
+          reserved_qty: 0,
+          available_qty: totalBaseQty,
+          damaged_qty: 0,
+          expired_qty: 0,
+          business_id: activeBiz,
+          updated_at: new Date().toISOString()
+        };
+        inventory.push(inv);
+      }
+
+      // Add to batches
+      const existingBatch = batches.find(b => b.product_id === item.product_id && (b.godown_id === targetGodownId || b.godown === targetGodownName) && b.batch_number === effectiveBatch);
+      if (existingBatch) {
+        existingBatch.quantity += totalBaseQty;
+        existingBatch.godown_id = targetGodownId;
+        if (item.purchase_rate > 0) existingBatch.purchase_rate = item.purchase_rate;
+        if (item.mrp > 0) existingBatch.mrp = item.mrp;
+        if (effectiveExpiry) existingBatch.expiry_date = effectiveExpiry;
+      } else {
+        batches.push({
+          id: `batch-${item.product_id}-${targetGodownId}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          product_id: item.product_id,
+          godown_id: targetGodownId,
+          godown: targetGodownName,
+          batch_number: effectiveBatch,
+          expiry_date: effectiveExpiry,
+          mfg_date: item.manufacturing_date,
+          purchase_rate: item.purchase_rate,
+          mrp: item.mrp,
+          selling_price: item.selling_price || prod?.selling_price || Math.round(item.purchase_rate * 1.15),
+          loose_selling_price: item.loose_selling_price || Math.round((item.purchase_rate / Math.max(1, unitsPerPack)) * 100) / 100,
+          quantity: totalBaseQty,
+          entry_date: new Date().toISOString().split('T')[0],
+          business_id: activeBiz
+        });
+      }
+
+      return {
+        ...item,
+        quantity: totalBaseQty,
+        carton_qty: cQty,
+        loose_qty: lQty,
+        base_qty: totalBaseQty,
+        trading_unit: tradingUnit,
+        base_unit: baseUnit,
+        units_per_trading_unit: unitsPerPack,
+        batch: effectiveBatch,
+        expiry_date: effectiveExpiry
+      };
+    });
+
+    const updatedPurchase: Purchase = {
+      ...oldPurchase,
+      ...updatedData,
+      receiving_godown_id: targetGodownId,
+      items: newItems
+    };
+
+    purchases[targetIdx] = updatedPurchase;
+    this.savePurchases(purchases, activeBiz);
+    this.saveInventory(inventory, activeBiz);
+    this.saveBatches(batches, activeBiz);
+    this.saveLedger(ledgers, activeBiz);
+    this.saveProducts(products, activeBiz);
+
+    return updatedPurchase;
+  }
+
+  /**
    * Records a Retailer payment and allocates it (oldest-first by default)
    */
   recordPayment(retailerId: string, amount: number, method: Payment['method'], refNum?: string, notes?: string): Payment {
@@ -9729,7 +10962,7 @@ class FMCGDatabase {
       const looseRate = item.looseRate !== undefined ? item.looseRate : Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100;
       
       const lineTaxable = (cQty * cartonRate) + (lQty * looseRate);
-      const gstPercent = prod?.gst_percent || 18;
+      const gstPercent = (prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : (((item as any).gst_percent !== undefined && (item as any).gst_percent !== null) ? Number((item as any).gst_percent) : 0);
       const lineGst = (lineTaxable * gstPercent) / 100;
       const lineTotal = lineTaxable + lineGst;
 
@@ -9924,6 +11157,162 @@ class FMCGDatabase {
   }
 
   /**
+   * Cancels an entire order, releasing any reserved inventory and recording audit logs
+   */
+  cancelOrder(orderId: string, reason?: string, user?: { id: string; name: string }): Order | null {
+    const orders = this.getOrders();
+    const order = orders.find(o => o.id === orderId || o.order_number === orderId);
+    if (!order) return null;
+
+    if (order.status === 'Delivered' || order.status === 'Completed') {
+      return order;
+    }
+
+    const inventory = this.getInventory();
+
+    // Release any reserved inventory if items had reserved stock
+    (order.items || []).forEach(item => {
+      const confirmedQty = item.confirmed_qty || 0;
+      if (confirmedQty > 0) {
+        const inv = inventory.find(i => i.product_id === item.product_id);
+        if (inv) {
+          inv.reserved_qty = Math.max(0, inv.reserved_qty - confirmedQty);
+          inv.available_qty = inv.physical_qty - inv.reserved_qty;
+        }
+      }
+      item.cancelled_qty = item.quantity;
+      item.cancel_reason = reason || 'Order Cancelled';
+      item.cancelled_by = user?.name || 'User';
+      item.cancelled_at = new Date().toISOString();
+    });
+
+    order.status = 'Cancelled';
+    order.cancellation_reason = reason || 'Order Cancelled';
+    (order as any).cancelled_at = new Date().toISOString();
+    (order as any).cancelled_by = user?.name || 'User';
+    order.admin_notes = reason ? `${order.admin_notes ? order.admin_notes + ' | ' : ''}Cancelled: ${reason}` : order.admin_notes;
+    order.updated_at = new Date().toISOString();
+
+    this.addItemActivityLog({
+      product_id: order.items?.[0]?.product_id || '',
+      action: 'Order Cancelled',
+      details: `Order ${order.order_number} cancelled. Reason: ${reason || 'User Cancellation'}`,
+      old_value: 'Active',
+      new_value: 'Cancelled',
+      reference_id: order.id,
+      user_id: user?.id || this.currentUserId,
+      user_name: user?.name || 'User'
+    });
+
+    this.saveOrders(orders);
+    this.saveInventory(inventory);
+    return order;
+  }
+
+  /**
+   * Updates order notes or line items during review/edit mode
+   */
+  updateOrder(
+    orderId: string,
+    updates: {
+      notes?: string;
+      order_notes?: string;
+      items?: OrderItem[];
+    } & Partial<Order>,
+    user?: { id: string; name: string }
+  ): Order | null {
+    const orders = this.getOrders();
+    const order = orders.find(o => o.id === orderId || o.order_number === orderId);
+    if (!order) return null;
+
+    if (updates.notes !== undefined) {
+      order.admin_notes = updates.notes;
+      order.review_notes = updates.notes;
+    }
+
+    if (updates.order_notes !== undefined) {
+      order.order_notes = updates.order_notes;
+      order.review_notes = updates.order_notes;
+    }
+
+    if (updates.items && Array.isArray(updates.items)) {
+      const products = this.getProducts();
+      order.items = updates.items.map(item => {
+        const prod = products.find(p => p.id === item.product_id);
+        const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+        const tradingUnit = item.trading_unit || prod?.trading_unit || 'Carton';
+        const baseUnit = item.base_unit || prod?.base_unit || 'Packet';
+
+        let cartonQty = item.carton_qty !== undefined ? item.carton_qty : 0;
+        let looseQty = item.loose_qty !== undefined ? item.loose_qty : 0;
+        let baseQty = item.base_qty !== undefined ? item.base_qty : (item.quantity !== undefined ? item.quantity : calculateBaseQuantity(cartonQty, looseQty, unitsPerPack));
+
+        if (item.quantity !== undefined && (item.carton_qty === undefined || item.quantity !== calculateBaseQuantity(cartonQty, looseQty, unitsPerPack))) {
+          baseQty = item.quantity;
+          const split = splitBaseQuantity(item.quantity, unitsPerPack);
+          cartonQty = split.cartonQty;
+          looseQty = split.looseQty;
+        }
+
+        const cartonRate = item.carton_rate ?? item.base_price ?? prod?.selling_price ?? 0;
+        const looseRate = item.loose_rate ?? prod?.loose_selling_price ?? (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
+        const cartonDiscount = item.carton_discount ?? item.discount ?? 0;
+        const looseDiscount = item.loose_discount ?? 0;
+        const gstPercent = item.gst_percent ?? prod?.gst_percent ?? 0;
+
+        const amounts = calculateItemAmounts(cartonQty, looseQty, cartonRate, looseRate, cartonDiscount, looseDiscount, gstPercent);
+
+        return {
+          ...item,
+          id: item.id || `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+          quantity: baseQty,
+          carton_qty: cartonQty,
+          loose_qty: looseQty,
+          base_qty: baseQty,
+          trading_unit: tradingUnit,
+          base_unit: baseUnit,
+          units_per_trading_unit: unitsPerPack,
+          carton_rate: cartonRate,
+          loose_rate: looseRate,
+          carton_discount: cartonDiscount,
+          loose_discount: looseDiscount,
+          catalogue_rate_at_order: item.catalogue_rate_at_order ?? (prod?.selling_price || cartonRate),
+          order_time_rate: item.order_time_rate ?? cartonRate,
+          base_price: cartonRate,
+          discount: amounts.discountAmount,
+          final_price: amounts.taxableAmount,
+          gst_percent: gstPercent,
+          gst_amount: amounts.gstAmount,
+          total_amount: amounts.totalAmount,
+          final_applied_rate: Math.max(0, cartonRate - cartonDiscount)
+        };
+      });
+
+      let totalAmount = 0;
+      order.items.forEach(it => {
+        totalAmount += (it.total_amount || 0);
+      });
+      order.total_amount = Math.round(totalAmount);
+    }
+
+    order.updated_at = new Date().toISOString();
+
+    this.addItemActivityLog({
+      product_id: order.items?.[0]?.product_id || '',
+      action: 'Order Updated',
+      details: `Order ${order.order_number} modified during review. Total: ₹${order.total_amount}`,
+      old_value: 'Previous',
+      new_value: `Updated (₹${order.total_amount})`,
+      reference_id: order.id,
+      user_id: user?.id || this.currentUserId,
+      user_name: user?.name || 'User'
+    });
+
+    this.saveOrders(orders);
+    return order;
+  }
+
+  /**
    * Updates an item's rate and flat rupee discount for an order item.
    * Maintains original ordered rate without overwriting historical snapshot.
    * Recalculates line totals and order totals, and logs to item activity history.
@@ -10029,6 +11418,11 @@ class FMCGDatabase {
     const orders = this.getOrders();
     const order = orders.find(o => o.id === orderId);
     if (!order) return null;
+
+    // Strict Guard: Prevent duplicate confirmation if already confirmed
+    if (order.status === 'Confirmed' && order.confirmed_at) {
+      return order;
+    }
 
     const inventory = this.getInventory();
     const products = this.getProducts();
@@ -10411,6 +11805,12 @@ class FMCGDatabase {
     const order = orders.find(o => o.id === orderId);
     if (!order) return null;
 
+    // Mandatory Workflow Rule: Order must be confirmed before entering Packed state
+    if (order.status === 'Submitted' || order.status === 'Draft' || order.status === 'Under Review') {
+      console.warn(`Cannot pack unconfirmed order ${order.order_number}. Order must be confirmed first.`);
+      return null;
+    }
+
     order.items = order.items?.map(item => {
       const match = allocations.find(a => a.orderItemId === item.id);
       if (match) {
@@ -10452,6 +11852,12 @@ class FMCGDatabase {
     const orders = this.getOrders();
     const order = orders.find(o => o.id === orderId);
     if (!order) return null;
+
+    // Mandatory Workflow Rule: Order must be confirmed before entering Dispatched state
+    if (order.status === 'Submitted' || order.status === 'Draft' || order.status === 'Under Review') {
+      console.warn(`Cannot dispatch unconfirmed order ${order.order_number}. Order must be confirmed first.`);
+      return null;
+    }
 
     // Prevent duplicate invoice generation on already completed / fully fulfilled orders
     const hasRemainingItems = (order.items || []).some(it => {
@@ -10498,35 +11904,50 @@ class FMCGDatabase {
     const challanItems: DeliveryChallanItem[] = [];
 
     order.items?.forEach(item => {
-      const prod = products.find(p => p.id === item.product_id);
-      if (!prod) return;
+      const allProducts = this.getAllProducts ? this.getAllProducts() : products;
+      const prod = products.find(p => p.id === item.product_id) || allProducts.find(p => p.id === item.product_id);
 
-      const unitsPerPack = item.units_per_trading_unit || prod.units_per_box_carton || 1;
-      const tradingUnit = item.trading_unit || prod.trading_unit || 'Carton';
-      const baseUnit = item.base_unit || prod.base_unit || 'Packet';
+      const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const tradingUnit = item.trading_unit || prod?.trading_unit || 'Carton';
+      const baseUnit = item.base_unit || prod?.base_unit || 'Piece';
+      const prodName = prod?.name || (item as any).name || 'Product Item';
+      const prodHsn = (item as any).hsn || prod?.hsn || '1905';
+      const prodGst = (item.gst_percent !== undefined && item.gst_percent !== null) ? Number(item.gst_percent) : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+      const prodPack = prod?.pack_size || (item as any).pack_size || `${unitsPerPack} ${baseUnit}/Ctn`;
 
-      const ordBase = item.ordered_qty ?? item.base_qty ?? item.quantity;
+      const ordBase = item.ordered_qty ?? item.base_qty ?? item.quantity ?? 0;
       const fulBase = item.fulfilled_qty ?? item.dispatched_qty ?? 0;
       const canBase = item.cancelled_qty ?? 0;
-      const remainingUnbilled = item.remaining_qty !== undefined ? item.remaining_qty : Math.max(0, ordBase - fulBase - canBase);
+      const remainingUnfulfilled = Math.max(0, ordBase - fulBase - canBase);
 
-      const requestedQty = item.packed_qty || item.confirmed_qty || remainingUnbilled;
-      const qtyToDispatch = Math.min(remainingUnbilled, requestedQty);
-      if (qtyToDispatch <= 0) return; // Prevent duplicate invoice for already fulfilled item/qty!
+      if (remainingUnfulfilled <= 0) return; // Item already 100% fulfilled
+
+      // Quantity to dispatch for this line
+      let qtyToDispatch = remainingUnfulfilled;
+      if (item.packed_qty && item.packed_qty > 0) {
+        qtyToDispatch = Math.min(remainingUnfulfilled, item.packed_qty);
+      } else if (item.confirmed_qty && item.confirmed_qty > 0) {
+        qtyToDispatch = Math.min(remainingUnfulfilled, item.confirmed_qty);
+      }
+      if (qtyToDispatch <= 0) {
+        qtyToDispatch = remainingUnfulfilled;
+      }
 
       totalDispatchedUnits += qtyToDispatch;
 
       // Rate Priority: Manual billing rate > Order-time rate > Default Selling Price
-      const cartonRate = item.manual_rate_applied && item.manual_billing_rate ? item.manual_billing_rate : (item.carton_rate ?? item.order_time_rate ?? item.base_price ?? prod.selling_price);
-      const looseRate = item.loose_rate ?? prod.loose_selling_price ?? (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
+      const cartonRate = item.manual_rate_applied && item.manual_billing_rate 
+        ? item.manual_billing_rate 
+        : (item.carton_rate ?? item.order_time_rate ?? item.base_price ?? prod?.selling_price ?? 0);
+      const looseRate = item.loose_rate ?? prod?.loose_selling_price ?? (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
       const cartonDisc = item.carton_discount ?? item.discount ?? 0;
       const looseDisc = item.loose_discount ?? 0;
 
       // Allocations resolution (in base units)
-      let allocations = item.batch_allocations || [];
+      let allocations = (item.batch_allocations || []).filter(a => (a.allocated_qty || 0) > 0);
       if (allocations.length === 0) {
-        const prodBatches = batches.filter(b => b.product_id === prod.id && b.quantity > 0)
-          .sort((a, b) => new Date(a.expiry_date).getTime() - new Date(b.expiry_date).getTime());
+        const prodBatches = batches.filter(b => b.product_id === item.product_id && b.quantity > 0)
+          .sort((a, b) => new Date(a.expiry_date || 0).getTime() - new Date(b.expiry_date || 0).getTime());
         
         let rem = qtyToDispatch;
         allocations = [];
@@ -10534,42 +11955,63 @@ class FMCGDatabase {
           if (rem <= 0) break;
           const take = Math.min(b.quantity, rem);
           if (take > 0) {
-            allocations.push({ batch_id: b.id, batch_number: b.batch_number, allocated_qty: take });
+            allocations.push({
+              batch_id: b.id,
+              batch_number: b.batch_number,
+              allocated_qty: take,
+              mrp: b.mrp,
+              purchase_rate: b.purchase_rate,
+              selling_price: b.selling_price,
+              loose_selling_price: b.loose_selling_price,
+              expiry_date: b.expiry_date
+            });
             rem -= take;
           }
         }
-        if (allocations.length === 0) {
-          allocations.push({ batch_id: 'bch-default', batch_number: 'BCH-2026-A1', allocated_qty: qtyToDispatch });
+        if (rem > 0) {
+          allocations.push({
+            batch_id: 'bch-default',
+            batch_number: (order.order_number ? `LOT-${order.order_number}` : 'LOT-2026'),
+            allocated_qty: rem,
+            mrp: item.selected_mrp ?? prod?.mrp ?? 0,
+            purchase_rate: item.purchase_rate ?? prod?.purchase_price ?? 0,
+            selling_price: cartonRate,
+            loose_selling_price: looseRate,
+            expiry_date: ''
+          });
         }
       }
 
       item.batch_allocations = allocations;
       
-      // Cumulative fulfilled & remaining calculation (Specification 1 & 4)
+      // Cumulative fulfilled & remaining calculation
       const prevFulfilled = item.fulfilled_qty || 0;
       const newlyBilled = qtyToDispatch;
       item.fulfilled_qty = prevFulfilled + newlyBilled;
-      item.ordered_qty = item.ordered_qty ?? item.base_qty ?? item.quantity;
-      item.remaining_qty = Math.max(0, item.ordered_qty - item.fulfilled_qty - (item.cancelled_qty || 0));
+      item.ordered_qty = ordBase;
+      item.remaining_qty = Math.max(0, ordBase - item.fulfilled_qty - canBase);
       item.status = item.remaining_qty === 0 ? 'COMPLETED' : 'PARTIALLY_FULFILLED';
       item.dispatched_qty = item.fulfilled_qty;
       item.pending_qty = item.remaining_qty;
       item.confirmed_qty = 0;
+      item.packed_qty = 0;
 
       allocations.forEach(alloc => {
+        const allocQty = alloc.allocated_qty || 0;
+        if (allocQty <= 0) return;
+
         const batch = batches.find(b => b.id === alloc.batch_id);
         if (batch) {
-          batch.quantity = Math.max(0, batch.quantity - alloc.allocated_qty);
+          batch.quantity = Math.max(0, batch.quantity - allocQty);
         }
 
-        const allocMrp = alloc.mrp ?? batch?.mrp ?? item.selected_mrp ?? prod.mrp;
-        const allocPurchaseRate = alloc.purchase_rate ?? batch?.purchase_rate ?? item.purchase_rate ?? prod.purchase_price;
+        const allocMrp = alloc.mrp ?? batch?.mrp ?? item.selected_mrp ?? prod?.mrp ?? 0;
+        const allocPurchaseRate = alloc.purchase_rate ?? batch?.purchase_rate ?? item.purchase_rate ?? prod?.purchase_price ?? 0;
         const allocCartonPrice = item.manual_rate_applied && item.manual_billing_rate 
           ? item.manual_billing_rate 
           : (alloc.selling_price ?? batch?.selling_price ?? cartonRate);
         const allocLoosePrice = alloc.loose_selling_price ?? batch?.loose_selling_price ?? looseRate;
 
-        const allocQty = alloc.allocated_qty;
         const { cartonQty: allocCartonQty, looseQty: allocLooseQty } = splitBaseQuantity(allocQty, unitsPerPack);
 
         const amounts = calculateItemAmounts(
@@ -10579,7 +12021,7 @@ class FMCGDatabase {
           allocLoosePrice,
           cartonDisc,
           looseDisc,
-          prod.gst_percent
+          prodGst
         );
 
         let cgst = 0, sgst = 0, igst = 0;
@@ -10600,9 +12042,10 @@ class FMCGDatabase {
         invoiceItems.push({
           id: `inv-item-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
           invoice_id: invoiceId,
-          product_id: prod.id,
-          hsn: prod.hsn,
-          packing: prod.pack_size,
+          product_id: item.product_id,
+          product_name: prodName,
+          hsn: prodHsn,
+          packing: prodPack,
           quantity: allocQty,
           carton_qty: allocCartonQty,
           loose_qty: allocLooseQty,
@@ -10617,15 +12060,16 @@ class FMCGDatabase {
           carton_discount: cartonDisc,
           loose_discount: looseDisc,
           taxable_value: amounts.taxableAmount,
+          gst_percent: prodGst,
           cgst,
           sgst,
           igst,
           total_amount: amounts.totalAmount,
-          batch_number: alloc.batch_number,
+          batch_number: alloc.batch_number || 'LOT-2026',
           batch_id: alloc.batch_id,
           mrp: allocMrp,
           purchase_rate: allocPurchaseRate,
-          catalogue_rate: prod.selling_price,
+          catalogue_rate: prod?.selling_price || 0,
           order_time_rate: item.order_time_rate ?? item.base_price,
           manual_billing_rate: item.manual_billing_rate,
           manual_rate_applied: item.manual_rate_applied,
@@ -10637,11 +12081,11 @@ class FMCGDatabase {
             id: `dc-item-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
             challan_id: challanId,
             order_item_id: item.id,
-            product_id: prod.id,
-            product_name: prod.name,
-            brand: prod.brand,
-            variant_name: prod.name,
-            pack_size: prod.pack_size,
+            product_id: item.product_id,
+            product_name: prodName,
+            brand: prod?.brand || '',
+            variant_name: prodName,
+            pack_size: prodPack,
             trading_unit: tradingUnit,
             base_unit: baseUnit,
             units_per_trading_unit: unitsPerPack,
@@ -10649,18 +12093,18 @@ class FMCGDatabase {
             loose_qty: allocLooseQty,
             base_qty: allocQty,
             dispatched_qty: allocQty,
-            batch_number: alloc.batch_number,
+            batch_number: alloc.batch_number || 'LOT-2026',
             batch_id: alloc.batch_id,
             mrp: allocMrp,
             purchase_rate: allocPurchaseRate,
-            expiry_date: batch?.expiry_date
+            expiry_date: alloc.expiry_date || batch?.expiry_date
           });
         }
 
         // Stock Ledger Outward entry (in base units)
         ledgers.push({
           id: `led-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-          product_id: prod.id,
+          product_id: item.product_id,
           change_qty: -allocQty,
           direction: 'OUT',
           reason: 'Sale',
@@ -10671,7 +12115,7 @@ class FMCGDatabase {
       });
 
       // Deduct inventory physical & reserved quantities in base units
-      const inv = inventory.find(i => i.product_id === prod.id);
+      const inv = inventory.find(i => i.product_id === item.product_id);
       if (inv) {
         inv.physical_qty = Math.max(0, inv.physical_qty - qtyToDispatch);
         inv.reserved_qty = Math.max(0, inv.reserved_qty - (item.confirmed_qty || qtyToDispatch));
@@ -10795,6 +12239,7 @@ class FMCGDatabase {
         unitRate?: number;
         notes?: string;
       }[];
+      markAsSealed?: boolean;
     },
     adminUser?: { id: string; name: string }
   ): { updatedOrders: Order[] } | null {
@@ -10803,17 +12248,14 @@ class FMCGDatabase {
     if (sourceOrders.length === 0) return null;
 
     sourceOrders.forEach(ord => {
-      if (ord.status !== 'Completed' && ord.status !== 'Dispatched' && ord.status !== 'Delivered') {
-        ord.status = 'PACKING_IN_PROGRESS';
-        ord.packed_at = new Date().toISOString();
-        if (adminUser?.name) {
-          ord.review_notes = ord.review_notes ? `${ord.review_notes} | Staged by ${adminUser.name}` : `Packing staged by ${adminUser.name}`;
-        }
-      }
+      let orderHasShortages = false;
 
       (ord.items || []).forEach(it => {
-        const update = lotData.items.find(u => u.originOrderId === ord.id && u.originItemId === it.id);
+        const update = lotData.items.find(u => u.originOrderId === ord.id && u.originItemId === it.id) ||
+                       lotData.items.find(u => u.productId === it.product_id);
         if (update) {
+          const ordBase = it.ordered_qty ?? it.ordered_pieces ?? it.base_qty ?? it.quantity ?? 0;
+          it.ordered_qty = ordBase;
           it.packed_qty = Math.max(0, update.packedPieces);
           it.packed_pieces = Math.max(0, update.packedPieces);
           it.packed_cartons = Math.max(0, update.packedCartons !== undefined ? update.packedCartons : update.packedPieces);
@@ -10828,13 +12270,208 @@ class FMCGDatabase {
           if (update.notes) {
             (it as any).packing_notes = update.notes;
           }
+
+          // Calculate remaining pieces and shortages whether saving progress or marking sealed
+          const rem = Math.max(0, ordBase - it.packed_qty - (it.cancelled_qty || 0));
+          it.remaining_qty = rem;
+          it.pending_qty = rem;
+          if (rem > 0) {
+            orderHasShortages = true;
+            it.status = it.packed_qty > 0 ? 'PARTIALLY_FULFILLED' : 'WAITING_STOCK';
+          } else {
+            it.status = 'COMPLETED';
+          }
         }
       });
+
+      if (lotData.markAsSealed) {
+        ord.status = orderHasShortages ? 'Partially Fulfilled' : 'Packed';
+        ord.packed_at = new Date().toISOString();
+        const sealNote = orderHasShortages 
+          ? `Packed with shortages by ${adminUser?.name || 'Packer'} - unfulfilled quantities routed to Partial Pending`
+          : `Packed & Sealed by ${adminUser?.name || 'Packer'}`;
+        ord.review_notes = ord.review_notes ? `${ord.review_notes} | ${sealNote}` : sealNote;
+      } else {
+        ord.status = 'PACKING_IN_PROGRESS';
+        ord.packed_at = new Date().toISOString();
+        if (adminUser?.name) {
+          ord.review_notes = ord.review_notes ? `${ord.review_notes} | Staged by ${adminUser.name}` : `Packing staged by ${adminUser.name}`;
+        }
+      }
+
       ord.updated_at = new Date().toISOString();
     });
 
     this.saveOrders(orders);
     return { updatedOrders: sourceOrders };
+  }
+
+  /**
+   * Continues packing pending quantities when stock arrives.
+   * - Retains original Order ID and Order Number (NEVER creates a new independent order).
+   * - Updates packed_qty and decrements pending_qty / remaining_qty.
+   * - Hard validation: newlyPackedPieces cannot exceed pending quantity.
+   * - Moves newly packed quantities automatically into "Packed Items" for the Biller.
+   */
+  continuePackingPendingItems(
+    lotData: {
+      retailerId: string;
+      items: {
+        originOrderId: string;
+        originItemId: string;
+        productId: string;
+        newlyPackedPieces: number;
+        newlyPackedCartons?: number;
+        newlyPackedLoose?: number;
+        unitRate?: number;
+        notes?: string;
+      }[];
+    },
+    packerUser?: { id: string; name: string }
+  ): { updatedOrders: Order[] } | null {
+    const orders = this.getOrders();
+    const sourceOrderIds = Array.from(new Set(lotData.items.map(i => i.originOrderId)));
+    const sourceOrders = orders.filter(o => sourceOrderIds.includes(o.id));
+    if (sourceOrders.length === 0) return null;
+
+    sourceOrders.forEach(ord => {
+      let orderHasShortages = false;
+
+      (ord.items || []).forEach(it => {
+        const update = lotData.items.find(u => u.originOrderId === ord.id && u.originItemId === it.id);
+        if (update && update.newlyPackedPieces > 0) {
+          const ordBase = it.ordered_qty ?? it.ordered_pieces ?? it.base_qty ?? it.quantity ?? 0;
+          const prevPacked = it.packed_qty ?? it.packed_pieces ?? 0;
+          const currentPending = it.remaining_qty !== undefined ? it.remaining_qty : Math.max(0, ordBase - prevPacked - (it.cancelled_qty || 0));
+
+          // Hard validation: cannot pack more than remaining pending quantity
+          const actualPackNow = Math.min(currentPending, Math.max(0, update.newlyPackedPieces));
+          const newPackedTotal = prevPacked + actualPackNow;
+          const newPending = Math.max(0, ordBase - newPackedTotal - (it.cancelled_qty || 0));
+
+          it.packed_qty = newPackedTotal;
+          it.packed_pieces = newPackedTotal;
+          if (update.newlyPackedCartons !== undefined) {
+            it.packed_cartons = (it.packed_cartons || 0) + update.newlyPackedCartons;
+          }
+          if (update.newlyPackedLoose !== undefined) {
+            it.loose_qty = (it.loose_qty || 0) + update.newlyPackedLoose;
+          }
+
+          it.remaining_qty = newPending;
+          it.pending_qty = newPending;
+
+          if (newPending > 0) {
+            orderHasShortages = true;
+            it.status = 'PARTIALLY_FULFILLED';
+          } else {
+            it.status = 'COMPLETED';
+          }
+
+          this.addItemActivityLog({
+            product_id: it.product_id,
+            action: 'Pending Quantity Fulfilled',
+            details: `Fulfilled ${actualPackNow} pending units for Order ${ord.order_number}. Total Packed: ${newPackedTotal}, Remaining Pending: ${newPending}. Packed by ${packerUser?.name || 'Packer'}.`,
+            reference_id: ord.id,
+            user_id: packerUser?.id || this.currentUserId,
+            user_name: packerUser?.name || 'Packer'
+          });
+        } else {
+          const ordBase = it.ordered_qty ?? it.ordered_pieces ?? it.base_qty ?? it.quantity ?? 0;
+          const packed = it.packed_qty ?? 0;
+          const rem = it.remaining_qty !== undefined ? it.remaining_qty : Math.max(0, ordBase - packed - (it.cancelled_qty || 0));
+          if (rem > 0) {
+            orderHasShortages = true;
+          }
+        }
+      });
+
+      ord.status = orderHasShortages ? 'Partially Fulfilled' : 'Packed';
+      ord.packed_at = new Date().toISOString();
+      ord.updated_at = new Date().toISOString();
+    });
+
+    this.saveOrders(orders);
+    return { updatedOrders: sourceOrders };
+  }
+
+  /**
+   * Generates GST Invoice for successfully packed items (Biller Workflow).
+   * - HARD VALIDATION: Invoice quantity CAN NEVER exceed packed quantity.
+   * - Selling rate and Flat ₹ Discount per box/carton are editable by Biller.
+   * - Computes CGST, SGST, IGST.
+   * - Retains original Order ID and Order Number references.
+   */
+  generateInvoiceForPackedLot(
+    lotData: {
+      retailerId: string;
+      sourceOrderIds: string[];
+      items: {
+        originOrderId: string;
+        originItemId: string;
+        productId: string;
+        productName?: string;
+        sku?: string;
+        mrp?: number;
+        unitsPerPack?: number;
+        tradingUnit?: string;
+        baseUnit?: string;
+        packedCartons: number;
+        packedLoose?: number;
+        packedPieces?: number;
+        unitRate: number; // Editable rate by biller
+        flatDiscount?: number; // Flat ₹ per box/carton discount
+        purchaseCost?: number;
+        hsn?: string;
+      }[];
+    },
+    billingInfo: {
+      date?: string;
+      notes?: string;
+      paymentMode?: string;
+      amountReceived?: number;
+      paymentReference?: string;
+      bankName?: string;
+      generateChallan?: boolean;
+    } = {},
+    billerUser?: { id: string; name: string }
+  ): { invoice: Invoice; challan?: DeliveryChallan; updatedOrders: Order[] } | null {
+    return this.dispatchRetailerPackingLot(
+      {
+        retailerId: lotData.retailerId,
+        sourceOrderIds: lotData.sourceOrderIds,
+        items: lotData.items.map(it => ({
+          originOrderId: it.originOrderId,
+          originItemId: it.originItemId,
+          productId: it.productId,
+          productName: it.productName || 'Product',
+          sku: it.sku || 'SKU',
+          mrp: it.mrp || 0,
+          unitsPerPack: it.unitsPerPack || 1,
+          tradingUnit: it.tradingUnit || 'Carton',
+          baseUnit: it.baseUnit || 'Piece',
+          orderedCartons: it.packedCartons,
+          orderedLoose: it.packedLoose || 0,
+          packedCartons: it.packedCartons,
+          packedLoose: it.packedLoose || 0,
+          unitRate: it.unitRate,
+          purchaseCost: it.purchaseCost || 0,
+          hsn: it.hsn || '1902',
+          flatDiscount: it.flatDiscount || 0
+        }))
+      },
+      {
+        transportMode: 'Direct Billing / Van Dispatch',
+        notes: billingInfo.notes || 'Biller Generated GST Invoice',
+        dispatchDate: billingInfo.date || new Date().toISOString(),
+        generateChallan: billingInfo.generateChallan !== false,
+        paymentMode: billingInfo.paymentMode,
+        amountReceived: billingInfo.amountReceived,
+        paymentReference: billingInfo.paymentReference,
+        bankName: billingInfo.bankName
+      },
+      billerUser
+    );
   }
 
   /**
@@ -10845,8 +12482,8 @@ class FMCGDatabase {
    *    - Shortages are automatically preserved as unfulfilled remaining quantities on source order items (and in backorder queue).
    *    - Parent source orders with 0 remaining quantities transition to 'Completed'.
    *    - Parent source orders with shortages transition to 'Partially Fulfilled'.
-   *    - Parent source orders with shortages transition to 'Partially Fulfilled'.
    * 4. Deducts stock atomically from batches/inventory and records ledger entries.
+   * 5. Atomically handles Payment Ledger & Cash Flow integration based on selected payment mode.
    */
   dispatchRetailerPackingLot(
     lotData: {
@@ -10878,21 +12515,26 @@ class FMCGDatabase {
       notes?: string;
       dispatchDate?: string;
       generateChallan?: boolean;
+      paymentMode?: string;
+      amountReceived?: number;
+      paymentReference?: string;
+      bankName?: string;
     } = {},
     adminUser?: { id: string; name: string }
   ): { invoice: Invoice; challan?: DeliveryChallan; updatedOrders: Order[] } | null {
-    const orders = this.getOrders();
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const orders = this.getOrders(activeBiz);
     const sourceOrders = orders.filter(o => lotData.sourceOrderIds.includes(o.id));
     if (sourceOrders.length === 0 && lotData.sourceOrderIds.length > 0) return null;
 
-    const retailers = this.getRetailers();
+    const retailers = this.getRetailers(activeBiz);
     const ret = retailers.find(r => r.id === lotData.retailerId) || retailers[0];
     const products = this.getProducts();
     const inventory = this.getInventory();
     const batches = this.getBatches();
     const ledgers = this.getLedger();
-    const invoices = this.getInvoices();
-    const challans = this.getDeliveryChallans();
+    const invoices = this.getInvoices(activeBiz);
+    const challans = this.getDeliveryChallans(activeBiz);
 
     const invoiceId = `inv-${Date.now()}`;
     const challanId = `dc-${Date.now()}`;
@@ -10910,7 +12552,7 @@ class FMCGDatabase {
     const challanItems: DeliveryChallanItem[] = [];
 
     // Filter items that have at least 1 carton or loose unit packed
-    const activePackedItems = lotData.items.filter(it => (it.packedCartons > 0 || (it.packedLoose || 0) > 0));
+    const activePackedItems = lotData.items.filter(it => ((it.packedCartons || 0) > 0 || (it.packedLoose || 0) > 0 || ((it as any).packedPieces || 0) > 0));
     if (activePackedItems.length === 0) return null;
 
     activePackedItems.forEach(lotItem => {
@@ -10928,9 +12570,14 @@ class FMCGDatabase {
 
       totalDispatchedUnits += packedBaseUnits;
 
-      // Mathematical Financials (Formula: Taxable = effectiveCartonQty * unitRate)
-      const lineTaxable = Math.round(effectiveCartonQty * unitRate * 100) / 100;
-      const gstPercent = prod?.gst_percent || 18;
+      // Flat ₹ Discount Calculation (Formula: Net Rate = unitRate - flatDiscount)
+      const flatDiscount = Math.max(0, (lotItem as any).flatDiscount || (lotItem as any).discount || 0);
+      const effectiveUnitRate = Math.max(0, unitRate - flatDiscount);
+
+      const lineTaxable = Math.round(effectiveCartonQty * effectiveUnitRate * 100) / 100;
+      const gstPercent = (prod?.gst_percent !== undefined && prod?.gst_percent !== null) 
+        ? Number(prod.gst_percent) 
+        : (((lotItem as any).gst_percent !== undefined && (lotItem as any).gst_percent !== null) ? Number((lotItem as any).gst_percent) : 0);
       const gstAmount = Math.round(lineTaxable * (gstPercent / 100) * 100) / 100;
 
       let cgst = 0, sgst = 0, igst = 0;
@@ -10971,66 +12618,89 @@ class FMCGDatabase {
         }
       }
 
-      // Add to SINGLE invoice items with dual carton + loose breakdown
-      invoiceItems.push({
-        id: `inv-item-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-        invoice_id: invoiceId,
-        product_id: lotItem.productId,
-        product_name: lotItem.productName,
-        variant_name: exactDescription,
-        description: exactDescription,
-        hsn: lotItem.hsn || prod?.hsn || '1902',
-        packing: packConfig,
-        quantity: packedBaseUnits,
-        carton_qty: packedCartons,
-        loose_qty: packedLoose,
-        base_qty: packedBaseUnits,
-        trading_unit: tradingUnit,
-        base_unit: baseUnit,
-        units_per_trading_unit: unitsPerPack,
-        units_per_box_carton: unitsPerPack,
-        rate: unitRate,
-        carton_rate: unitRate,
-        loose_rate: unitLooseRate,
-        discount: 0,
-        carton_discount: 0,
-        loose_discount: 0,
-        taxable_value: lineTaxable,
-        cgst,
-        sgst,
-        igst,
-        total_amount: lineTotal,
-        batch_number: allocatedBatchNumber,
-        batch_id: allocatedBatchId,
-        mrp,
-        purchase_rate: lotItem.purchaseCost,
-        catalogue_rate: prod?.selling_price || unitRate,
-        manual_billing_rate: unitRate,
-        manual_rate_applied: true
-      });
-
-      if (dispatchInfo.generateChallan !== false) {
-        challanItems.push({
-          id: `dc-item-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-          challan_id: challanId,
-          order_item_id: lotItem.originItemId,
+      // Add to SINGLE invoice items with dual carton + loose breakdown (Aggregate duplicate SKUs across orders into a single line)
+      const existingInvItem = invoiceItems.find(i => i.product_id === lotItem.productId && Math.abs((i.rate || 0) - unitRate) < 0.01);
+      if (existingInvItem) {
+        existingInvItem.quantity += packedBaseUnits;
+        existingInvItem.base_qty = (existingInvItem.base_qty || 0) + packedBaseUnits;
+        existingInvItem.carton_qty = (existingInvItem.carton_qty || 0) + packedCartons;
+        existingInvItem.loose_qty = (existingInvItem.loose_qty || 0) + packedLoose;
+        existingInvItem.taxable_value = Math.round(((existingInvItem.taxable_value || 0) + lineTaxable) * 100) / 100;
+        existingInvItem.gst_percent = gstPercent;
+        existingInvItem.cgst = Math.round(((existingInvItem.cgst || 0) + cgst) * 100) / 100;
+        existingInvItem.sgst = Math.round(((existingInvItem.sgst || 0) + sgst) * 100) / 100;
+        existingInvItem.igst = Math.round(((existingInvItem.igst || 0) + igst) * 100) / 100;
+        existingInvItem.total_amount = Math.round(((existingInvItem.total_amount || 0) + lineTotal) * 100) / 100;
+      } else {
+        invoiceItems.push({
+          id: `inv-item-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          invoice_id: invoiceId,
           product_id: lotItem.productId,
           product_name: lotItem.productName,
-          brand: prod?.brand,
           variant_name: exactDescription,
-          pack_size: packConfig,
-          trading_unit: tradingUnit,
-          base_unit: baseUnit,
-          units_per_trading_unit: unitsPerPack,
+          description: exactDescription,
+          hsn: lotItem.hsn || prod?.hsn || '1902',
+          packing: packConfig,
+          quantity: packedBaseUnits,
           carton_qty: packedCartons,
           loose_qty: packedLoose,
           base_qty: packedBaseUnits,
-          dispatched_qty: packedBaseUnits,
+          trading_unit: tradingUnit,
+          base_unit: baseUnit,
+          units_per_trading_unit: unitsPerPack,
+          units_per_box_carton: unitsPerPack,
+          rate: unitRate,
+          carton_rate: unitRate,
+          loose_rate: unitLooseRate,
+          discount: 0,
+          carton_discount: 0,
+          loose_discount: 0,
+          taxable_value: lineTaxable,
+          gst_percent: gstPercent,
+          cgst,
+          sgst,
+          igst,
+          total_amount: lineTotal,
           batch_number: allocatedBatchNumber,
           batch_id: allocatedBatchId,
           mrp,
-          purchase_rate: lotItem.purchaseCost
+          purchase_rate: lotItem.purchaseCost,
+          catalogue_rate: prod?.selling_price || unitRate,
+          manual_billing_rate: unitRate,
+          manual_rate_applied: true
         });
+      }
+
+      if (dispatchInfo.generateChallan !== false) {
+        const existingDcItem = challanItems.find(c => c.product_id === lotItem.productId);
+        if (existingDcItem) {
+          existingDcItem.carton_qty = (existingDcItem.carton_qty || 0) + packedCartons;
+          existingDcItem.loose_qty = (existingDcItem.loose_qty || 0) + packedLoose;
+          existingDcItem.base_qty = (existingDcItem.base_qty || 0) + packedBaseUnits;
+          existingDcItem.dispatched_qty = (existingDcItem.dispatched_qty || 0) + packedBaseUnits;
+        } else {
+          challanItems.push({
+            id: `dc-item-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            challan_id: challanId,
+            order_item_id: lotItem.originItemId,
+            product_id: lotItem.productId,
+            product_name: lotItem.productName,
+            brand: prod?.brand,
+            variant_name: exactDescription,
+            pack_size: packConfig,
+            trading_unit: tradingUnit,
+            base_unit: baseUnit,
+            units_per_trading_unit: unitsPerPack,
+            carton_qty: packedCartons,
+            loose_qty: packedLoose,
+            base_qty: packedBaseUnits,
+            dispatched_qty: packedBaseUnits,
+            batch_number: allocatedBatchNumber,
+            batch_id: allocatedBatchId,
+            mrp,
+            purchase_rate: lotItem.purchaseCost
+          });
+        }
       }
 
       // Record Stock Ledger Entry
@@ -11055,9 +12725,8 @@ class FMCGDatabase {
       // Update the originating order item's fulfilled and remaining quantities
       const srcOrder = orders.find(o => o.id === lotItem.originOrderId);
       if (srcOrder && srcOrder.items) {
-        const srcItem = srcOrder.items.find(i => i.id === lotItem.originItemId);
+        const srcItem = srcOrder.items.find(i => i.id === lotItem.originItemId) || srcOrder.items.find(i => i.product_id === lotItem.productId);
         if (srcItem) {
-          // Initialize srcItem.ordered_qty if missing, preserving original ordered base units
           if (srcItem.ordered_qty === undefined) {
             const ordCartons = lotItem.orderedCartons ?? 0;
             const ordLoose = lotItem.orderedLoose ?? 0;
@@ -11088,7 +12757,7 @@ class FMCGDatabase {
     lotData.items.filter(it => (it.packedCartons <= 0 && (it.packedLoose || 0) <= 0)).forEach(lotItem => {
       const srcOrder = orders.find(o => o.id === lotItem.originOrderId);
       if (srcOrder && srcOrder.items) {
-        const srcItem = srcOrder.items.find(i => i.id === lotItem.originItemId);
+        const srcItem = srcOrder.items.find(i => i.id === lotItem.originItemId) || srcOrder.items.find(i => i.product_id === lotItem.productId);
         if (srcItem) {
           const prod = products.find(p => p.id === lotItem.productId);
           const unitsPerPack = lotItem.unitsPerPack || prod?.units_per_box_carton || 1;
@@ -11131,6 +12800,32 @@ class FMCGDatabase {
     const grandTotal = Math.round(taxableTotal + cgstTotal + sgstTotal + igstTotal);
     const roundOff = grandTotal - (taxableTotal + cgstTotal + sgstTotal + igstTotal);
 
+    // Dynamic Payment Mode & Outstanding Calculation
+    const paymentMode = dispatchInfo.paymentMode || 'Credit';
+    const isCredit = paymentMode === 'Credit';
+
+    let amountReceived = 0;
+    if (!isCredit) {
+      if (dispatchInfo.amountReceived !== undefined) {
+        amountReceived = Math.max(0, Math.min(grandTotal, Number(dispatchInfo.amountReceived)));
+      } else {
+        amountReceived = grandTotal;
+      }
+    }
+
+    const outstanding = Math.max(0, grandTotal - amountReceived);
+
+    let paymentStatus: 'Paid' | 'Partial' | 'Unpaid' = 'Unpaid';
+    if (isCredit) {
+      paymentStatus = 'Unpaid';
+    } else if (amountReceived >= grandTotal) {
+      paymentStatus = 'Paid';
+    } else if (amountReceived > 0) {
+      paymentStatus = 'Partial';
+    } else {
+      paymentStatus = 'Unpaid';
+    }
+
     const newInvoice: Invoice = {
       id: invoiceId,
       invoice_number: invoiceNumber,
@@ -11149,9 +12844,14 @@ class FMCGDatabase {
       igst: igstTotal,
       round_off: roundOff,
       grand_total: grandTotal,
-      paid_amount: 0,
-      outstanding_amount: grandTotal,
-      payment_status: 'Unpaid',
+      paid_amount: amountReceived,
+      outstanding_amount: outstanding,
+      payment_status: paymentStatus,
+      payment_mode: paymentMode,
+      payment_reference: dispatchInfo.paymentReference || '',
+      notes: dispatchInfo.notes || (isCredit ? 'Credit invoice' : `Payment received via ${paymentMode}`),
+      business_id: activeBiz,
+      company_id: activeBiz,
       items: invoiceItems
     };
 
@@ -11172,30 +12872,96 @@ class FMCGDatabase {
         notes: dispatchInfo.notes || 'Dispatched from Retailer Packing Lot',
         total_quantity: totalDispatchedUnits,
         items: challanItems,
+        business_id: activeBiz,
         created_at: new Date().toISOString()
       };
       challans.push(newChallan);
-      this.saveDeliveryChallans(challans);
+      this.saveDeliveryChallans(challans, activeBiz);
     }
 
-    // Update retailer ledger
-    ret.outstanding = (ret.outstanding || 0) + grandTotal;
-    ret.outstanding_balance = (ret.outstanding_balance || 0) + grandTotal;
-    ret.current_balance = (ret.current_balance || 0) + grandTotal;
+    // Update retailer ledger: net increase is outstanding balance
+    ret.outstanding = (ret.outstanding || 0) + outstanding;
+    ret.outstanding_balance = (ret.outstanding_balance || 0) + outstanding;
+    ret.current_balance = (ret.current_balance || 0) + outstanding;
+
+    // Record Payment and Cash Flow if actual money was received
+    if (amountReceived > 0) {
+      const payments = this.getPayments(activeBiz);
+      const allocations = this.getPaymentAllocations(activeBiz);
+
+      const payId = `pay-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+      const payNum = `PAY-${new Date().getFullYear()}-${String(payments.length + 1).padStart(5, '0')}`;
+
+      const newPayment: Payment = {
+        id: payId,
+        retailer_id: ret.id,
+        payment_number: payNum,
+        amount: amountReceived,
+        method: (paymentMode as Payment['method']) || 'UPI',
+        reference_number: dispatchInfo.paymentReference || payNum,
+        notes: `GST Invoice ${invoiceNumber} billing payment${dispatchInfo.bankName ? ` (${dispatchInfo.bankName})` : ''}${dispatchInfo.paymentReference ? ` Ref: ${dispatchInfo.paymentReference}` : ''}`,
+        date: dispatchInfo.dispatchDate || new Date().toISOString(),
+        business_id: activeBiz
+      };
+
+      payments.push(newPayment);
+      this.savePayments(payments, activeBiz);
+
+      allocations.push({
+        id: `alloc-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        payment_id: payId,
+        invoice_id: invoiceId,
+        amount_allocated: amountReceived,
+        business_id: activeBiz
+      });
+      this.savePaymentAllocations(allocations, activeBiz);
+
+      // Create Cash Flow entry for real money in
+      try {
+        const cfPaymentMode: CashFlowPaymentMode =
+          paymentMode === 'Bank Transfer' ? 'Bank Transfer' :
+          paymentMode === 'UPI' ? 'UPI' :
+          paymentMode === 'Cash' ? 'Cash' :
+          paymentMode === 'Cheque' ? 'Cheque' : 'Other';
+
+        this.createCashFlowTransaction({
+          company_id: activeBiz,
+          date: (dispatchInfo.dispatchDate || new Date().toISOString()).split('T')[0],
+          time: new Date().toTimeString().split(' ')[0],
+          type: 'CASH_IN',
+          amount: amountReceived,
+          payment_mode: cfPaymentMode,
+          category: 'Invoice Payment',
+          party_type: 'retailer',
+          party_id: ret.id,
+          party_name: ret.shop_name,
+          reference_number: dispatchInfo.paymentReference || payNum,
+          source_type: 'Invoice Payment',
+          source_id: payId,
+          linked_invoice_id: invoiceId,
+          linked_invoice_number: invoiceNumber,
+          linked_retailer_id: ret.id,
+          remarks: `Payment received against Invoice ${invoiceNumber} via ${paymentMode}${dispatchInfo.bankName ? ` (${dispatchInfo.bankName})` : ''}${dispatchInfo.paymentReference ? ` Ref: ${dispatchInfo.paymentReference}` : ''}`,
+          created_by: adminUser?.name || 'Biller'
+        }, adminUser);
+      } catch (e) {
+        console.warn('Auto cash flow entry creation skipped:', e);
+      }
+    }
 
     invoices.push(newInvoice);
-    this.saveInvoices(invoices);
-    this.saveOrders(orders);
-    this.saveInventory(inventory);
-    this.saveBatches(batches);
-    this.saveLedger(ledgers);
-    this.saveRetailers(retailers);
+    this.saveInvoices(invoices, activeBiz);
+    this.saveOrders(orders, activeBiz);
+    this.saveInventory(inventory, activeBiz);
+    this.saveBatches(batches, activeBiz);
+    this.saveLedger(ledgers, activeBiz);
+    this.saveRetailers(retailers, activeBiz);
 
     // Audit Log
     this.addItemActivityLog({
       product_id: activePackedItems[0]?.productId || '',
-      action: '1-Bill Retailer Lot Dispatched',
-      details: `Generated single Tax Invoice ${invoiceNumber} for ${ret.shop_name}. Merged orders: ${sourceOrders.map(o => o.order_number).join(', ')}. Total Value: ₹${grandTotal}`,
+      action: '1-Bill Retailer Lot Dispatched & Invoiced',
+      details: `Generated single Tax Invoice ${invoiceNumber} for ${ret.shop_name} (Total: ₹${grandTotal}). Payment: ${paymentMode}, Paid: ₹${amountReceived}, Outstanding: ₹${outstanding}, Status: ${paymentStatus}. Merged orders: ${sourceOrders.map(o => o.order_number).join(', ')}.`,
       reference_id: newInvoice.id,
       user_id: adminUser?.id || this.currentUserId,
       user_name: adminUser?.name || 'Floor Admin'

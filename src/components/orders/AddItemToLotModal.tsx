@@ -75,7 +75,7 @@ export default function AddItemToLotModal({
   const availBase = selectedInventory?.available_qty || 0;
   const availCartons = Math.floor(availBase / unitsPerPack);
 
-  const gstPercent = selectedProduct?.gst_percent || 18;
+  const gstPercent = (selectedProduct?.gst_percent !== undefined && selectedProduct?.gst_percent !== null) ? Number(selectedProduct.gst_percent) : 0;
   const lineTaxable = unitRate * (cartonQty + (looseQty / unitsPerPack));
   const lineGst = lineTaxable * (gstPercent / 100);
   const lineTotal = lineTaxable + lineGst;

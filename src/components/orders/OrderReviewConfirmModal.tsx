@@ -109,7 +109,9 @@ export default function OrderReviewConfirmModal({
       const totalOrdered = item.base_qty ?? item.quantity;
       const confirmedVal = itemConfirms[item.id] !== undefined ? itemConfirms[item.id] : totalOrdered;
       const rate = itemRates[item.id] !== undefined ? itemRates[item.id] : (item.final_applied_rate || item.base_price);
-      const gstPercent = item.gst_percent || prod?.gst_percent || 18;
+      const gstPercent = (item.gst_percent !== undefined && item.gst_percent !== null)
+        ? Number(item.gst_percent)
+        : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
 
       totalOrderedBase += totalOrdered;
       totalConfirmedBase += confirmedVal;
@@ -329,7 +331,9 @@ export default function OrderReviewConfirmModal({
                   const marginPct = billedRate > 0 && purchaseCost > 0
                     ? Math.round(((billedRate - purchaseCost) / billedRate) * 10000) / 100
                     : null;
-                  const gstPercent = item.gst_percent || prod?.gst_percent || 18;
+                  const gstPercent = (item.gst_percent !== undefined && item.gst_percent !== null)
+                    ? Number(item.gst_percent)
+                    : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
                   const lineTaxable = (billedRate * (confirmedVal / unitsPerPack));
                   const lineTotal = lineTaxable * (1 + gstPercent / 100);
                   const mrp = item.selected_mrp || prod?.mrp || 0;
@@ -605,7 +609,7 @@ export default function OrderReviewConfirmModal({
                 <span className="font-bold text-slate-900">{formatINR(calculationSummary.taxableSubtotal)}</span>
               </div>
               <div className="flex justify-between text-slate-600">
-                <span>CGST (9%) + SGST (9%):</span>
+                <span>Tax (CGST + SGST):</span>
                 <span className="font-bold text-slate-900">{formatINR(calculationSummary.totalGst)}</span>
               </div>
               {calculationSummary.roundOff !== 0 && (

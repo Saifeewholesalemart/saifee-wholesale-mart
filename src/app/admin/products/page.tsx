@@ -832,7 +832,7 @@ function ProductsContent() {
         supplier_id: purSupplierId,
         invoice_number: purInvoiceNumber.trim() || `PUR-${Date.now()}`,
         invoice_date: purInvoiceDate,
-        total_amount: Math.round(purQuantity * purRate * (1 + (showPurchaseModal.gst_percent || 18) / 100)),
+        total_amount: Math.round(purQuantity * purRate * (1 + ((showPurchaseModal.gst_percent !== undefined && showPurchaseModal.gst_percent !== null) ? Number(showPurchaseModal.gst_percent) : 0) / 100)),
         items: [
           {
             product_id: showPurchaseModal.id,

@@ -217,7 +217,10 @@ function AdminPaymentsContent() {
         const cRate = item.rate;
         const lRate = item.loose_rate ?? (cRate / unitsPerPack);
         const lineVal = (cQty * cRate) + (lQty * lRate);
-        const gst = lineVal * ((prod?.gst_percent || 18) / 100);
+        const prodGst = (item.gst_percent !== undefined && (item as any).gst_percent !== null)
+          ? Number((item as any).gst_percent)
+          : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+        const gst = lineVal * (prodGst / 100);
         return sum + lineVal + gst;
       }, 0) || 0);
 
@@ -1527,7 +1530,7 @@ function AdminPaymentsContent() {
                             ₹{item.taxable_value.toFixed(2)}
                           </td>
                           <td className="p-3 text-center font-mono text-slate-600 text-xs">
-                            {prod?.gst_percent || 18}%
+                            {(item.gst_percent !== undefined && (item as any).gst_percent !== null) ? Number((item as any).gst_percent) : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0)}%
                           </td>
                           <td className="p-3 text-right font-mono font-black text-indigo-700">
                             ₹{item.total_amount.toFixed(2)}

@@ -3,20 +3,28 @@
 import React, { useState, useEffect } from 'react';
 import { useDb, SalespersonCartItem } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
-import { Search, ShoppingCart, Plus, Minus, User, History, ArrowRight, RotateCcw, Package, Check, X, ShieldAlert, CheckCircle, Percent, Store, Sparkles } from 'lucide-react';
+import { 
+  Search, ShoppingCart, Plus, Minus, User, History, ArrowRight, RotateCcw, 
+  Package, Check, X, ShieldAlert, CheckCircle, Percent, Store, Sparkles,
+  Eye, FileText, Lock, ShieldCheck, Layers, Building, Tag, ChevronRight, ChevronLeft,
+  Info, ExternalLink, Calendar, MapPin, AlertCircle, ArrowLeft, Clock
+} from 'lucide-react';
 import { Product, Retailer, Order, formatQuantityDisplay, splitBaseQuantity, calculateItemAmounts, PendingOrderItemWarning, getProductTradeMode } from '@/lib/db';
 import LastBillingRatesModal from '@/components/LastBillingRatesModal';
 import SmartSearchBar from '@/components/SmartSearchBar';
 import AddRetailerModal from '@/components/AddRetailerModal';
 import PendingItemWarningCard, { CartPendingSummaryBanner } from '@/components/orders/PendingItemWarningCard';
+import PendingDeliveryWarningModal from '@/components/orders/PendingDeliveryWarningModal';
+import OrderReviewModal from '@/components/orders/OrderReviewModal';
 
 export default function SalesDashboard() {
   const { 
     currentUser, setCurrentUser, products, batches, retailers, orders, placeOrder, inventory, profiles,
+    companies, categories, getCategoriesForProduct,
     salespersonCart: cart, setSalespersonCart: setCart,
-    categories, getCategoriesForProduct,
     getAssignedCategoriesForSalesperson, getAssignedCategoriesForRetailer,
     isProductVisibleToSalesperson, isProductVisibleToRetailer,
+    getScopedOrdersForSalesperson, getScopedOrderByIdForSalesperson,
     getPendingItemsForRetailer, logPendingOrderProceedActivity
   } = useDb();
   
@@ -32,6 +40,12 @@ export default function SalesDashboard() {
     }
   }, [currentUser, profiles, setCurrentUser]);
 
+  // Mounted check to prevent SSR hydration mismatches
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // View States
   const [activeTab, setActiveTab] = useState<'order' | 'history'>('order');
   const [orderStep, setOrderStep] = useState<'retailer' | 'catalog' | 'cart' | 'confirm' | 'success'>('retailer');
@@ -42,6 +56,15 @@ export default function SalesDashboard() {
   const [productSearch, setProductSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [selectedProductMrp, setSelectedProductMrp] = useState<{ [productId: string]: number }>({});
+  const [showPendingWarningModal, setShowPendingWarningModal] = useState(false);
+  const [pendingWarningsForOrder, setPendingWarningsForOrder] = useState<PendingOrderItemWarning[]>([]);
+
+  // Scoped Order History & Modals State
+  const [selectedOrderForModal, setSelectedOrderForModal] = useState<Order | null>(null);
+  const [orderForReview, setOrderForReview] = useState<Order | null>(null);
+  const [viewRetailerOrdersId, setViewRetailerOrdersId] = useState<string | null>(null);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyFilterRetailer, setHistoryFilterRetailer] = useState('ALL');
 
   // Success Message
   const [latestOrderNum, setLatestOrderNum] = useState('');
@@ -64,8 +87,16 @@ export default function SalesDashboard() {
   );
 
   // 3. Filter products & categories based on salesperson category assignment
-  const isCompanySalesperson = currentUser?.role === 'sales_co';
+  const isCompanySalesperson = currentUser?.role === 'sales_co' || currentUser?.sales_role_type === 'COMPANY' || currentUser?.trade_scope === 'RESTRICTED';
   const companyIdFilter = currentUser?.company_id;
+
+  const assignedCompanyIds = currentUser?.assigned_company_ids?.length 
+    ? currentUser.assigned_company_ids 
+    : (currentUser?.company_id ? [currentUser.company_id] : []);
+
+  const assignedCompanies = currentUser
+    ? assignedCompanyIds.map(cid => companies.find(c => c.id === cid)?.name).filter(Boolean)
+    : [];
 
   const assignedCategories = currentUser 
     ? getAssignedCategoriesForSalesperson(currentUser.id)
@@ -86,7 +117,8 @@ export default function SalesDashboard() {
       return false;
     }
 
-    const matchCompany = !isCompanySalesperson || p.company_id === companyIdFilter;
+    const matchCompany = !isCompanySalesperson || 
+      (assignedCompanyIds.length > 0 ? (p.company_id && assignedCompanyIds.includes(p.company_id)) : (!companyIdFilter || p.company_id === companyIdFilter));
     if (!matchCompany) return false;
 
     let matchCat = selectedCategory === 'All';
@@ -265,7 +297,19 @@ export default function SalesDashboard() {
     ? getPendingItemsForRetailer(selectedRetailer.id, currentCartToCheck)
     : [];
 
-  const handlePlaceOrder = () => {
+  const handlePlaceOrderClick = () => {
+    if (!selectedRetailer) return;
+
+    const warnings = getPendingItemsForRetailer(selectedRetailer.id, currentCartToCheck);
+    if (warnings.length > 0) {
+      setPendingWarningsForOrder(warnings);
+      setShowPendingWarningModal(true);
+    } else {
+      executePlaceOrder();
+    }
+  };
+
+  const executePlaceOrder = () => {
     if (!selectedRetailer) return;
 
     const items = cartItemKeys.map(cartKey => {
@@ -330,20 +374,26 @@ export default function SalesDashboard() {
     });
 
     // Record activity log if placed with pending item warnings
-    if (cartPendingWarnings.length > 0) {
-      logPendingOrderProceedActivity(selectedRetailer.id, cartPendingWarnings, ord.order_number);
+    const relevantWarnings = pendingWarningsForOrder.length > 0 ? pendingWarningsForOrder : cartPendingWarnings;
+    if (relevantWarnings.length > 0) {
+      logPendingOrderProceedActivity(selectedRetailer.id, relevantWarnings, ord.order_number);
     }
 
     setLatestOrderNum(ord.order_number);
     setCart({});
+    setShowPendingWarningModal(false);
     setOrderStep('success');
   };
 
   const handleRepeatOrder = (pastOrder: Order) => {
     const repeatedCart: typeof cart = {};
-    pastOrder.items?.forEach(item => {
+    const visibleItems = isCompanySalesperson && currentUser
+      ? (pastOrder.items || []).filter(item => isProductVisibleToSalesperson(item.product_id, currentUser.id))
+      : (pastOrder.items || []);
+
+    visibleItems.forEach(item => {
       const prod = products.find(p => p.id === item.product_id);
-      if (prod && (!isCompanySalesperson || prod.company_id === companyIdFilter)) {
+      if (prod) {
         const k = item.selected_mrp ? `${item.product_id}__mrp_${item.selected_mrp}` : item.product_id;
         const unitsPerPack = item.units_per_box_carton || prod.units_per_box_carton || 1;
 
@@ -365,15 +415,50 @@ export default function SalesDashboard() {
     });
     setCart(repeatedCart);
     setSelectedRetailerId(pastOrder.retailer_id);
+    setSelectedOrderForModal(null);
+    setViewRetailerOrdersId(null);
     setOrderStep('cart');
     setActiveTab('order');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    setSalesToast({
+      message: `Loaded ${Object.keys(repeatedCart).length} scoped item(s) from order ${pastOrder.order_number} into cart!`,
+      type: 'success'
+    });
   };
 
-  // Filter orders placed by this salesperson
-  const salesHistory = orders
-    .filter(o => o.created_by === currentUser?.id)
+  // Scoped orders query directly from DB engine enforcing Brand / Category scope
+  const scopedOrders = currentUser 
+    ? getScopedOrdersForSalesperson(currentUser.id) 
+    : orders;
+
+  const getRetailerScopedOrders = (retId: string) => {
+    if (!currentUser) return orders.filter(o => o.retailer_id === retId);
+    return getScopedOrdersForSalesperson(currentUser.id, { retailerId: retId });
+  };
+
+  const salesHistory = scopedOrders
+    .filter(o => {
+      const matchSearch = !historySearch.trim() || 
+        o.order_number.toLowerCase().includes(historySearch.toLowerCase()) ||
+        retailers.find(r => r.id === o.retailer_id)?.shop_name?.toLowerCase().includes(historySearch.toLowerCase());
+      const matchRet = historyFilterRetailer === 'ALL' || o.retailer_id === historyFilterRetailer;
+      return matchSearch && matchRet;
+    })
     .sort((a, b) => new Date(b.order_date).getTime() - new Date(a.order_date).getTime());
+
+  if (!mounted) {
+    return (
+      <div className="flex-1 flex flex-col min-h-screen bg-slate-50 items-center justify-center p-6 text-center">
+        <div className="w-12 h-12 rounded-2xl bg-cyan-600 flex items-center justify-center text-white mb-3 shadow-md animate-pulse">
+          <Package className="w-6 h-6" />
+        </div>
+        <h2 className="text-sm font-black text-slate-800 uppercase tracking-wider">Loading Salesperson Portal...</h2>
+        <p className="text-xs text-slate-400 mt-1">Initializing role &amp; catalog permissions</p>
+      </div>
+    );
+  }
+
+  const salespersonDisplayName = currentUser?.name ? currentUser.name.split(' ')[0] : 'Salesperson';
 
   return (
     <div className="flex-1 flex flex-col min-h-screen bg-slate-50 relative pb-20">
@@ -385,7 +470,7 @@ export default function SalesDashboard() {
             <Package className="w-4 h-4 text-white" />
           </div>
           <div>
-            <h1 className="text-sm font-black leading-none">{currentUser?.name.split(' ')[0]} (Sales)</h1>
+            <h1 className="text-sm font-black leading-none">{salespersonDisplayName} (Sales)</h1>
             <span className="text-xs text-cyan-300 font-bold uppercase tracking-wider block mt-0.5">
               {currentUser?.role === 'sales_dist' ? 'Distributor Agent' : 'Company Agent'}
             </span>
@@ -481,25 +566,58 @@ export default function SalesDashboard() {
                       </button>
                     </div>
                   ) : (
-                    filteredRetailers.map(r => (
-                      <button
-                        key={r.id}
-                        onClick={() => {
-                          setSelectedRetailerId(r.id);
-                          setOrderStep('catalog');
-                        }}
-                        className="w-full text-left p-3.5 bg-white border border-slate-150 hover:border-cyan-300 hover:bg-cyan-50/15 rounded-xl shadow-xs transition-all flex flex-col gap-1.5 cursor-pointer group"
-                      >
-                        <div className="flex justify-between items-center w-full">
-                          <span className="font-extrabold text-slate-900 text-sm group-hover:text-cyan-800 transition-colors">{r.shop_name}</span>
-                          <span className="text-xs bg-slate-100 px-2 py-0.5 rounded font-bold text-slate-600">{r.retailer_code}</span>
+                    filteredRetailers.map(r => {
+                      const rScopedCount = getRetailerScopedOrders(r.id).length;
+                      return (
+                        <div
+                          key={r.id}
+                          className="w-full text-left p-3.5 bg-white border border-slate-150 hover:border-cyan-300 hover:bg-cyan-50/15 rounded-xl shadow-xs transition-all flex flex-col gap-1.5 group"
+                        >
+                          <div 
+                            onClick={() => {
+                              setSelectedRetailerId(r.id);
+                              setOrderStep('catalog');
+                            }}
+                            className="cursor-pointer"
+                          >
+                            <div className="flex justify-between items-center w-full">
+                              <span className="font-extrabold text-slate-900 text-sm group-hover:text-cyan-800 transition-colors">{r.shop_name}</span>
+                              <span className="text-xs bg-slate-100 px-2 py-0.5 rounded font-bold text-slate-600">{r.retailer_code}</span>
+                            </div>
+                            <div className="flex justify-between text-xs text-slate-500 font-medium w-full mt-1">
+                              <span>Owner: {r.owner_name} &bull; <strong className="text-slate-700">{r.city}</strong></span>
+                              <span>Outstanding: <strong className={r.outstanding > 0 ? 'text-red-500 font-bold' : 'text-slate-600'}>₹{r.outstanding.toLocaleString()}</strong></span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-2 mt-0.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setViewRetailerOrdersId(r.id);
+                              }}
+                              className="px-2.5 py-1 bg-slate-100 hover:bg-cyan-50 hover:text-cyan-800 hover:border-cyan-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                              title="View past orders for this shop"
+                            >
+                              <History className="w-3.5 h-3.5 text-cyan-600" />
+                              <span>Past Orders ({rScopedCount})</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedRetailerId(r.id);
+                                setOrderStep('catalog');
+                              }}
+                              className="text-xs font-bold text-cyan-600 hover:text-cyan-800 flex items-center gap-0.5 cursor-pointer"
+                            >
+                              <span>Take Order</span>
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex justify-between text-xs text-slate-500 font-medium w-full">
-                          <span>Owner: {r.owner_name} &bull; <strong className="text-slate-700">{r.city}</strong></span>
-                          <span>Outstanding: <strong className={r.outstanding > 0 ? 'text-red-500 font-bold' : 'text-slate-600'}>₹{r.outstanding.toLocaleString()}</strong></span>
-                        </div>
-                      </button>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -509,19 +627,33 @@ export default function SalesDashboard() {
             {orderStep === 'catalog' && selectedRetailer && (
               <div className="space-y-4">
                 
-                {/* Active Retailer Bar */}
-                <div className="p-3.5 bg-slate-900 text-white rounded-xl flex items-center justify-between shadow-sm">
-                  <div>
+                {/* Active Retailer Bar with Scoped Past Orders Shortcut */}
+                <div className="p-3.5 bg-slate-900 text-white rounded-xl flex items-center justify-between shadow-sm gap-2">
+                  <div className="min-w-0 flex-1">
                     <span className="text-xs font-bold text-cyan-400 uppercase tracking-wider block">Target Customer</span>
-                    <span className="text-sm font-black leading-normal block">{selectedRetailer.shop_name}</span>
-                    <span className="text-xs text-slate-300 font-medium">{selectedRetailer.city} &bull; Outstanding: ₹{selectedRetailer.outstanding.toLocaleString()}</span>
+                    <span className="text-sm font-black leading-normal block truncate">{selectedRetailer.shop_name}</span>
+                    <span className="text-xs text-slate-300 font-medium block truncate">
+                      {selectedRetailer.city} &bull; Outstanding: ₹{selectedRetailer.outstanding.toLocaleString()}
+                    </span>
                   </div>
-                  <button
-                    onClick={() => setOrderStep('retailer')}
-                    className="px-2.5 py-1 border border-slate-700 rounded text-xs font-bold hover:bg-slate-800 cursor-pointer"
-                  >
-                    Change Shop
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setViewRetailerOrdersId(selectedRetailer.id)}
+                      className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                      title="View past orders for this customer"
+                    >
+                      <History className="w-3.5 h-3.5" />
+                      <span className="hidden xs:inline">Past Orders ({getRetailerScopedOrders(selectedRetailer.id).length})</span>
+                      <span className="xs:hidden">Orders</span>
+                    </button>
+                    <button
+                      onClick={() => setOrderStep('retailer')}
+                      className="px-2.5 py-1.5 border border-slate-700 rounded-lg text-xs font-bold hover:bg-slate-800 cursor-pointer"
+                    >
+                      Change
+                    </button>
+                  </div>
                 </div>
 
                 {/* Filters Row */}
@@ -1074,7 +1206,7 @@ export default function SalesDashboard() {
                     Edit Cart
                   </button>
                   <button
-                    onClick={handlePlaceOrder}
+                    onClick={handlePlaceOrderClick}
                     className="flex-1 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg font-bold shadow-md shadow-cyan-900/10 active:scale-95 transition-all text-center cursor-pointer text-xs"
                   >
                     CONFIRM &amp; PLACE ORDER
@@ -1087,73 +1219,189 @@ export default function SalesDashboard() {
         )}
 
         {/* ========================================================
-            TAB 2: SALES BOOK / ORDERS HISTORY
+            TAB 2: SALES BOOK / ORDERS HISTORY (ROLE-SCOPED)
             ======================================================== */}
         {activeTab === 'history' && orderStep !== 'success' && (
-          <div className="space-y-3">
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide px-1 flex items-center gap-1.5">
-              <History className="w-4 h-4 text-cyan-600" />
-              <span>Booked Sales Orders ({salesHistory.length})</span>
-            </h3>
+          <div className="space-y-3.5">
+            {/* Header & Role Scope Banner */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1">
+              <h3 className="text-xs font-black text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                <History className="w-4 h-4 text-cyan-600" />
+                <span>Booked Sales Orders ({salesHistory.length})</span>
+              </h3>
+              
+              {isCompanySalesperson ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-black px-2.5 py-0.5 bg-purple-50 text-purple-800 border border-purple-200 rounded-md shrink-0">
+                  <Lock className="w-3 h-3 text-purple-600" />
+                  <span>Scoped: {assignedCompanies.join(', ') || 'Company Brand'}</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] font-black px-2.5 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-md shrink-0">
+                  <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                  <span>Full Distributor Access</span>
+                </span>
+              )}
+            </div>
+
+            {/* Scope Explanation Banner */}
+            {isCompanySalesperson && (
+              <div className="p-2.5 bg-purple-50/80 border border-purple-200 rounded-xl text-xs text-purple-900 flex items-start gap-2">
+                <Info className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" />
+                <div className="text-[11px] leading-relaxed">
+                  <strong>Brand Scope Active:</strong> Displaying only orders and line items for <strong className="underline">{assignedCompanies.join(', ') || 'your assigned company'}</strong>. Competing products and other manufacturer sales figures are hidden.
+                </div>
+              </div>
+            )}
+
+            {/* Filter toolbar */}
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <input
+                  type="text"
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  placeholder="Filter by Order # or Shop name..."
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-cyan-500 shadow-2xs"
+                />
+              </div>
+              <select
+                value={historyFilterRetailer}
+                onChange={(e) => setHistoryFilterRetailer(e.target.value)}
+                className="bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-700 focus:outline-none cursor-pointer max-w-[140px] truncate shadow-2xs"
+              >
+                <option value="ALL">All Retailers</option>
+                {retailers.map(r => (
+                  <option key={r.id} value={r.id}>{r.shop_name}</option>
+                ))}
+              </select>
+            </div>
 
             {salesHistory.length === 0 ? (
-              <div className="text-center py-12 bg-white border border-slate-150 rounded-xl text-xs text-slate-400">
-                No orders booked by you yet in this session.
+              <div className="text-center py-12 bg-white border border-slate-150 rounded-xl text-xs text-slate-400 space-y-2 p-4">
+                <Package className="w-8 h-8 text-slate-300 mx-auto" />
+                <p className="font-bold text-slate-600">No scoped orders found</p>
+                <p className="text-[11px]">
+                  {isCompanySalesperson 
+                    ? `There are no orders booked containing products from ${assignedCompanies.join(', ') || 'your assigned brand'}.`
+                    : 'No orders have been recorded in this session yet.'}
+                </p>
               </div>
             ) : (
               <div className="space-y-3">
                 {salesHistory.map(ord => {
                   const retObj = retailers.find(r => r.id === ord.retailer_id);
+                  const isScopedOrder = ord.is_scoped_view;
+                  const visibleItemCount = ord.items?.length || 0;
+                  const totalOriginal = ord.total_original_items_count || visibleItemCount;
+                  const isUnconfirmed = ord.status === 'Submitted' || ord.status === 'Under Review' || ord.status === 'Draft';
+
                   return (
-                    <div key={ord.id} className="erp-card bg-white p-3.5 space-y-2 text-xs">
-                      <div className="flex justify-between">
-                        <span className="font-bold text-slate-800">{ord.order_number}</span>
-                        <span className={`px-2.5 py-0.5 rounded-[4px] text-xs font-black ${
-                          ord.status === 'Submitted' ? 'badge-submitted' :
-                          ord.status === 'Under Review' ? 'badge-under-review' :
+                    <div 
+                      key={ord.id} 
+                      className={`erp-card bg-white p-3.5 space-y-2.5 text-xs transition-all cursor-pointer shadow-xs group ${
+                        isUnconfirmed ? 'border-amber-300 ring-1 ring-amber-200 hover:border-amber-400' : 'hover:border-cyan-400'
+                      }`}
+                      onClick={() => setOrderForReview(ord)}
+                    >
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <span className="font-black text-slate-900 text-sm block group-hover:text-cyan-700 transition-colors">{ord.order_number}</span>
+                          <span className="text-[11px] text-slate-500 font-medium block mt-0.5">
+                            Shop: <strong className="text-slate-800 font-bold">{retObj?.shop_name || 'Retailer'}</strong> &bull; {retObj?.city || 'Indore'}
+                          </span>
+                        </div>
+                        <span className={`px-2 py-0.5 rounded-[4px] text-[10px] font-black uppercase tracking-wider shrink-0 ${
+                          isUnconfirmed ? 'bg-amber-100 text-amber-800 border border-amber-300' :
                           ord.status === 'Confirmed' ? 'badge-confirmed' :
                           ord.status === 'Partially Confirmed' ? 'badge-partially-confirmed' :
-                          ord.status === 'Packed' ? 'bg-amber-100 text-amber-800' :
+                          ord.status === 'Packed' ? 'bg-amber-100 text-amber-800 border border-amber-300' :
                           ord.status === 'Dispatched' ? 'badge-dispatched' :
-                          ord.status === 'Delivered' ? 'bg-emerald-100 text-emerald-800' :
+                          ord.status === 'Delivered' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' :
                           'badge-cancelled'
                         }`}>
-                          {ord.status.toUpperCase()}
+                          {isUnconfirmed ? 'ORDER PLACED / PENDING CONFIRMATION' : ord.status}
                         </span>
                       </div>
-                      <div className="flex justify-between text-slate-500 text-xs">
-                        <span>Shop: {retObj?.shop_name}</span>
-                        <span>Total: <strong className="text-slate-900 font-bold">₹{ord.total_amount.toLocaleString('en-IN')}</strong></span>
+
+                      {/* Scoped Brand Tag & Recalculated Values */}
+                      <div className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-150 text-xs">
+                        <div className="flex items-center gap-1.5">
+                          {isScopedOrder ? (
+                            <span className="px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded font-black text-[10px] flex items-center gap-1">
+                              <Lock className="w-3 h-3" />
+                              <span>{visibleItemCount} Brand Item{visibleItemCount !== 1 ? 's' : ''}</span>
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded font-black text-[10px]">
+                              {visibleItemCount} Total Line Items
+                            </span>
+                          )}
+                          {isScopedOrder && totalOriginal > visibleItemCount && (
+                            <span className="text-[10px] text-slate-400 font-medium">
+                              ({totalOriginal - visibleItemCount} other items masked)
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold block">{isScopedOrder ? 'Brand Subtotal' : 'Order Total'}</span>
+                          <span className="font-black text-slate-900 text-sm">₹{ord.total_amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
                       </div>
 
                       {/* Line items with dual quantity format */}
                       {ord.items && ord.items.length > 0 && (
-                        <div className="mt-2 pt-2 border-t border-slate-100 space-y-1">
-                          {ord.items.map((it, idx) => {
+                        <div className="pt-1 space-y-1">
+                          {ord.items.slice(0, 3).map((it, idx) => {
                             const p = products.find(prod => prod.id === it.product_id);
                             const unitsPerPack = it.units_per_box_carton || p?.units_per_box_carton || 1;
                             const totalBase = it.base_qty || it.quantity || 0;
                             return (
-                              <div key={idx} className="flex justify-between text-xs text-slate-600">
-                                <span>
-                                  {p?.name || 'Product'} &bull; <strong className="text-cyan-700 font-bold">{formatQuantityDisplay(totalBase, unitsPerPack, it.trading_unit || p?.trading_unit, it.base_unit || p?.base_unit)}</strong>
+                              <div key={idx} className="flex justify-between text-[11px] text-slate-600">
+                                <span className="truncate pr-2">
+                                  &bull; {p?.name || it.product_name || 'Product'} ({formatQuantityDisplay(totalBase, unitsPerPack, it.trading_unit || p?.trading_unit, it.base_unit || p?.base_unit)})
                                 </span>
-                                <span className="font-bold text-slate-900">₹{it.total_amount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                                <span className="font-bold text-slate-800 shrink-0">₹{it.total_amount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                               </div>
                             );
                           })}
+                          {ord.items.length > 3 && (
+                            <p className="text-[10px] text-cyan-700 font-bold italic pt-0.5">
+                              + {ord.items.length - 3} more items in this order (click to view)
+                            </p>
+                          )}
                         </div>
                       )}
 
-                      <div className="flex justify-between items-center border-t border-slate-50 pt-2 text-xs">
-                        <span className="text-slate-400">{new Date(ord.order_date).toLocaleDateString('en-IN')}</span>
-                        <button
-                          onClick={() => handleRepeatOrder(ord)}
-                          className="flex items-center gap-1 text-cyan-600 font-bold hover:underline cursor-pointer"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          <span>Repeat Order</span>
-                        </button>
+                      <div className="flex justify-between items-center border-t border-slate-100 pt-2 text-xs">
+                        <span className="text-slate-400 text-[11px]">📅 {new Date(ord.order_date).toLocaleDateString('en-IN')}</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOrderForReview(ord);
+                            }}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer ${
+                              isUnconfirmed
+                                ? 'bg-amber-500 hover:bg-amber-600 text-white font-black shadow-xs'
+                                : 'text-slate-700 hover:text-cyan-700 hover:underline'
+                            }`}
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>{isUnconfirmed ? 'Review & Confirm' : 'Details'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRepeatOrder(ord);
+                            }}
+                            className="px-2.5 py-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border border-cyan-200 rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>Repeat</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1166,19 +1414,34 @@ export default function SalesDashboard() {
         {/* STEP 5: SUCCESS STATE VIEW */}
         {orderStep === 'success' && (
           <div className="erp-card bg-white p-8 text-center max-w-md mx-auto space-y-6 border-slate-100 shadow-lg mt-6">
-            <div className="inline-flex items-center justify-center p-3 bg-emerald-50 text-emerald-600 rounded-full">
-              <CheckCircle className="w-12 h-12" />
+            <div className="inline-flex items-center justify-center p-3 bg-amber-50 text-amber-600 rounded-full">
+              <Clock className="w-12 h-12" />
             </div>
             
             <div className="space-y-1">
-              <h3 className="text-lg font-black text-slate-800 uppercase tracking-wide">ORDER PLACED SUCCESSFULLY</h3>
-              <p className="text-xs text-slate-500">The customer order has been uploaded to the distributor's administrative dashboard.</p>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 inline-block mb-1">
+                Order Placed / Pending Confirmation
+              </span>
+              <h3 className="text-lg font-black text-slate-800 uppercase tracking-wide">SALES ORDER BOOKED</h3>
+              <p className="text-xs text-slate-500">The customer order is recorded. Please perform final line-item review before confirmation.</p>
             </div>
 
             <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl font-mono text-xs">
               <span className="text-slate-400 block text-xs uppercase font-bold">Sales Order Reference ID</span>
               <strong className="text-slate-800 text-sm mt-1 block">{latestOrderNum}</strong>
             </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const target = orders.find(o => o.order_number === latestOrderNum) || orderForReview;
+                if (target) setOrderForReview(target);
+              }}
+              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wide shadow-md shadow-emerald-900/10 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95"
+            >
+              <CheckCircle className="w-4 h-4" />
+              <span>Review Complete Order &amp; Confirm</span>
+            </button>
 
             <div className="flex gap-3">
               <button
@@ -1251,6 +1514,476 @@ export default function SalesDashboard() {
           });
         }}
       />
+
+      {/* Modal 1: RETAILER PAST ORDERS HISTORY MODAL (z-50) */}
+      {viewRetailerOrdersId && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setViewRetailerOrdersId(null);
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden my-auto">
+            {/* Modal Header */}
+            {(() => {
+              const targetRet = retailers.find(r => r.id === viewRetailerOrdersId);
+              const retailerScopedOrders = getRetailerScopedOrders(viewRetailerOrdersId);
+
+              return (
+                <>
+                  <div className="px-5 py-4 border-b border-slate-150 flex items-center justify-between bg-slate-50/80 sticky top-0 z-10">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-cyan-600 text-white flex items-center justify-center font-bold">
+                        <Store className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-black text-slate-900">{targetRet?.shop_name || 'Retailer Orders'}</h3>
+                          {targetRet?.retailer_code && (
+                            <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 font-mono text-[10px] font-bold rounded">
+                              {targetRet.retailer_code}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-medium">
+                          {targetRet?.city || 'Indore'} &bull; Past Orders in your scope ({retailerScopedOrders.length})
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setViewRetailerOrdersId(null)}
+                      className="w-8 h-8 rounded-lg hover:bg-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                      title="Close window"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Modal Body */}
+                  <div className="p-5 space-y-3 overflow-y-auto flex-1">
+                    {/* Scope Indicator */}
+                    {isCompanySalesperson ? (
+                      <div className="p-2.5 bg-purple-50 border border-purple-200 rounded-xl text-xs text-purple-900 flex items-center gap-2">
+                        <Lock className="w-4 h-4 text-purple-700 shrink-0" />
+                        <span className="text-[11px] leading-tight">
+                          Displaying orders containing products for <strong>{assignedCompanies.join(', ') || 'your assigned company'}</strong>. Competing brand orders are filtered out.
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
+                        <span className="text-[11px]">
+                          <strong>Full Access:</strong> Showing all past orders for this retailer across all brands.
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Orders List */}
+                    {retailerScopedOrders.length === 0 ? (
+                      <div className="text-center py-10 bg-slate-50 border border-slate-150 rounded-xl text-xs text-slate-400 space-y-2 p-4">
+                        <Package className="w-8 h-8 text-slate-300 mx-auto" />
+                        <p className="font-bold text-slate-600">No past orders in your brand scope</p>
+                        <p className="text-[11px]">
+                          {isCompanySalesperson
+                            ? `This retailer has no past orders containing items from ${assignedCompanies.join(', ') || 'your brand'}.`
+                            : 'This retailer has no booked orders yet.'}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {retailerScopedOrders.map(ord => {
+                          const isScoped = ord.is_scoped_view;
+                          const visibleCount = ord.items?.length || 0;
+                          return (
+                            <div
+                              key={ord.id}
+                              className="p-3 bg-white border border-slate-200 hover:border-cyan-400 rounded-xl space-y-2 shadow-2xs transition-all cursor-pointer group"
+                              onClick={() => {
+                                setSelectedOrderForModal(ord);
+                              }}
+                            >
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-slate-900 group-hover:text-cyan-700 transition-colors">{ord.order_number}</span>
+                                    {isScoped && (
+                                      <span className="px-1.5 py-0.2 bg-purple-100 text-purple-800 rounded text-[10px] font-black flex items-center gap-0.5">
+                                        <Lock className="w-2.5 h-2.5" />
+                                        <span>Scoped</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[11px] text-slate-400 font-medium block mt-0.5">
+                                    📅 {new Date(ord.order_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                  </span>
+                                </div>
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                                  ord.status === 'Submitted' ? 'badge-submitted' :
+                                  ord.status === 'Under Review' ? 'badge-under-review' :
+                                  ord.status === 'Confirmed' ? 'badge-confirmed' :
+                                  ord.status === 'Partially Confirmed' ? 'badge-partially-confirmed' :
+                                  ord.status === 'Packed' ? 'bg-amber-100 text-amber-800 border border-amber-300' :
+                                  ord.status === 'Dispatched' ? 'badge-dispatched' :
+                                  ord.status === 'Delivered' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' :
+                                  'badge-cancelled'
+                                }`}>
+                                  {ord.status}
+                                </span>
+                              </div>
+
+                              <div className="flex justify-between items-center text-xs pt-1 border-t border-slate-100">
+                                <span className="text-slate-500 font-medium text-[11px]">
+                                  {visibleCount} visible line item{visibleCount !== 1 ? 's' : ''}
+                                </span>
+                                <div className="text-right">
+                                  <span className="font-mono font-black text-slate-900 text-sm">
+                                    ₹{ord.total_amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex justify-end gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedOrderForModal(ord);
+                                  }}
+                                  className="px-2.5 py-1 bg-cyan-600 hover:bg-cyan-700 text-white rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                                >
+                                  <Eye className="w-3 h-3" />
+                                  <span>View Breakdown</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRepeatOrder(ord);
+                                    setViewRetailerOrdersId(null);
+                                  }}
+                                  className="px-2.5 py-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border border-cyan-200 rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>Repeat</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Modal Footer */}
+                  <div className="px-5 py-3.5 border-t border-slate-150 bg-slate-50 flex gap-2.5 justify-between">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedRetailerId(viewRetailerOrdersId);
+                        setOrderStep('catalog');
+                        setActiveTab('order');
+                        setViewRetailerOrdersId(null);
+                      }}
+                      className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Book New Order for this Shop</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewRetailerOrdersId(null)}
+                      className="px-4 py-2 border border-slate-250 hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-xs cursor-pointer transition-colors"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Modal 2: SCOPED ORDER DETAILS BREAKDOWN MODAL (z-[70] - Top Layer) */}
+      {selectedOrderForModal && (
+        <div 
+          className="fixed inset-0 z-[70] bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedOrderForModal(null);
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden my-auto animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="px-5 py-4 border-b border-slate-150 flex items-center justify-between bg-slate-50/90 sticky top-0 z-10">
+              <div className="flex items-center gap-2.5">
+                {viewRetailerOrdersId && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOrderForModal(null)}
+                    className="px-2.5 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors mr-1 shadow-2xs"
+                    title="Return to Retailer Orders List"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Back</span>
+                  </button>
+                )}
+                <div className="w-8 h-8 rounded-lg bg-cyan-100 text-cyan-800 flex items-center justify-center font-black shrink-0">
+                  <FileText className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-black text-slate-900">{selectedOrderForModal.order_number}</h3>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                      selectedOrderForModal.status === 'Submitted' ? 'badge-submitted' :
+                      selectedOrderForModal.status === 'Under Review' ? 'badge-under-review' :
+                      selectedOrderForModal.status === 'Confirmed' ? 'badge-confirmed' :
+                      selectedOrderForModal.status === 'Partially Confirmed' ? 'badge-partially-confirmed' :
+                      selectedOrderForModal.status === 'Packed' ? 'bg-amber-100 text-amber-800 border border-amber-300' :
+                      selectedOrderForModal.status === 'Dispatched' ? 'badge-dispatched' :
+                      selectedOrderForModal.status === 'Delivered' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' :
+                      'badge-cancelled'
+                    }`}>
+                      {selectedOrderForModal.status}
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    📅 {new Date(selectedOrderForModal.order_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedOrderForModal(null)}
+                className="w-8 h-8 rounded-lg hover:bg-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                title="Close Breakdown"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4 overflow-y-auto flex-1">
+              {/* Retailer Info Header */}
+              {(() => {
+                const ret = retailers.find(r => r.id === selectedOrderForModal.retailer_id);
+                return (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Customer / Shop</span>
+                      <strong className="text-slate-900 text-sm">{ret?.shop_name || 'Retailer'}</strong>
+                      <span className="text-slate-500 block text-[11px] mt-0.5">{ret?.owner_name} &bull; {ret?.city || 'Indore'} {ret?.mobile ? `(${ret.mobile})` : ''}</span>
+                    </div>
+                    {ret?.retailer_code && (
+                      <span className="self-start sm:self-auto px-2 py-1 bg-white border border-slate-200 rounded font-mono text-[11px] font-bold text-slate-700">
+                        {ret.retailer_code}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Role Scope Notice Banner */}
+              {isCompanySalesperson || selectedOrderForModal.is_scoped_view ? (
+                <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl text-xs text-purple-900 space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <Lock className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                    <span>Company Salesperson Scope Active: {assignedCompanies.join(', ') || 'Assigned Brand'}</span>
+                  </div>
+                  <p className="text-[11px] text-purple-800 leading-relaxed pl-5">
+                    Showing ONLY the items and invoice values for your assigned manufacturer. Other company items ({selectedOrderForModal.total_original_items_count ? selectedOrderForModal.total_original_items_count - (selectedOrderForModal.items?.length || 0) : 0} items) are strictly masked.
+                  </p>
+                </div>
+              ) : (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <span className="text-[11px] font-medium">
+                    <strong>Distributor Full Access:</strong> Displaying complete order breakdown across all product brands and categories.
+                  </span>
+                </div>
+              )}
+
+              {/* Line items table */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                    Line Items ({selectedOrderForModal.items?.length || 0})
+                  </span>
+                  <span className="text-[11px] text-slate-400 font-medium">
+                    Prices inclusive of applicable GST
+                  </span>
+                </div>
+
+                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                        <th className="py-2.5 px-3">#</th>
+                        <th className="py-2.5 px-3">Product Name</th>
+                        <th className="py-2.5 px-3 text-center">Quantity</th>
+                        <th className="py-2.5 px-3 text-right">Rate</th>
+                        <th className="py-2.5 px-3 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {selectedOrderForModal.items && selectedOrderForModal.items.length > 0 ? (
+                        selectedOrderForModal.items.map((it, idx) => {
+                          const prod = products.find(p => p.id === it.product_id);
+                          const unitsPerPack = it.units_per_box_carton || prod?.units_per_box_carton || 1;
+                          const totalBase = it.base_qty ?? it.quantity ?? 0;
+                          const tradingUnit = it.trading_unit || prod?.trading_unit || 'Carton';
+                          const baseUnit = it.base_unit || prod?.base_unit || 'Piece';
+                          const targetMrp = it.selected_mrp || prod?.mrp;
+
+                          return (
+                            <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
+                              <td className="py-2.5 px-3 font-mono text-[11px] text-slate-400">{idx + 1}</td>
+                              <td className="py-2.5 px-3">
+                                <div className="font-bold text-slate-900 text-xs">{prod?.name || it.product_name || 'Product'}</div>
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                  {targetMrp && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded">
+                                      MRP ₹{targetMrp}
+                                    </span>
+                                  )}
+                                  {prod?.brand && (
+                                    <span className="text-[10px] text-slate-500 font-medium">Brand: {prod.brand}</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                <span className="font-bold text-cyan-900 block text-xs">
+                                  {formatQuantityDisplay(totalBase, unitsPerPack, tradingUnit, baseUnit)}
+                                </span>
+                                {(it.carton_qty || 0) > 0 && (it.loose_qty || 0) > 0 && (
+                                  <span className="text-[10px] text-slate-400 block mt-0.5">
+                                    {it.carton_qty} Ctn + {it.loose_qty} Loose
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono text-slate-700">
+                                ₹{(it.rate || it.carton_rate || it.loose_rate || prod?.selling_price || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
+                                ₹{(it.total_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td colSpan={5} className="py-6 text-center text-slate-400 italic">
+                            No visible items in your assigned brand scope for this order.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Order Scope Summary Stats */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center pb-2 border-b border-slate-200">
+                  <div className="p-2 bg-white rounded-lg border border-slate-150">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Visible Items</span>
+                    <strong className="text-slate-900 text-sm">
+                      {selectedOrderForModal.total_visible_items || selectedOrderForModal.items?.length || 0}
+                    </strong>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-150">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Total Pieces</span>
+                    <strong className="text-slate-900 text-sm">
+                      {selectedOrderForModal.total_visible_pieces || selectedOrderForModal.items?.reduce((sum, it) => sum + (it.base_qty ?? it.quantity ?? 0), 0) || 0}
+                    </strong>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-150">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Cartons / Boxes</span>
+                    <strong className="text-slate-900 text-sm">
+                      {selectedOrderForModal.total_visible_cartons || selectedOrderForModal.items?.reduce((sum, it) => sum + (it.carton_qty || 0), 0) || 0}
+                    </strong>
+                  </div>
+                  <div className="p-2 bg-white rounded-lg border border-slate-150">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Loose Units</span>
+                    <strong className="text-slate-900 text-sm">
+                      {selectedOrderForModal.total_visible_loose || selectedOrderForModal.items?.reduce((sum, it) => sum + (it.loose_qty || 0), 0) || 0}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center pt-1 text-slate-900">
+                  <div>
+                    <span className="text-xs font-black uppercase tracking-wide block">
+                      {isCompanySalesperson || selectedOrderForModal.is_scoped_view ? 'Scoped Brand Total' : 'Order Invoice Total'}
+                    </span>
+                    {(isCompanySalesperson || selectedOrderForModal.is_scoped_view) && (
+                      <span className="text-[10px] text-purple-700 font-semibold">
+                        Calculated exclusively on visible brand items
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-base font-black text-cyan-900 font-mono">
+                    ₹{selectedOrderForModal.total_amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer Actions */}
+            <div className="px-5 py-3.5 border-t border-slate-150 bg-slate-50 flex gap-2.5 justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedOrderForModal(null)}
+                className="px-4 py-2 border border-slate-250 hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-xs cursor-pointer transition-colors"
+              >
+                {viewRetailerOrdersId ? 'Back to Orders List' : 'Close'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleRepeatOrder(selectedOrderForModal);
+                  setSelectedOrderForModal(null);
+                  setViewRetailerOrdersId(null);
+                }}
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Repeat Order (Visible Items)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pending Delivery Warning Confirmation Modal */}
+      {showPendingWarningModal && (
+        <PendingDeliveryWarningModal
+          warnings={pendingWarningsForOrder}
+          retailerName={selectedRetailer?.shop_name}
+          retailerCode={selectedRetailer?.retailer_code}
+          onReviewOrder={() => setShowPendingWarningModal(false)}
+          onProceedWithOrder={executePlaceOrder}
+        />
+      )}
+
+      {/* Mandatory Order Review Modal */}
+      {orderForReview && (
+        <OrderReviewModal
+          orderId={orderForReview.id}
+          isOpen={!!orderForReview}
+          onClose={() => setOrderForReview(null)}
+          onOrderConfirmed={(confirmed) => {
+            setOrderForReview(null);
+            setSalesToast({ message: `Order ${confirmed.order_number} confirmed successfully!`, type: 'success' });
+          }}
+          onOrderUpdated={(updated) => {
+            setOrderForReview(updated);
+          }}
+          onOrderCancelled={() => {
+            setOrderForReview(null);
+            setSalesToast({ message: 'Order cancelled.', type: 'info' });
+          }}
+          role={currentUser?.role || 'sales_dist'}
+        />
+      )}
 
       {/* Toast Notification */}
       {salesToast && (

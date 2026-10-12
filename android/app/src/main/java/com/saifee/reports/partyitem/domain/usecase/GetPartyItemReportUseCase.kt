@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 /**
- * Clean architecture Use Case that retrieves, filters, searches, and sorts party report items.
+ * Clean architecture Use Case that retrieves, filters, searches, and sorts item report items.
  */
 class GetPartyItemReportUseCase(
     private val repository: PartyItemReportRepository
@@ -21,12 +21,17 @@ class GetPartyItemReportUseCase(
         sortOrder: SortOrder
     ): Flow<Pair<List<PartyReportItem>, ReportSummary>> {
         return repository.getPartyReportItems(filters).map { rawItems ->
-            // Filter by search query (case-insensitive party name search)
+            // Filter by search query (case-insensitive product/party search)
             val filtered = if (filters.searchQuery.isBlank()) {
                 rawItems
             } else {
                 val query = filters.searchQuery.trim().lowercase()
-                rawItems.filter { it.partyName.lowercase().contains(query) }
+                rawItems.filter { 
+                    it.productName.lowercase().contains(query) ||
+                    it.partyName.lowercase().contains(query) ||
+                    it.brand.lowercase().contains(query) ||
+                    it.packSize.lowercase().contains(query)
+                }
             }
 
             // Apply Sort Order
@@ -40,9 +45,9 @@ class GetPartyItemReportUseCase(
                 }
                 SortColumnField.PARTY_NAME -> {
                     if (sortOrder.direction == SortDirection.ASCENDING) {
-                        filtered.sortedBy { it.partyName.lowercase() }
+                        filtered.sortedBy { it.productName.lowercase() }
                     } else {
-                        filtered.sortedByDescending { it.partyName.lowercase() }
+                        filtered.sortedByDescending { it.productName.lowercase() }
                     }
                 }
                 SortColumnField.SALE_QTY -> {
@@ -71,6 +76,13 @@ class GetPartyItemReportUseCase(
                         filtered.sortedBy { it.purchaseAmount }
                     } else {
                         filtered.sortedByDescending { it.purchaseAmount }
+                    }
+                }
+                SortColumnField.CLOSING_INVENTORY -> {
+                    if (sortOrder.direction == SortDirection.ASCENDING) {
+                        filtered.sortedBy { it.totalClosingPieces }
+                    } else {
+                        filtered.sortedByDescending { it.totalClosingPieces }
                     }
                 }
             }

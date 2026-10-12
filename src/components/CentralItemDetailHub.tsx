@@ -13,9 +13,10 @@ import {
   Boxes, Calendar, User, Tag, Clock, TrendingUp, ShieldCheck, ChevronRight,
   ChevronDown, ExternalLink, Search, Filter, RefreshCw, Barcode, Hash, Warehouse,
   Info, Check, X, ShieldAlert, ArrowUpRight, ArrowDownRight, Sparkles, SlidersHorizontal,
-  MoreVertical, ArrowRight, Eye, ChevronUp
+  MoreVertical, ArrowRight, Eye, ChevronUp, Trash2
 } from 'lucide-react';
 import SmartSearchBar from '@/components/SmartSearchBar';
+import BillingHistoryModal from '@/components/orders/BillingHistoryModal';
 
 interface CentralItemDetailHubProps {
   productId: string;
@@ -60,7 +61,10 @@ export default function CentralItemDetailHub({
     getCategoriesForProduct,
     getCategoryIdsForProduct,
     setProductCategories,
-    profiles
+    profiles,
+    deleteOrder,
+    clearAllOrders,
+    clearDummyOrders
   } = useDb();
 
   // 5 Main Tabs: 'overview' | 'inventory' | 'purchases' | 'orders_billing' | 'more'
@@ -113,6 +117,7 @@ export default function CentralItemDetailHub({
   const [showVariantModal, setShowVariantModal] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+  const [showBillingHistoryModal, setShowBillingHistoryModal] = useState(false);
 
   // Current Product & Inventory
   const product = products.find(p => p.id === productId);
@@ -244,7 +249,10 @@ export default function CentralItemDetailHub({
           const cRate = item.purchase_rate;
           const lRate = item.loose_purchase_rate || (cRate / unitsPerPack);
           const rawTotal = (cQty * cRate) + (lQty * lRate);
-          const gstAmt = rawTotal * ((item.gst_percent || product.gst_percent) / 100);
+          const prodGst = (item.gst_percent !== undefined && item.gst_percent !== null)
+            ? Number(item.gst_percent)
+            : ((product.gst_percent !== undefined && product.gst_percent !== null) ? Number(product.gst_percent) : 0);
+          const gstAmt = rawTotal * (prodGst / 100);
           const isOpeningStock = pur.invoice_number?.startsWith('OPENING-') || pur.id.startsWith('pur-init-');
 
           list.push({
@@ -257,7 +265,7 @@ export default function CentralItemDetailHub({
             tradingUnit: item.trading_unit || product.trading_unit,
             purchaseRate: item.purchase_rate,
             discount: item.discount || 0,
-            gstPercent: item.gst_percent || product.gst_percent,
+            gstPercent: prodGst,
             mrp: item.mrp || product.mrp,
             totalAmount: Math.round((rawTotal + gstAmt) * 100) / 100,
             batchNumber: item.batch || 'BCH-DEFAULT',
@@ -658,7 +666,8 @@ export default function CentralItemDetailHub({
     const grossAmount = meta.tradeMode === 'PIECES' 
       ? (purLooseQty * purRate)
       : ((purCartonQty * purRate) + (purLooseQty * looseRate));
-    const gstAmt = grossAmount * ((product.gst_percent || 18) / 100);
+    const prodGst = (product.gst_percent !== undefined && product.gst_percent !== null) ? Number(product.gst_percent) : 0;
+    const gstAmt = grossAmount * (prodGst / 100);
     const totalAmt = Math.round(grossAmount + gstAmt);
 
     try {
@@ -1254,9 +1263,25 @@ export default function CentralItemDetailHub({
                         <p className="text-xs text-slate-500 font-medium">{act.details}</p>
                       </div>
                     </div>
-                    <span className="text-xs text-slate-500 whitespace-nowrap font-medium">
-                      {new Date(act.date).toLocaleDateString()}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500 whitespace-nowrap font-medium">
+                        {new Date(act.date).toLocaleDateString()}
+                      </span>
+                      {act.type === 'order' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm(`Delete this sales order (${act.title})?`)) {
+                              deleteOrder(act.id.replace('ord-', ''));
+                            }
+                          }}
+                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                          title="Delete Sales Order"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1766,6 +1791,22 @@ export default function CentralItemDetailHub({
                     <option value="Cancelled">Cancelled</option>
                   </select>
                 </div>
+
+                {itemOrders.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm('Delete all orders from the system? Your products and purchase inventory will remain completely safe.')) {
+                        clearAllOrders();
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer shrink-0"
+                    title="Delete All Orders"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Delete All Orders</span>
+                  </button>
+                )}
               </div>
 
               {/* Orders Table */}
@@ -1785,6 +1826,7 @@ export default function CentralItemDetailHub({
                         <th className="p-2.5">Order Rate</th>
                         <th className="p-2.5">Fulfilled Qty</th>
                         <th className="p-2.5">Status</th>
+                        <th className="p-2.5 text-right">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -1818,6 +1860,20 @@ export default function CentralItemDetailHub({
                                 {o.status}
                               </span>
                             </td>
+                            <td className="p-2.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (confirm(`Delete order ${o.orderNumber}?`)) {
+                                    deleteOrder(o.orderId);
+                                  }
+                                }}
+                                title="Delete this order"
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer inline-flex items-center"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
                           </tr>
                         ))}
                     </tbody>
@@ -1842,7 +1898,7 @@ export default function CentralItemDetailHub({
                   />
                 </div>
 
-                <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
                   <select
                     value={billingCustomerFilter}
                     onChange={(e) => setBillingCustomerFilter(e.target.value)}
@@ -1853,6 +1909,15 @@ export default function CentralItemDetailHub({
                       <option key={r.id} value={r.id}>{r.shop_name}</option>
                     ))}
                   </select>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowBillingHistoryModal(true)}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-black flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <History className="w-3.5 h-3.5 text-indigo-200" />
+                    <span>Dual-Scope Rate History</span>
+                  </button>
                 </div>
               </div>
 
@@ -2721,7 +2786,7 @@ export default function CentralItemDetailHub({
                       (tradeMeta.tradeMode === 'PIECES'
                         ? (purLooseQty * purRate)
                         : ((purCartonQty * purRate) + (purLooseQty * (purRate / (tradeMeta.packSize || 1))))) *
-                      (1 + (product.gst_percent || 18) / 100)
+                      (1 + ((product.gst_percent !== undefined && product.gst_percent !== null) ? Number(product.gst_percent) : 0) / 100)
                     ).toLocaleString()}
                   </span>
                 </div>
@@ -3211,6 +3276,23 @@ export default function CentralItemDetailHub({
             </div>
           </div>
         </div>
+      )}
+
+      {/* ========================================================
+          MODAL: DUAL-SCOPE BILLING HISTORY
+          ======================================================== */}
+      {showBillingHistoryModal && product && (
+        <BillingHistoryModal
+          isOpen={showBillingHistoryModal}
+          onClose={() => setShowBillingHistoryModal(false)}
+          productId={product.id}
+          retailerId={billingCustomerFilter !== 'all' ? billingCustomerFilter : undefined}
+          productName={product.name}
+          mrp={product.mrp}
+          tradingUnit={product.trading_unit || 'Carton'}
+          currentRate={product.selling_price}
+          currentDiscount={product.carton_discount || 0}
+        />
       )}
     </div>
   );

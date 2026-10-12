@@ -8,7 +8,8 @@ import {
 import { PendingOrderItemWarning, PendingOrderRef } from '@/lib/db';
 import ViewPreviousOrderModal from './ViewPreviousOrderModal';
 
-interface PendingItemWarningCardProps {
+interface PendingItemWarningCardProps 
+{
   warning: PendingOrderItemWarning;
   mode?: 'inline' | 'cart-summary' | 'counter-pos';
   onContinueAnyway?: () => void;

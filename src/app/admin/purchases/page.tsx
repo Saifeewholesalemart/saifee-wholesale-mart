@@ -5,7 +5,7 @@ import { useDb } from '@/context/DbContext';
 import { 
   PackageCheck, ChevronDown, ChevronUp, Plus, Trash2, ArrowLeft, 
   ShieldAlert, Building2, X, Check, Layers, Package, Tag, Sparkles, Boxes,
-  Warehouse
+  Warehouse, Edit3, AlertCircle, Save
 } from 'lucide-react';
 import { PurchaseItem, formatQuantityDisplay, BaseUnit, TradeMode, getProductTradeMode, formatProductStockDisplay } from '@/lib/db';
 import SmartSearchBar from '@/components/SmartSearchBar';
@@ -29,7 +29,7 @@ interface UIItemRow {
 
 export default function AdminPurchases() {
   const { 
-    purchases, suppliers, products, makePurchase, createSupplier, 
+    purchases, suppliers, products, makePurchase, deletePurchase, updatePurchase, createSupplier, 
     companies, createCompany, createFullProduct, createProductVariant,
     categories, godowns 
   } = useDb();
@@ -68,6 +68,15 @@ export default function AdminPurchases() {
   ]);
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [purchaseSearchTerm, setPurchaseSearchTerm] = useState('');
+
+  // 4. Edit Purchase Modal State
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editPurchaseId, setEditPurchaseId] = useState('');
+  const [editSupplierId, setEditSupplierId] = useState('');
+  const [editReceivingGodownId, setEditReceivingGodownId] = useState('');
+  const [editInvoiceNumber, setEditInvoiceNumber] = useState('');
+  const [editInvoiceDate, setEditInvoiceDate] = useState('');
+  const [editItems, setEditItems] = useState<UIItemRow[]>([]);
 
   // 1. Add Company Modal State
   const [showAddCompanyModal, setShowAddCompanyModal] = useState(false);
@@ -110,6 +119,213 @@ export default function AdminPurchases() {
 
   const toggleExpand = (id: string) => {
     setExpandedId(expandedId === id ? null : id);
+  };
+
+  const handleDeletePurchase = (pur: any) => {
+    const isOpening = pur.invoice_number.startsWith('OPENING-') || pur.id.startsWith('pur-init-');
+    const confirmMsg = isOpening
+      ? `Delete Opening Stock inward #${pur.invoice_number}?\n\nThis will revert the initial inventory counts from your warehouse.`
+      : `Are you sure you want to delete and cancel Purchase Invoice #${pur.invoice_number}?\n\nThis will:\n1. Deduct the inwarded stock quantities from Inventory.\n2. Revert warehouse batch quantities.\n3. Remove this bill from the purchase ledger.`;
+    
+    if (!confirm(confirmMsg)) return;
+
+    const success = deletePurchase(pur.id);
+    if (success) {
+      alert(`Purchase #${pur.invoice_number} has been deleted and stock successfully reverted.`);
+    } else {
+      alert('Failed to delete purchase.');
+    }
+  };
+
+  const handleStartEditPurchase = (pur: any) => {
+    setEditPurchaseId(pur.id);
+    setEditSupplierId(pur.supplier_id || '');
+    setEditReceivingGodownId(pur.receiving_godown_id || '');
+    setEditInvoiceNumber(pur.invoice_number || '');
+    setEditInvoiceDate(pur.invoice_date ? pur.invoice_date.split('T')[0] : new Date().toISOString().split('T')[0]);
+    
+    const mappedItems: UIItemRow[] = (pur.items || []).map((i: any) => {
+      const prod = products.find(p => p.id === i.product_id);
+      const unitsPerPack = i.units_per_box_carton || prod?.units_per_box_carton || 1;
+      return {
+        productId: i.product_id,
+        cartonQty: i.carton_qty !== undefined ? i.carton_qty : Math.floor((i.quantity || 0) / unitsPerPack),
+        looseQty: i.loose_qty !== undefined ? i.loose_qty : ((i.quantity || 0) % unitsPerPack),
+        quantity: i.quantity || 0,
+        purchaseRate: i.purchase_rate || 0,
+        discount: i.discount || 0,
+        freeQuantity: i.free_quantity || 0,
+        mrp: i.mrp || prod?.mrp || 0,
+        gstPercent: i.gst_percent !== undefined ? i.gst_percent : (prod?.gst_percent || 0),
+        sellingPrice: i.selling_price || prod?.selling_price || 0,
+        hsn: i.hsn || prod?.hsn || '',
+        batch: i.batch || '',
+        manufacturingDate: i.manufacturing_date || '',
+        expiryDate: i.expiry_date || ''
+      };
+    });
+
+    setEditItems(mappedItems.length > 0 ? mappedItems : [
+      {
+        productId: '',
+        cartonQty: 0,
+        looseQty: 0,
+        quantity: 0,
+        purchaseRate: 0,
+        discount: 0,
+        freeQuantity: 0,
+        mrp: 0,
+        gstPercent: 0,
+        sellingPrice: 0,
+        hsn: '',
+        batch: '',
+        manufacturingDate: '',
+        expiryDate: ''
+      }
+    ]);
+    setIsEditModalOpen(true);
+  };
+
+  const handleUpdateEditItemField = (index: number, field: keyof UIItemRow, value: any) => {
+    const updated = [...editItems];
+    const current = { ...updated[index], [field]: value };
+    const prod = products.find(p => p.id === current.productId);
+    const meta = prod ? getProductTradeMode(prod) : null;
+    const unitsPerPack = meta?.packSize || prod?.units_per_box_carton || 1;
+
+    if (field === 'cartonQty' || field === 'looseQty') {
+      const cQty = field === 'cartonQty' ? (Number(value) || 0) : (current.cartonQty || 0);
+      const lQty = field === 'looseQty' ? (Number(value) || 0) : (current.looseQty || 0);
+      if (meta?.tradeMode === 'PIECES') {
+        current.quantity = lQty;
+      } else {
+        current.quantity = (cQty * unitsPerPack) + lQty;
+      }
+    }
+    updated[index] = current;
+    setEditItems(updated);
+  };
+
+  const handleAddEditItemRow = () => {
+    setEditItems([
+      ...editItems,
+      {
+        productId: '',
+        cartonQty: 0,
+        looseQty: 0,
+        quantity: 0,
+        purchaseRate: 0,
+        discount: 0,
+        freeQuantity: 0,
+        mrp: 0,
+        gstPercent: 0,
+        sellingPrice: 0,
+        hsn: '',
+        batch: '',
+        manufacturingDate: '',
+        expiryDate: ''
+      }
+    ]);
+  };
+
+  const handleRemoveEditItemRow = (idx: number) => {
+    if (editItems.length === 1) return;
+    setEditItems(editItems.filter((_, i) => i !== idx));
+  };
+
+  const calculateEditTotalAmount = () => {
+    return editItems.reduce((sum, item) => {
+      const prod = products.find(p => p.id === item.productId);
+      if (!prod) return sum;
+      const meta = getProductTradeMode(prod);
+      if (meta.tradeMode === 'PIECES') {
+        const lineSub = item.purchaseRate * (item.looseQty || 0);
+        const discLine = item.discount * (item.looseQty || 0);
+        const taxable = Math.max(0, lineSub - discLine);
+        const gst = taxable * ((item.gstPercent || 0) / 100);
+        return sum + taxable + gst;
+      } else {
+        const effectiveCartons = (item.cartonQty || 0) + ((item.looseQty || 0) / meta.packSize);
+        const lineSub = item.purchaseRate * effectiveCartons;
+        const discLine = item.discount * effectiveCartons;
+        const taxable = Math.max(0, lineSub - discLine);
+        const gst = taxable * ((item.gstPercent || 0) / 100);
+        return sum + taxable + gst;
+      }
+    }, 0);
+  };
+
+  const handleSaveEditedPurchase = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!editPurchaseId) return;
+
+    if (!editSupplierId) {
+      alert('Please select a supplier.');
+      return;
+    }
+    if (!editInvoiceNumber.trim()) {
+      alert('Please enter a purchase invoice code.');
+      return;
+    }
+
+    const invalid = editItems.some(i => !i.productId || (!i.cartonQty && !i.looseQty && !i.quantity) || i.purchaseRate < 0);
+    if (invalid) {
+      alert('Please select valid products and enter quantity and rate for all items.');
+      return;
+    }
+
+    const totalVal = calculateEditTotalAmount();
+    const purchaseItems = editItems.map(item => {
+      const prod = products.find(p => p.id === item.productId)!;
+      const meta = getProductTradeMode(prod);
+      const totalBaseQty = meta.tradeMode === 'PIECES'
+        ? (item.looseQty || 0)
+        : (((item.cartonQty || 0) * meta.packSize) + (item.looseQty || 0));
+      const effectiveBatch = item.batch?.trim() || (editInvoiceNumber.trim() ? `LOT-${editInvoiceNumber.trim()}` : `LOT-${editInvoiceDate}`);
+      const looseRate = meta.tradeMode === 'PIECES' ? item.purchaseRate : (item.purchaseRate / meta.packSize);
+
+      return {
+        product_id: item.productId,
+        quantity: totalBaseQty,
+        base_qty: totalBaseQty,
+        trading_unit: meta.tradeMode === 'PIECES' ? 'Piece' : 'Carton',
+        base_unit: 'Piece',
+        units_per_box_carton: meta.packSize,
+        units_per_trading_unit: meta.packSize,
+        carton_qty: meta.tradeMode === 'PIECES' ? 0 : (item.cartonQty || 0),
+        loose_qty: item.looseQty || 0,
+        purchase_rate: item.purchaseRate,
+        carton_rate: item.purchaseRate,
+        loose_purchase_rate: looseRate,
+        loose_rate: looseRate,
+        discount: item.discount || 0,
+        free_quantity: item.freeQuantity || 0,
+        mrp: item.mrp,
+        gst_percent: item.gstPercent !== undefined ? item.gstPercent : (prod?.gst_percent || 0),
+        selling_price: item.sellingPrice || prod?.selling_price || Math.round(item.purchaseRate * 1.15),
+        hsn: item.hsn || prod?.hsn || '19053100',
+        batch: effectiveBatch,
+        manufacturing_date: item.manufacturingDate || undefined,
+        expiry_date: item.expiryDate || undefined
+      };
+    });
+
+    const res = updatePurchase(editPurchaseId, {
+      supplier_id: editSupplierId,
+      invoice_number: editInvoiceNumber.trim(),
+      invoice_date: editInvoiceDate,
+      receiving_godown_id: editReceivingGodownId || undefined,
+      total_amount: Math.round(totalVal),
+      items: purchaseItems
+    });
+
+    if (res) {
+      alert(`Purchase #${editInvoiceNumber} successfully updated! Inventory and batch balances adjusted.`);
+      setIsEditModalOpen(false);
+      setEditPurchaseId('');
+    } else {
+      alert('Failed to update purchase.');
+    }
   };
 
   const handleSaveNewSupplier = (e?: React.FormEvent) => {
@@ -578,7 +794,7 @@ export default function AdminPurchases() {
         discount: item.discount || 0,
         free_quantity: item.freeQuantity || 0,
         mrp: item.mrp,
-        gst_percent: item.gstPercent !== undefined ? item.gstPercent : (prod?.gst_percent || 18),
+        gst_percent: item.gstPercent !== undefined ? item.gstPercent : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0),
         selling_price: item.sellingPrice || prod?.selling_price || Math.round(item.purchaseRate * 1.15),
         hsn: item.hsn || prod?.hsn || '19053100',
         batch: effectiveBatch,
@@ -1279,14 +1495,35 @@ export default function AdminPurchases() {
                           Invoice Code: <strong className="text-slate-800 font-bold">{pur.invoice_number}</strong> &bull; Date: {new Date(pur.invoice_date).toLocaleDateString('en-IN')} {isOpeningStock && <>&bull; Source: <span className="text-indigo-600 font-semibold">Manual Item Creation</span></>}
                         </span>
                       </div>
-                      <div className="text-right flex items-center gap-4">
+                      <div className="text-right flex items-center gap-3">
                         <div>
-                          <span className="text-xs text-slate-500 block uppercase font-bold">Inward Value</span>
+                          <span className="text-[10px] text-slate-500 block uppercase font-bold">Inward Value</span>
                           <span className="font-black text-slate-900 text-base">₹{pur.total_amount.toLocaleString('en-IN')}</span>
                         </div>
+
+                        <div className="flex items-center gap-1.5 ml-2 border-l border-slate-200 pl-3">
+                          <button
+                            onClick={() => handleStartEditPurchase(pur)}
+                            title="Edit Purchase Bill & Update Quantities/Rates"
+                            className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 hover:text-indigo-600 text-slate-600 cursor-pointer shadow-2xs flex items-center gap-1 text-xs font-bold transition-all"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 text-indigo-600" />
+                            <span className="hidden sm:inline">Edit</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeletePurchase(pur)}
+                            title="Delete Purchase Bill & Revert Inventory Stock"
+                            className="p-1.5 rounded-lg border border-rose-200 bg-rose-50/60 hover:bg-rose-100 text-rose-700 cursor-pointer shadow-2xs flex items-center gap-1 text-xs font-bold transition-all"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                            <span className="hidden sm:inline">Delete</span>
+                          </button>
+                        </div>
+
                         <button
                           onClick={() => toggleExpand(pur.id)}
-                          className="p-1 rounded hover:bg-slate-200 text-slate-500 cursor-pointer"
+                          className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-500 cursor-pointer ml-1"
+                          title={isExpanded ? "Collapse Details" : "Expand Details"}
                         >
                           {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                         </button>
@@ -1305,7 +1542,7 @@ export default function AdminPurchases() {
                           )}
                         </div>
                         <div className="overflow-x-auto">
-                          <table className="w-full min-w-[700px] text-left text-xs">
+                          <table className="w-full min-w-[750px] text-left text-xs">
                             <thead>
                               <tr className="border-b border-slate-200 text-xs font-bold text-slate-600 uppercase pb-1.5">
                                 <th className="pb-1.5">Product Description</th>
@@ -1313,6 +1550,7 @@ export default function AdminPurchases() {
                                 <th className="pb-1.5 text-center font-bold">Base Units</th>
                                 <th className="pb-1.5 text-center font-bold">Free Qty</th>
                                 <th className="pb-1.5 text-right">Inward Rate</th>
+                                <th className="pb-1.5 text-center">GST %</th>
                                 <th className="pb-1.5 text-right">MRP</th>
                                 <th className="pb-1.5 text-center font-mono">Batch</th>
                                 <th className="pb-1.5 text-right">Expiry Date</th>
@@ -1324,6 +1562,7 @@ export default function AdminPurchases() {
                                 const unitsPerPack = item.units_per_box_carton || prod?.units_per_box_carton || 1;
                                 const tradingUnit = item.trading_unit || prod?.trading_unit || 'Carton';
                                 const baseUnit = item.base_unit || prod?.base_unit || 'Piece';
+                                const gstPercent = item.gst_percent !== undefined ? item.gst_percent : (prod?.gst_percent || 0);
                                 return (
                                   <tr key={idx} className="text-slate-600">
                                     <td className="py-2.5 font-semibold text-slate-800">
@@ -1342,6 +1581,11 @@ export default function AdminPurchases() {
                                       {item.free_quantity ? `${item.free_quantity} ${tradingUnit}s` : '-'}
                                     </td>
                                     <td className="py-2.5 text-right font-bold text-slate-900 text-xs">₹{item.purchase_rate.toFixed(2)}</td>
+                                    <td className="py-2.5 text-center text-xs">
+                                      <span className={`px-1.5 py-0.5 rounded font-bold text-[11px] ${gstPercent > 0 ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-600'}`}>
+                                        {gstPercent}%
+                                      </span>
+                                    </td>
                                     <td className="py-2.5 text-right text-xs font-semibold text-slate-700">₹{item.mrp.toFixed(2)}</td>
                                     <td className="py-2.5 text-center font-mono font-bold text-slate-800 bg-slate-50 rounded px-2 py-0.5 text-xs">{item.batch || '—'}</td>
                                     <td className="py-2.5 text-right text-slate-600 text-xs font-medium">{item.expiry_date ? new Date(item.expiry_date).toLocaleDateString('en-IN') : '—'}</td>
@@ -1351,6 +1595,41 @@ export default function AdminPurchases() {
                             </tbody>
                           </table>
                         </div>
+
+                        {/* Calculation Summary Footer */}
+                        {(() => {
+                          const taxableTotal = (pur.items || []).reduce((acc, it) => {
+                            const prod = products.find(p => p.id === it.product_id);
+                            const meta = prod ? getProductTradeMode(prod) : null;
+                            const isPieces = meta?.tradeMode === 'PIECES';
+                            const effectiveQty = isPieces ? (it.loose_qty || it.quantity) : ((it.carton_qty || 0) + ((it.loose_qty || 0) / (meta?.packSize || 1)));
+                            return acc + (it.purchase_rate * (effectiveQty || (it.quantity / (meta?.packSize || 1))));
+                          }, 0);
+                          const totalVal = pur.total_amount;
+                          const gstAmount = Math.max(0, totalVal - taxableTotal);
+
+                          return (
+                            <div className="mt-3 pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-4 text-xs bg-slate-50/70 p-3 rounded-lg">
+                              <div className="text-slate-500 font-medium">
+                                Bill Summary Breakdown:
+                              </div>
+                              <div className="flex items-center gap-6 font-mono text-xs">
+                                <div>
+                                  <span className="text-slate-500 mr-1.5">Taxable Subtotal:</span>
+                                  <strong className="text-slate-800 font-bold">₹{taxableTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                                </div>
+                                <div>
+                                  <span className="text-slate-500 mr-1.5">GST Taxes:</span>
+                                  <strong className="text-indigo-700 font-bold">₹{gstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                                </div>
+                                <div className="text-sm">
+                                  <span className="text-slate-600 font-sans mr-1.5 font-bold">Total Inward Value:</span>
+                                  <strong className="text-slate-900 font-black">₹{totalVal.toLocaleString('en-IN')}</strong>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
@@ -2171,6 +2450,336 @@ export default function AdminPurchases() {
                   className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold shadow-md shadow-purple-900/10 transition-colors cursor-pointer text-center text-xs"
                 >
                   Save &amp; Inward Variant
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* 4. EDIT INWARD PURCHASE MODAL */}
+      {/* =================================================================== */}
+      {isEditModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl my-8 overflow-hidden animate-in fade-in zoom-in duration-200">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-500/20 border border-indigo-400/30 rounded-xl">
+                  <Edit3 className="w-5 h-5 text-indigo-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black tracking-tight">Edit Inward Purchase Bill</h3>
+                  <p className="text-xs text-slate-300 font-medium">Update bill details, quantities, rates, or GST. Inventory &amp; batches will auto-synchronize.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditModalOpen(false)}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleSaveEditedPurchase} className="p-5 space-y-5">
+              {/* Top Details Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-slate-50/80 rounded-xl border border-slate-200">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Supplier</label>
+                  <select
+                    value={editSupplierId}
+                    onChange={(e) => setEditSupplierId(e.target.value)}
+                    className="w-full border border-slate-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500 font-bold text-slate-800 bg-white"
+                  >
+                    <option value="">-- Choose Supplier --</option>
+                    {suppliers.map(s => (
+                      <option key={s.id} value={s.id}>{s.name} ({s.gstin || 'URP'})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Receiving Godown</label>
+                  <select
+                    value={editReceivingGodownId}
+                    onChange={(e) => setEditReceivingGodownId(e.target.value)}
+                    className="w-full border border-slate-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500 font-bold text-slate-800 bg-white"
+                  >
+                    {godowns.map(g => (
+                      <option key={g.id} value={g.id}>{g.name} ({g.code})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Invoice / Bill Number</label>
+                  <input
+                    type="text"
+                    value={editInvoiceNumber}
+                    onChange={(e) => setEditInvoiceNumber(e.target.value)}
+                    placeholder="e.g. GST-10254"
+                    className="w-full border border-slate-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500 font-bold text-slate-800 bg-white"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Invoice Date</label>
+                  <input
+                    type="date"
+                    value={editInvoiceDate}
+                    onChange={(e) => setEditInvoiceDate(e.target.value)}
+                    className="w-full border border-slate-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500 font-bold text-slate-800 bg-white"
+                  />
+                </div>
+              </div>
+
+              {/* Items Table */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">Purchase Bill Items</h4>
+                  <button
+                    type="button"
+                    onClick={handleAddEditItemRow}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-indigo-200"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Add Row</span>
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto border border-slate-200 rounded-xl max-h-72 overflow-y-auto">
+                  <table className="w-full min-w-[950px] text-left text-xs">
+                    <thead className="bg-slate-50 sticky top-0 z-10">
+                      <tr className="border-b border-slate-200 text-xs text-slate-600 font-bold uppercase tracking-wider">
+                        <th className="p-2.5 w-1/4">Product</th>
+                        <th className="p-2.5 text-center">Inward Quantity</th>
+                        <th className="p-2.5 text-center">Free Qty</th>
+                        <th className="p-2.5 text-right">Purchase Rate (₹)</th>
+                        <th className="p-2.5 text-center">GST %</th>
+                        <th className="p-2.5 text-right">MRP (₹)</th>
+                        <th className="p-2.5 text-center">Batch No.</th>
+                        <th className="p-2.5 text-center">Expiry Date</th>
+                        <th className="p-2.5 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {editItems.map((item, idx) => {
+                        const selectedProd = products.find(p => p.id === item.productId);
+                        const tradeInfo = selectedProd ? getProductTradeMode(selectedProd) : null;
+                        const isPiecesOnly = tradeInfo?.tradeMode === 'PIECES';
+                        const unitsPerPack = tradeInfo?.packSize || selectedProd?.units_per_box_carton || 1;
+
+                        return (
+                          <tr key={idx} className="align-middle hover:bg-slate-50/50">
+                            {/* Product */}
+                            <td className="p-2">
+                              <select
+                                value={item.productId}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  const prod = products.find(p => p.id === val);
+                                  const updated = [...editItems];
+                                  updated[idx] = {
+                                    ...updated[idx],
+                                    productId: val,
+                                    purchaseRate: prod?.purchase_price || updated[idx].purchaseRate || 0,
+                                    mrp: prod?.mrp || updated[idx].mrp || 0,
+                                    gstPercent: prod?.gst_percent !== undefined ? prod.gst_percent : 0,
+                                    sellingPrice: prod?.selling_price || 0,
+                                    hsn: prod?.hsn || ''
+                                  };
+                                  setEditItems(updated);
+                                }}
+                                className="w-full border border-slate-250 bg-white rounded p-1.5 text-xs outline-none focus:border-indigo-500 font-medium"
+                              >
+                                <option value="">-- Choose Product --</option>
+                                {products.map(p => (
+                                  <option key={p.id} value={p.id}>{p.name} [{p.brand}]</option>
+                                ))}
+                              </select>
+                            </td>
+
+                            {/* Quantity */}
+                            <td className="p-2 text-center">
+                              {isPiecesOnly ? (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  placeholder="0 Pcs"
+                                  value={item.looseQty || item.quantity || ''}
+                                  onChange={(e) => handleUpdateEditItemField(idx, 'looseQty', parseInt(e.target.value, 10) || 0)}
+                                  className="w-20 border border-indigo-200 bg-indigo-50/40 rounded p-1 text-center font-bold text-indigo-700 text-xs"
+                                />
+                              ) : (
+                                <div className="flex items-center justify-center gap-1">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="Ctns"
+                                    title="Cartons"
+                                    value={item.cartonQty || ''}
+                                    onChange={(e) => handleUpdateEditItemField(idx, 'cartonQty', parseInt(e.target.value, 10) || 0)}
+                                    className="w-14 border border-slate-250 rounded p-1 text-center font-bold text-slate-800 text-xs"
+                                  />
+                                  <span className="text-slate-400 font-bold text-xs">+</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="Pcs"
+                                    title="Loose Pieces"
+                                    value={item.looseQty || ''}
+                                    onChange={(e) => handleUpdateEditItemField(idx, 'looseQty', parseInt(e.target.value, 10) || 0)}
+                                    className="w-14 border border-indigo-200 bg-indigo-50/40 rounded p-1 text-center font-bold text-indigo-700 text-xs"
+                                  />
+                                </div>
+                              )}
+                              <span className="text-[10px] text-slate-500 block mt-0.5">Total: <strong>{item.quantity || 0} Pcs</strong></span>
+                            </td>
+
+                            {/* Free Qty */}
+                            <td className="p-2 text-center">
+                              <input
+                                type="number"
+                                min="0"
+                                placeholder="0"
+                                value={item.freeQuantity || ''}
+                                onChange={(e) => handleUpdateEditItemField(idx, 'freeQuantity', parseInt(e.target.value, 10) || 0)}
+                                className="w-14 border border-slate-200 rounded p-1 text-center font-bold text-emerald-700 text-xs"
+                              />
+                            </td>
+
+                            {/* Purchase Rate */}
+                            <td className="p-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={item.purchaseRate || ''}
+                                onChange={(e) => handleUpdateEditItemField(idx, 'purchaseRate', parseFloat(e.target.value) || 0)}
+                                className="w-20 border border-slate-200 rounded p-1 text-right font-bold text-slate-900 text-xs"
+                              />
+                            </td>
+
+                            {/* GST % */}
+                            <td className="p-2 text-center">
+                              <select
+                                value={item.gstPercent !== undefined ? item.gstPercent : 0}
+                                onChange={(e) => handleUpdateEditItemField(idx, 'gstPercent', parseFloat(e.target.value) || 0)}
+                                className="border border-slate-250 bg-white rounded p-1 text-center font-bold text-xs text-indigo-700"
+                              >
+                                <option value={0}>0%</option>
+                                <option value={5}>5%</option>
+                                <option value={12}>12%</option>
+                                <option value={18}>18%</option>
+                                <option value={28}>28%</option>
+                              </select>
+                            </td>
+
+                            {/* MRP */}
+                            <td className="p-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={item.mrp || ''}
+                                onChange={(e) => handleUpdateEditItemField(idx, 'mrp', parseFloat(e.target.value) || 0)}
+                                className="w-16 border border-slate-200 rounded p-1 text-right font-semibold text-slate-700 text-xs"
+                              />
+                            </td>
+
+                            {/* Batch No */}
+                            <td className="p-2 text-center">
+                              <input
+                                type="text"
+                                value={item.batch}
+                                onChange={(e) => handleUpdateEditItemField(idx, 'batch', e.target.value)}
+                                placeholder="Optional"
+                                className="w-24 border border-slate-200 rounded p-1 text-center font-mono text-xs"
+                              />
+                            </td>
+
+                            {/* Expiry Date */}
+                            <td className="p-2 text-center">
+                              <input
+                                type="date"
+                                value={item.expiryDate}
+                                onChange={(e) => handleUpdateEditItemField(idx, 'expiryDate', e.target.value)}
+                                className="border border-slate-200 rounded p-1 text-xs"
+                              />
+                            </td>
+
+                            {/* Delete row */}
+                            <td className="p-2 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveEditItemRow(idx)}
+                                disabled={editItems.length === 1}
+                                className="p-1 rounded text-rose-500 hover:bg-rose-50 disabled:opacity-30 cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Dynamic Calculation Breakdown */}
+              {(() => {
+                const totalWithGst = calculateEditTotalAmount();
+                const taxableTotal = editItems.reduce((acc, it) => {
+                  const prod = products.find(p => p.id === it.productId);
+                  const meta = prod ? getProductTradeMode(prod) : null;
+                  const isPieces = meta?.tradeMode === 'PIECES';
+                  const effectiveQty = isPieces ? (it.looseQty || it.quantity) : ((it.cartonQty || 0) + ((it.looseQty || 0) / (meta?.packSize || 1)));
+                  return acc + (it.purchaseRate * (effectiveQty || (it.quantity / (meta?.packSize || 1))));
+                }, 0);
+                const gstTotal = Math.max(0, totalWithGst - taxableTotal);
+
+                return (
+                  <div className="p-4 bg-gradient-to-r from-indigo-50/60 to-purple-50/60 rounded-xl border border-indigo-100 flex flex-wrap items-center justify-between gap-4">
+                    <div className="text-xs text-slate-600 font-medium">
+                      💡 <strong>Smart Re-calculation:</strong> Saving this form will safely adjust warehouse stock, batches, and stock ledger entries.
+                    </div>
+                    <div className="flex items-center gap-6 font-mono text-xs">
+                      <div>
+                        <span className="text-slate-500 mr-1">Taxable:</span>
+                        <strong className="text-slate-800">₹{taxableTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 mr-1">GST Taxes:</span>
+                        <strong className="text-indigo-700">₹{gstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                      </div>
+                      <div className="text-base">
+                        <span className="text-slate-600 font-sans mr-1.5 font-bold">Total Inward:</span>
+                        <strong className="text-slate-900 font-black">₹{Math.round(totalWithGst).toLocaleString('en-IN')}</strong>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Modal Actions */}
+              <div className="flex gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsEditModalOpen(false)}
+                  className="flex-1 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl font-bold transition-colors cursor-pointer text-center text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-md shadow-indigo-900/10 transition-colors cursor-pointer text-center text-xs flex items-center justify-center gap-2"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>Save Changes &amp; Synchronize Stock</span>
                 </button>
               </div>
             </form>

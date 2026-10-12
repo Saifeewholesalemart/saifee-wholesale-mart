@@ -45,7 +45,10 @@ export default function GSTReportsView({
       const cRate = item.rate;
       const lRate = item.loose_rate ?? (cRate / unitsPerPack);
       const returnSub = (cQty * cRate) + (lQty * lRate);
-      const gstRate = (prod?.gst_percent || 18) / 100;
+      const prodGst = (item.gst_percent !== undefined && (item as any).gst_percent !== null)
+        ? Number((item as any).gst_percent)
+        : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+      const gstRate = prodGst / 100;
       returnGstTotal += returnSub * gstRate;
     });
   });

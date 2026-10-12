@@ -14,8 +14,8 @@ export default function RoleSwitcher() {
   // We only show the active switcher on client side
   if (!currentUser) return null;
 
-  // Strict Admin Isolation: Do not render floating role switcher inside the Admin ERP portal
-  if (pathname?.startsWith('/admin')) {
+  // Strict Isolation: Do not render floating role switcher on root login landing page or inside the Admin ERP portal
+  if (pathname === '/' || pathname?.startsWith('/admin')) {
     return null;
   }
 
@@ -61,7 +61,7 @@ export default function RoleSwitcher() {
           onClick={() => setIsOpen(false)} 
         />
       )}
-      <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50 no-print">
+      <div className={`fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50 no-print ${pathname?.startsWith('/staff') ? 'hidden md:block' : ''}`}>
         <div className="relative">
           <button
             onClick={() => setIsOpen(!isOpen)}

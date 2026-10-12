@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,7 +20,7 @@ import com.saifee.reports.partyitem.domain.model.ReportSummary
 import com.saifee.reports.partyitem.util.ReportFormatters
 
 /**
- * Sticky bottom summary row composable showing aggregated totals for sales and purchases.
+ * Sticky bottom summary row composable showing aggregated totals for sales, purchases and closing inventory.
  */
 @Composable
 fun ReportStickyFooter(
@@ -56,12 +55,12 @@ fun ReportStickyFooter(
             // 2. Total Label with Record Count
             Box(
                 modifier = Modifier
-                    .width(220.dp)
+                    .width(200.dp)
                     .padding(horizontal = 6.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
                 Text(
-                    text = "TOTAL (${summary.recordCount} Parties)",
+                    text = "TOTAL (${summary.recordCount} Items)",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Black,
                     color = Color.White
@@ -71,7 +70,7 @@ fun ReportStickyFooter(
             // 3. Total Sale Quantity Column
             Box(
                 modifier = Modifier
-                    .width(125.dp)
+                    .width(115.dp)
                     .padding(horizontal = 6.dp),
                 contentAlignment = Alignment.CenterEnd
             ) {
@@ -91,7 +90,7 @@ fun ReportStickyFooter(
             // 4. Total Sale Amount Column
             Box(
                 modifier = Modifier
-                    .width(135.dp)
+                    .width(125.dp)
                     .padding(horizontal = 6.dp),
                 contentAlignment = Alignment.CenterEnd
             ) {
@@ -100,7 +99,7 @@ fun ReportStickyFooter(
                     text = totalSaleAmt,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Black,
-                    color = Color(0xFF34D399), // Bright Emerald Green
+                    color = Color(0xFF4ADE80), // Bright Green
                     textAlign = TextAlign.End
                 )
             }
@@ -108,7 +107,7 @@ fun ReportStickyFooter(
             // 5. Total Purchase Quantity Column
             Box(
                 modifier = Modifier
-                    .width(135.dp)
+                    .width(115.dp)
                     .padding(horizontal = 6.dp),
                 contentAlignment = Alignment.CenterEnd
             ) {
@@ -120,7 +119,7 @@ fun ReportStickyFooter(
                     text = totalPurchaseQty,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Black,
-                    color = Color(0xFFFDE047), // Gold accent
+                    color = Color(0xFFCBD5E1),
                     textAlign = TextAlign.End
                 )
             }
@@ -128,7 +127,7 @@ fun ReportStickyFooter(
             // 6. Total Purchase Amount Column
             Box(
                 modifier = Modifier
-                    .width(145.dp)
+                    .width(130.dp)
                     .padding(horizontal = 6.dp),
                 contentAlignment = Alignment.CenterEnd
             ) {
@@ -137,7 +136,23 @@ fun ReportStickyFooter(
                     text = totalPurchaseAmt,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Black,
-                    color = Color(0xFF60A5FA), // Bright Blue
+                    color = Color(0xFFFB923C), // Amber
+                    textAlign = TextAlign.End
+                )
+            }
+
+            // 7. Total Closing Inventory Column
+            Box(
+                modifier = Modifier
+                    .width(140.dp)
+                    .padding(horizontal = 6.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Text(
+                    text = summary.totalClosingDisplay,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Black,
+                    color = Color(0xFF93C5FD), // Soft Blue
                     textAlign = TextAlign.End
                 )
             }

@@ -7,11 +7,12 @@ enum class SortDirection {
 
 enum class SortColumnField(val label: String) {
     SR_NO("#"),
-    PARTY_NAME("PARTY NAME"),
+    PARTY_NAME("ITEM / PRODUCT"),
     SALE_QTY("SALE QUANTITY"),
     SALE_AMOUNT("SALE AMOUNT"),
     PURCHASE_QTY("PURCHASE QUANTITY"),
-    PURCHASE_AMOUNT("PURCHASE AMOUNT")
+    PURCHASE_AMOUNT("PURCHASE AMOUNT"),
+    CLOSING_INVENTORY("CLOSING INVENTORY")
 }
 
 data class SortOrder(

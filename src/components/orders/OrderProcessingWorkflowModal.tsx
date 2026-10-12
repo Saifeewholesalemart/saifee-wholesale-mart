@@ -6,7 +6,7 @@ import {
   Order, Retailer, Product, Invoice, DeliveryChallan, InventoryBatch, Payment, BatchAllocation, FifoBatchSuggestion,
   formatQuantityDisplay, formatItemQuantityDisplay, splitBaseQuantity, calculateBaseQuantity, formatUnitName, OrderItem,
   calculateItemQuantities, calculateOrderQuantities, deriveOrderChannel, formatAutoBoxQuantity, formatProductStockDisplay,
-  getProductTradeMode
+  getProductTradeMode, calculateItemAmounts
 } from '@/lib/db';
 import LastBillingRatesModal from '@/components/LastBillingRatesModal';
 import { 
@@ -187,7 +187,12 @@ export default function OrderProcessingWorkflowModal({
     setBatchAllocations(initialAllocations);
 
     // Find linked invoice to set default payment amount
-    const linkedInvoice = invoices.find(i => i.order_ref_id === order.id || i.id === order.invoice_id);
+    const linkedInvoice = invoices.find(i => 
+      i.id === order.invoice_id || 
+      i.order_ref_id === order.id || 
+      i.source_order_ids?.includes(order.id) || 
+      (order.order_number && (i.order_numbers?.includes(order.order_number) || i.source_order_numbers?.includes(order.order_number)))
+    );
     if (linkedInvoice) {
       setPaymentAmount(linkedInvoice.outstanding_amount);
     }
@@ -195,13 +200,98 @@ export default function OrderProcessingWorkflowModal({
 
   if (!isOpen || !order || !retailer) return null;
 
-  const linkedInvoice = invoices.find(i => i.order_ref_id === order.id || i.id === order.invoice_id);
+  const linkedInvoice = invoices.find(i => 
+    i.id === order.invoice_id || 
+    i.order_ref_id === order.id || 
+    i.source_order_ids?.includes(order.id) || 
+    (order.order_number && (i.order_numbers?.includes(order.order_number) || i.source_order_numbers?.includes(order.order_number)))
+  );
   const linkedChallan = deliveryChallans.find(c => c.order_id === order.id || c.id === order.challan_id);
   const channelObj = deriveOrderChannel(order);
 
   const formatINR = (val: number) => {
     return '₹' + Math.round(val).toLocaleString('en-IN');
   };
+
+  // Resilient invoice items fallback: uses linkedInvoice.items if populated, else calculates from order items
+  const invoiceDisplayItems = React.useMemo(() => {
+    if (linkedInvoice && linkedInvoice.items && linkedInvoice.items.length > 0) {
+      return linkedInvoice.items;
+    }
+    if (!order?.items || order.items.length === 0) return [];
+    return order.items.map((item, idx) => {
+      const prod = products.find(p => p.id === item.product_id);
+      const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const baseQty = item.fulfilled_qty || item.confirmed_qty || item.packed_qty || item.ordered_qty || item.base_qty || item.quantity || 0;
+      const { cartonQty, looseQty } = splitBaseQuantity(baseQty, unitsPerPack);
+      const cartonRate = item.manual_billing_rate || item.carton_rate || item.order_time_rate || item.base_price || prod?.selling_price || 0;
+      const looseRate = item.loose_rate || prod?.loose_selling_price || (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
+      const prodGst = item.gst_percent !== undefined ? item.gst_percent : (prod?.gst_percent || 0);
+      const amounts = calculateItemAmounts(
+        cartonQty,
+        looseQty,
+        cartonRate,
+        looseRate,
+        item.carton_discount || item.discount || 0,
+        item.loose_discount || 0,
+        prodGst
+      );
+      const isLocal = (retailer?.state_code || '27') === '27';
+      const cgst = isLocal ? amounts.gstAmount / 2 : 0;
+      const sgst = isLocal ? amounts.gstAmount / 2 : 0;
+      const igst = !isLocal ? amounts.gstAmount : 0;
+      return {
+        id: item.id || `inv-item-${idx}`,
+        invoice_id: linkedInvoice?.id || 'inv-current',
+        product_id: item.product_id,
+        product_name: prod?.name || (item as any).name || 'Product Item',
+        hsn: (item as any).hsn || prod?.hsn || '1905',
+        packing: (item as any).pack_size || prod?.pack_size || `${unitsPerPack} ${item.base_unit || 'Piece'}/Ctn`,
+        quantity: baseQty,
+        base_qty: baseQty,
+        carton_qty: cartonQty,
+        loose_qty: looseQty,
+        trading_unit: item.trading_unit || prod?.trading_unit || 'Carton',
+        base_unit: item.base_unit || prod?.base_unit || 'Piece',
+        units_per_trading_unit: unitsPerPack,
+        rate: cartonRate,
+        carton_rate: cartonRate,
+        loose_rate: looseRate,
+        discount: amounts.discountAmount,
+        taxable_value: amounts.taxableAmount,
+        cgst,
+        sgst,
+        igst,
+        total_amount: amounts.totalAmount,
+        batch_number: item.batch_allocations?.[0]?.batch_number || 'LOT-2026',
+        mrp: item.selected_mrp || prod?.mrp || 0
+      };
+    });
+  }, [linkedInvoice, order, products, retailer]);
+
+  const invoiceTaxable = linkedInvoice && linkedInvoice.taxable_value > 0
+    ? linkedInvoice.taxable_value
+    : invoiceDisplayItems.reduce((sum, it) => sum + (it.taxable_value || 0), 0);
+
+  const invoiceCgst = linkedInvoice && linkedInvoice.cgst > 0
+    ? linkedInvoice.cgst
+    : invoiceDisplayItems.reduce((sum, it) => sum + (it.cgst || 0), 0);
+
+  const invoiceSgst = linkedInvoice && linkedInvoice.sgst > 0
+    ? linkedInvoice.sgst
+    : invoiceDisplayItems.reduce((sum, it) => sum + (it.sgst || 0), 0);
+
+  const invoiceIgst = linkedInvoice && linkedInvoice.igst > 0
+    ? linkedInvoice.igst
+    : invoiceDisplayItems.reduce((sum, it) => sum + (it.igst || 0), 0);
+
+  const invoiceGrandTotal = linkedInvoice && linkedInvoice.grand_total > 0
+    ? linkedInvoice.grand_total
+    : Math.round(invoiceTaxable + invoiceCgst + invoiceSgst + invoiceIgst);
+
+  const invoiceOutstanding = linkedInvoice && linkedInvoice.outstanding_amount !== undefined && linkedInvoice.outstanding_amount > 0
+    ? linkedInvoice.outstanding_amount
+    : invoiceGrandTotal;
 
   const updateAllocation = (itemId: string, batch: InventoryBatch, val: number) => {
     setBatchAllocations(prev => {
@@ -782,9 +872,12 @@ export default function OrderProcessingWorkflowModal({
                         const unitRate = item.final_applied_rate || (item.order_time_rate ?? item.base_price);
                         const disc = item.carton_discount || item.discount || 0;
                         const effectiveRate = unitRate - disc;
-                        const lineSubtotal = item.total_amount ? (item.total_amount / (1 + ((prod?.gst_percent || 18) / 100))) : (effectiveRate * totalBase);
-                        const gstRate = (prod?.gst_percent || 18) / 100;
-                        const lineGst = item.gst_amount || (lineSubtotal * gstRate);
+                        const prodGstPercent = (item.gst_percent !== undefined && item.gst_percent !== null)
+                          ? Number(item.gst_percent)
+                          : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+                        const lineSubtotal = item.total_amount ? (item.total_amount / (1 + (prodGstPercent / 100))) : (effectiveRate * totalBase);
+                        const gstRate = prodGstPercent / 100;
+                        const lineGst = item.gst_amount !== undefined ? item.gst_amount : (lineSubtotal * gstRate);
                         const lineTotal = item.total_amount || (lineSubtotal + lineGst);
                         const autoOrdered = formatAutoBoxQuantity(totalBase, prod);
 
@@ -855,7 +948,7 @@ export default function OrderProcessingWorkflowModal({
                               {disc > 0 ? `₹${disc}/Pc` : '₹0'}
                             </td>
                             <td className="p-3.5 text-right text-slate-600 text-xs">
-                              {prod?.gst_percent || 18}% ({formatINR(lineGst)})
+                              {prodGstPercent}% ({formatINR(lineGst)})
                             </td>
                             <td className="p-3.5 text-right font-black text-indigo-700 text-sm">
                               {formatINR(lineTotal)}
@@ -1038,7 +1131,10 @@ export default function OrderProcessingWorkflowModal({
                       const confirmedVal = itemConfirms[item.id] !== undefined ? itemConfirms[item.id] : totalOrdered;
                       const pendingVal = Math.max(0, totalOrdered - confirmedVal);
                       const unitRate = item.final_applied_rate || (item.base_price - item.discount);
-                      const confAmt = (unitRate * confirmedVal) * (1 + (prod?.gst_percent || 18) / 100);
+                      const prodGst = (item.gst_percent !== undefined && item.gst_percent !== null)
+                        ? Number(item.gst_percent)
+                        : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+                      const confAmt = (unitRate * confirmedVal) * (1 + prodGst / 100);
 
                       return (
                         <tr key={item.id} className="hover:bg-slate-50/80">
@@ -1634,21 +1730,23 @@ export default function OrderProcessingWorkflowModal({
           {/* STAGE 5: TAX INVOICE VIEW */}
           {activeStage === 'invoice' && (
             <div className="space-y-6">
-              {linkedInvoice ? (
+              {(linkedInvoice || invoiceDisplayItems.length > 0) ? (
                 <div id="workflow-tax-invoice" className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-xs space-y-6">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
                     <div>
                       <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-xs font-black uppercase tracking-wider">
                         TAX INVOICE
                       </span>
-                      <h3 className="text-lg font-black text-slate-900 mt-1">{linkedInvoice.invoice_number}</h3>
+                      <h3 className="text-lg font-black text-slate-900 mt-1">
+                        {linkedInvoice?.invoice_number || `INV/2026-27/${order.order_number?.replace(/\D/g, '').slice(-5) || '00001'}`}
+                      </h3>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Date: {new Date(linkedInvoice.date).toLocaleDateString('en-IN', { dateStyle: 'medium' })} &bull; Place of Supply: {linkedInvoice.place_of_supply}
+                        Date: {new Date(linkedInvoice?.date || order.order_date || new Date()).toLocaleDateString('en-IN', { dateStyle: 'medium' })} &bull; Place of Supply: {linkedInvoice?.place_of_supply || (retailer.state_code === '27' ? 'Maharashtra (27)' : `Out of State (${retailer.state_code})`)}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => printInvoiceDocument('workflow-tax-invoice', `Tax Invoice - ${linkedInvoice.invoice_number}`)}
+                        onClick={() => printInvoiceDocument('workflow-tax-invoice', `Tax Invoice - ${linkedInvoice?.invoice_number || 'INV'}`)}
                         className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer no-print"
                       >
                         <Printer className="w-3.5 h-3.5" />
@@ -1701,7 +1799,7 @@ export default function OrderProcessingWorkflowModal({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {linkedInvoice.items?.map((item, idx) => {
+                        {invoiceDisplayItems.map((item, idx) => {
                           const prod = products.find(p => p.id === item.product_id);
                           const itemMrp = item.mrp || prod?.mrp || 0;
                           return (
@@ -1709,36 +1807,36 @@ export default function OrderProcessingWorkflowModal({
                               <td className="p-3 text-slate-400">{idx + 1}</td>
                               <td className="p-3">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-bold text-slate-800 block">{prod?.name || 'Item'}</span>
+                                  <span className="font-bold text-slate-800 block">{item.product_name || prod?.name || 'Product'}</span>
                                   <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-black bg-emerald-50 text-emerald-800 border border-emerald-300">
                                     MRP ₹{itemMrp}
                                   </span>
                                 </div>
-                                <span className="text-xs text-slate-500">{item.packing}</span>
+                                <span className="text-xs text-slate-500">{item.packing || prod?.pack_size}</span>
                               </td>
-                              <td className="p-3 text-center text-slate-600 font-medium">{item.hsn}</td>
+                              <td className="p-3 text-center text-slate-600 font-medium">{item.hsn || prod?.hsn || '1905'}</td>
                               <td className="p-3 text-center">
                                 <span className="px-1.5 py-0.5 bg-slate-100 rounded text-xs font-bold text-slate-700">
-                                  {item.batch_number || 'BCH-2026-A1'}
+                                  {item.batch_number || 'LOT-2026'}
                                 </span>
                               </td>
                               <td className="p-3 text-center font-bold text-slate-800">
                                 ₹{itemMrp.toFixed(2)}
                               </td>
                               <td className="p-3 text-center font-bold text-slate-800">
-                                {formatQuantityDisplay(item.base_qty || item.quantity, item.units_per_box_carton || prod?.units_per_box_carton, item.trading_unit, item.base_unit || prod?.base_unit)}
+                                {formatQuantityDisplay(item.base_qty || item.quantity, (item as any).units_per_trading_unit || (item as any).units_per_box_carton || prod?.units_per_box_carton, item.trading_unit, item.base_unit || prod?.base_unit)}
                               </td>
                               <td className="p-3 text-right font-medium text-slate-700">
                                 ₹{item.rate.toFixed(2)}
                               </td>
                               <td className="p-3 text-right text-amber-600 font-bold">
-                                {item.discount > 0 ? `₹${item.discount}` : '-'}
+                                {item.discount > 0 ? `₹${item.discount.toFixed(2)}` : '-'}
                               </td>
                               <td className="p-3 text-right font-semibold text-slate-800">
                                 ₹{item.taxable_value.toFixed(2)}
                               </td>
                               <td className="p-3 text-right text-slate-600 font-medium">
-                                ₹{(item.cgst + item.sgst + item.igst).toFixed(2)}
+                                ₹{((item.cgst || 0) + (item.sgst || 0) + (item.igst || 0)).toFixed(2)}
                               </td>
                               <td className="p-3 text-right font-extrabold text-indigo-700">
                                 ₹{item.total_amount.toFixed(2)}
@@ -1755,33 +1853,33 @@ export default function OrderProcessingWorkflowModal({
                     <div className="w-full max-w-sm space-y-2 text-xs">
                       <div className="flex justify-between text-slate-600">
                         <span>Taxable Value:</span>
-                        <span className="font-bold text-slate-800">₹{linkedInvoice.taxable_value.toFixed(2)}</span>
+                        <span className="font-bold text-slate-800">₹{invoiceTaxable.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between text-slate-600">
                         <span>CGST:</span>
-                        <span>₹{linkedInvoice.cgst.toFixed(2)}</span>
+                        <span>₹{invoiceCgst.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between text-slate-600">
                         <span>SGST:</span>
-                        <span>₹{linkedInvoice.sgst.toFixed(2)}</span>
+                        <span>₹{invoiceSgst.toFixed(2)}</span>
                       </div>
-                      {linkedInvoice.igst > 0 && (
+                      {invoiceIgst > 0 && (
                         <div className="flex justify-between text-slate-600">
                           <span>IGST:</span>
-                          <span>₹{linkedInvoice.igst.toFixed(2)}</span>
+                          <span>₹{invoiceIgst.toFixed(2)}</span>
                         </div>
                       )}
                       <div className="flex justify-between text-base font-black text-slate-900 border-t border-slate-200 pt-2">
                         <span>Grand Total:</span>
-                        <span className="text-indigo-700">{formatINR(linkedInvoice.grand_total)}</span>
+                        <span className="text-indigo-700">{formatINR(invoiceGrandTotal)}</span>
                       </div>
                       <div className="flex justify-between text-xs font-semibold text-emerald-600">
                         <span>Amount Paid:</span>
-                        <span>{formatINR(linkedInvoice.paid_amount)}</span>
+                        <span>{formatINR(linkedInvoice?.paid_amount || 0)}</span>
                       </div>
                       <div className="flex justify-between text-xs font-bold text-red-600 border-t border-slate-100 pt-1">
                         <span>Remaining Balance:</span>
-                        <span>{formatINR(linkedInvoice.outstanding_amount)}</span>
+                        <span>{formatINR(invoiceOutstanding)}</span>
                       </div>
                     </div>
                   </div>
@@ -2496,7 +2594,9 @@ export default function OrderProcessingWorkflowModal({
             {(() => {
               const totalBase = Number(quantityEditTarget.pieceQty ?? quantityEditTarget.cartonQty ?? 0);
               const unitRate = quantityEditTarget.item.final_applied_rate || (quantityEditTarget.item.base_price - (quantityEditTarget.item.discount || 0));
-              const gstPercent = quantityEditTarget.product?.gst_percent || 18;
+              const gstPercent = (quantityEditTarget.item.gst_percent !== undefined && quantityEditTarget.item.gst_percent !== null)
+                ? Number(quantityEditTarget.item.gst_percent)
+                : ((quantityEditTarget.product?.gst_percent !== undefined && quantityEditTarget.product?.gst_percent !== null) ? Number(quantityEditTarget.product.gst_percent) : 0);
               const taxable = totalBase * unitRate;
               const estValue = taxable * (1 + gstPercent / 100);
 

@@ -43,6 +43,7 @@ export interface ReportFilterState {
   batchNumber?: string;
   expiryStatus?: 'All' | 'valid' | '30d' | '60d' | '90d' | 'expired';
   godown?: string;
+  channel?: string;
   searchQuery?: string;
 }
 
@@ -61,6 +62,7 @@ export interface DbState {
   inventory: Inventory[];
   ledger: StockLedgerEntry[];
   suppliers: Supplier[];
+  godowns?: any[];
   categories?: any[];
 }
 
@@ -2029,7 +2031,10 @@ export function getRetailerOutstandingAging(filters: ReportFilterState, db: DbSt
             const cRate = item.rate;
             const lRate = item.loose_rate ?? (cRate / unitsPerPack);
             const returnSub = (cQty * cRate) + (lQty * lRate);
-            const gst = returnSub * ((prod?.gst_percent || 18) / 100);
+            const prodGst = (item.gst_percent !== undefined && (item as any).gst_percent !== null)
+              ? Number((item as any).gst_percent)
+              : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+            const gst = returnSub * (prodGst / 100);
             totalCreditNotes += returnSub + gst;
           });
         }
@@ -2610,22 +2615,38 @@ export interface PurchaseSummaryRow {
 export function getPurchaseSummary(filters: ReportFilterState, db: DbState, user: UserContext): PurchaseSummaryRow[] {
   const f = applyRbacFilters(filters, user);
   const dateRange = getDateRangeFromPreset(f.datePreset, f.customStartDate, f.customEndDate);
+  const selectedPartyId = f.retailerId || (f as any).partyId || (f as any).supplierId;
+  const isPartyFiltered = !!(selectedPartyId && selectedPartyId !== 'all');
 
-  return db.purchases
-    .filter(p => isDateInRange(p.invoice_date, dateRange))
+  return (db.purchases || [])
+    .filter(p => {
+      if (p.status === 'Draft' || (p.status as string) === 'Cancelled') return false;
+      if (!isDateInRange(p.invoice_date || p.created_at || '', dateRange)) return false;
+      if (f.companyId && f.companyId !== 'all') {
+        const biz = p.business_id || 'biz-saifee';
+        if (biz !== f.companyId) return false;
+      }
+      if (f.godown && f.godown !== 'all') {
+        const purGodown = p.receiving_godown_id || 'Main Godown';
+        if (!isGodownMatch(purGodown, f.godown, db.godowns)) return false;
+      }
+      if (isPartyFiltered && !isPartyMatchingPurchase(p.supplier_id, selectedPartyId, db.suppliers)) return false;
+      return true;
+    })
     .map(p => {
-      const supp = db.suppliers.find(s => s.id === p.supplier_id);
+      const supp = (db.suppliers || []).find(s => s.id === p.supplier_id || s.name.toLowerCase() === p.supplier_id.toLowerCase());
+      const supplierName = supp?.name || (p as any).supplier_name || p.supplier_id || 'Supplier';
       let totalQty = 0;
       let totalDiscount = 0;
       let purchaseValue = 0;
       let totalGst = 0;
 
       const matchingItems = (p.items || []).filter(i => {
-        const prod = db.products.find(pr => pr.id === i.product_id);
+        const prod = (db.products || []).find(pr => pr.id === i.product_id);
         if (!prod) return false;
-        if (f.companyId && prod.company_id !== f.companyId) return false;
-        if (f.category && prod.category !== f.category) return false;
-        if (f.productId && prod.id !== f.productId) return false;
+        if (f.companyId && f.companyId !== 'all' && prod.company_id !== f.companyId) return false;
+        if (f.category && f.category !== 'all' && prod.category !== f.category) return false;
+        if (f.productId && f.productId !== 'all' && prod.id !== f.productId) return false;
         return true;
       });
 
@@ -2636,25 +2657,28 @@ export function getPurchaseSummary(filters: ReportFilterState, db: DbState, user
       const itemsToCount = (f.companyId || f.category || f.productId) ? matchingItems : (p.items || []);
 
       itemsToCount.forEach(i => {
-        const prod = db.products.find(pr => pr.id === i.product_id);
+        const prod = (db.products || []).find(pr => pr.id === i.product_id);
         const unitsPerPack = i.units_per_box_carton || i.units_per_trading_unit || prod?.units_per_box_carton || 1;
         const cQty = i.carton_qty !== undefined ? i.carton_qty : Math.floor(i.quantity / unitsPerPack);
         const lQty = i.loose_qty !== undefined ? i.loose_qty : (i.quantity % unitsPerPack);
-        const effectiveCartons = cQty + (lQty / unitsPerPack);
-        const freeCartons = i.free_quantity ? Number((i.free_quantity / unitsPerPack).toFixed(2)) : 0;
+        const effectiveCartons = unitsPerPack > 1 ? (cQty + (lQty / unitsPerPack)) : (cQty > 0 ? cQty : i.quantity);
+        const freeCartons = i.free_quantity ? (unitsPerPack > 1 ? Number((i.free_quantity / unitsPerPack).toFixed(2)) : i.free_quantity) : 0;
 
         totalQty += Number((effectiveCartons + freeCartons).toFixed(2));
+        const purchaseRate = i.purchase_rate || i.carton_rate || prod?.purchase_price || 0;
         const lineDiscount = (i.discount || 0) * effectiveCartons;
         totalDiscount += lineDiscount;
-        const lineVal = Math.max(0, (i.purchase_rate * effectiveCartons) - lineDiscount);
-        purchaseValue += lineVal;
-        totalGst += lineVal * ((i.gst_percent || 0) / 100);
+        const lineCost = (i as any).taxable_value !== undefined ? (i as any).taxable_value : Math.max(0, (purchaseRate * effectiveCartons) - lineDiscount);
+        purchaseValue += lineCost;
+        const gstPct = i.gst_percent !== undefined ? i.gst_percent : (prod?.gst_percent !== undefined ? prod.gst_percent : 0);
+        const lineGst = ((i as any).cgst || 0) + ((i as any).sgst || 0) + ((i as any).igst || 0) || Math.round(lineCost * (gstPct / 100) * 100) / 100;
+        totalGst += lineGst;
       });
 
       return {
         purchaseId: p.id,
-        purchaseDate: p.invoice_date,
-        supplierName: supp?.name || 'Supplier',
+        purchaseDate: p.invoice_date || p.created_at || '',
+        supplierName,
         invoiceNumber: p.invoice_number,
         itemCount: itemsToCount.length,
         totalQuantity: totalQty,
@@ -2662,7 +2686,7 @@ export function getPurchaseSummary(filters: ReportFilterState, db: DbState, user
         discount: Math.round(totalDiscount),
         gst: Math.round(totalGst),
         totalPurchaseAmount: Math.round(purchaseValue + totalGst),
-        godown: 'Main Godown',
+        godown: p.receiving_godown_id || 'Main Godown',
         status: p.status
       };
     })
@@ -2689,41 +2713,57 @@ export interface PurchaseRateHistoryRow {
 export function getPurchaseRateHistory(filters: ReportFilterState, db: DbState, user: UserContext): PurchaseRateHistoryRow[] {
   const f = applyRbacFilters(filters, user);
   const dateRange = getDateRangeFromPreset(f.datePreset, f.customStartDate, f.customEndDate);
+  const selectedPartyId = f.retailerId || (f as any).partyId || (f as any).supplierId;
+  const isPartyFiltered = !!(selectedPartyId && selectedPartyId !== 'all');
 
   const rows: PurchaseRateHistoryRow[] = [];
 
-  db.purchases.forEach(p => {
-    if (!isDateInRange(p.invoice_date, dateRange)) return;
-    const supp = db.suppliers.find(s => s.id === p.supplier_id);
+  (db.purchases || []).forEach(p => {
+    if (p.status === 'Draft' || (p.status as string) === 'Cancelled') return;
+    if (!isDateInRange(p.invoice_date || p.created_at || '', dateRange)) return;
+    if (f.companyId && f.companyId !== 'all') {
+      const biz = p.business_id || 'biz-saifee';
+      if (biz !== f.companyId) return;
+    }
+    if (f.godown && f.godown !== 'all') {
+      const purGodown = p.receiving_godown_id || 'Main Godown';
+      if (!isGodownMatch(purGodown, f.godown, db.godowns)) return;
+    }
+    if (isPartyFiltered && !isPartyMatchingPurchase(p.supplier_id, selectedPartyId, db.suppliers)) return;
+
+    const supp = (db.suppliers || []).find(s => s.id === p.supplier_id || s.name.toLowerCase() === p.supplier_id.toLowerCase());
+    const supplierName = supp?.name || (p as any).supplier_name || p.supplier_id || 'Supplier';
 
     p.items?.forEach(item => {
-      const prod = db.products.find(pr => pr.id === item.product_id);
+      const prod = (db.products || []).find(pr => pr.id === item.product_id);
       if (!prod) return;
-      if (f.companyId && prod.company_id !== f.companyId) return;
-      if (f.category && prod.category !== f.category) return;
-      if (f.productId && prod.id !== f.productId) return;
+      if (f.companyId && f.companyId !== 'all' && prod.company_id !== f.companyId) return;
+      if (f.category && f.category !== 'all' && prod.category !== f.category) return;
+      if (f.productId && f.productId !== 'all' && prod.id !== f.productId) return;
 
       const unitsPerPack = item.units_per_box_carton || item.units_per_trading_unit || prod.units_per_box_carton || 1;
       const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor(item.quantity / unitsPerPack);
       const lQty = item.loose_qty !== undefined ? item.loose_qty : (item.quantity % unitsPerPack);
       const cartonQty = Number((cQty + (lQty / unitsPerPack)).toFixed(2));
-      const landedCost = item.purchase_rate + (item.purchase_rate * (item.gst_percent / 100));
+      const purchaseRate = item.purchase_rate || item.carton_rate || prod.purchase_price || 0;
+      const gstPct = item.gst_percent !== undefined ? item.gst_percent : (prod.gst_percent !== undefined ? prod.gst_percent : 0);
+      const landedCost = purchaseRate + (purchaseRate * (gstPct / 100));
 
       rows.push({
         productId: prod.id,
         productName: prod.name,
         category: prod.category || 'General',
-        variantPacking: prod.pack_size,
+        variantPacking: prod.pack_size || 'Standard',
         tradingUnit: formatTradingUnit(prod.trading_unit),
-        purchaseDate: p.invoice_date,
-        supplierName: supp?.name || 'Supplier',
+        purchaseDate: p.invoice_date || p.created_at || '',
+        supplierName,
         invoiceNumber: p.invoice_number,
         batchNumber: item.batch || '—',
         expiryDate: item.expiry_date || '—',
         quantity: cartonQty,
-        purchaseRate: item.purchase_rate,
+        purchaseRate,
         landedCost: Number(landedCost.toFixed(2)),
-        godown: 'Main Godown'
+        godown: p.receiving_godown_id || 'Main Godown'
       });
     });
   });
@@ -3345,51 +3385,236 @@ export function getBatchExpiryReport(filters: ReportFilterState, db: DbState, us
 }
 
 // ----------------------------------------------------
-// PARTY REPORT BY ITEM (SALES & PURCHASES PER PARTY)
+// PARTY REPORT BY ITEM (RETAILER-WISE SALES & PURCHASE SUMMARY)
 // ----------------------------------------------------
 
-export interface PartyReportItem {
+export interface PartyReportSalesTransaction {
   id: string;
-  srNo: number;
+  invoiceId: string;
+  invoiceNumber: string;
+  orderNumber?: string;
+  orderId?: string;
+  date: string;
+  retailerId: string;
+  retailerName: string;
   partyName: string;
-  partyType: 'SUPPLIER' | 'RETAILER' | 'BOTH';
-  saleQtyBase: number;
-  saleQtyLoose: number;
-  saleAmount: number;
-  purchaseQtyBase: number;
-  purchaseQtyLoose: number;
-  purchaseAmount: number;
+  productId: string;
+  productName: string;
+  brand?: string;
+  variant?: string;
+  packSize?: string;
+  tradingUnit?: string;
+  quantity: number; // in base units / pieces
+  cartonQty?: number;
+  looseQty?: number;
+  rate: number; // billing rate
+  discount: number;
+  taxableValue: number;
+  gstPercent?: number;
+  gstAmount: number;
+  finalAmount: number; // line total
+  paymentMode?: string;
+  salesperson?: string;
+  channel?: string;
+  godown?: string;
+  status?: string;
 }
 
-export interface PartyReportItemRow {
+export interface PartyReportPurchaseTransaction {
   id: string;
+  purchaseId: string;
+  purchaseNumber: string;
+  date: string;
+  supplierId: string;
+  supplierName: string;
+  partyName: string;
+  productId: string;
+  productName: string;
+  brand?: string;
+  variant?: string;
+  packSize?: string;
+  tradingUnit?: string;
+  quantity: number; // in base units / pieces
+  cartonQty?: number;
+  looseQty?: number;
+  purchaseRate: number;
+  discount: number;
+  gstPercent?: number;
+  gstAmount: number;
+  purchaseAmount: number; // line total
+  godown?: string;
+  status?: string;
+}
+
+export interface PartyReportPartyRow {
+  id: string; // party_id (retailer_id or supplier_id)
+  partyId: string;
+  retailerId: string;
   srNo: number;
   partyName: string;
-  partyType: 'Customer' | 'Supplier' | 'Both';
-  saleQtyBase: number;
+  ownerName?: string;
+  retailerCode?: string;
+  mobile?: string;
+  phone?: string;
+  city?: string;
+  gstin?: string;
+  address?: string;
+  partyType: 'Retailer' | 'Supplier' | 'Both';
+  companyId?: string;
+  companyName?: string;
+
+  // 1. Sales Metrics (actual finalized sales in date range matching all filters)
+  saleQty: number; // total units / pieces sold
+  saleQtyCartons: number;
   saleQtyLoose: number;
   saleQtyDisplay: string;
-  saleAmount: number;
-  purchaseQtyBase: number;
+  grossSaleAmount: number;
+  saleDiscount: number;
+  saleGst: number;
+  saleReturnAmount: number;
+  netSaleAmount: number;
+  saleAmount: number; // Invoiced sales value (net of returns, or actual billed)
+  invoicesCount: number;
+  avgBillingRate: number; // saleAmount / saleQty
+
+  // 2. Purchase Metrics (actual finalized purchases in date range matching all filters)
+  purchaseQty: number; // total units / pieces purchased
+  purchaseQtyCartons: number;
   purchaseQtyLoose: number;
   purchaseQtyDisplay: string;
-  purchaseAmount: number;
+  grossPurchaseAmount: number;
+  purchaseDiscount: number;
+  purchaseGst: number;
+  purchaseReturnAmount: number;
+  netPurchaseAmount: number;
+  purchaseAmount: number; // Purchase value
+  billsCount: number;
+  purchaseBillsCount: number;
+  avgPurchaseRate: number; // purchaseAmount / purchaseQty
+
+  // Compatibility aliases
+  productName?: string;
+  totalSaleQtyPieces?: number;
+  totalPurchaseQtyPieces?: number;
+  totalSaleQtyBase?: number;
+  totalPurchaseQtyBase?: number;
+  closingInventoryDisplay?: string;
+  totalClosingPhysicalPieces?: number;
+
+  // Drilldown transaction arrays
+  salesTransactions: PartyReportSalesTransaction[];
+  purchaseTransactions: PartyReportPurchaseTransaction[];
+  
+  // Product-wise breakdown for this party
+  productBreakdown: {
+    productId: string;
+    productName: string;
+    brand?: string;
+    variant?: string;
+    packSize?: string;
+    tradingUnit?: string;
+    saleQty: number;
+    saleAmount: number;
+    avgRate: number;
+    purchaseQty: number;
+    purchaseAmount: number;
+  }[];
 }
 
+// Backward compatibility type alias
+export type PartyReportItemRow = PartyReportPartyRow;
+
 export interface PartyItemReportSummary {
-  totalSaleQtyBase: number;
+  recordCount: number; // Total number of active parties displayed
+  totalSaleQty: number;
+  totalSaleQtyCartons: number;
   totalSaleQtyLoose: number;
+  totalSaleQtyDisplay: string;
+  totalGrossSales: number;
+  totalSalesReturn: number;
+  totalNetSales: number;
+  totalSaleGst: number;
+  totalSaleDiscount: number;
   totalSaleAmount: number;
-  totalPurchaseQtyBase: number;
+  totalInvoicesCount: number;
+
+  totalPurchaseQty: number;
+  totalPurchaseQtyCartons: number;
   totalPurchaseQtyLoose: number;
+  totalPurchaseQtyDisplay: string;
+  totalGrossPurchases: number;
+  totalPurchaseReturn: number;
+  totalNetPurchases: number;
+  totalPurchaseGst: number;
+  totalPurchaseDiscount: number;
   totalPurchaseAmount: number;
-  recordCount: number;
+  totalPurchaseBillsCount: number;
+
+  // Compatibility fields
+  totalSaleQtyPieces?: number;
+  totalSaleQtyBase?: number;
+  totalGrossSaleAmount?: number;
+  totalSaleGstAmount?: number;
+  totalPurchaseQtyPieces?: number;
+  totalPurchaseQtyBase?: number;
+  totalClosingDisplay?: string;
+
+  // Active item info if an item filter is selected
+  selectedProduct?: {
+    id: string;
+    name: string;
+    brand: string;
+    packSize: string;
+    tradingUnit: string;
+    mrp: number;
+    sellingPrice: number;
+    purchasePrice: number;
+    gstPercent: number;
+    hsn: string;
+    category: string;
+  };
+}
+
+export function formatUnitQuantity(
+  baseQty: number,
+  looseQty: number,
+  tradingUnit: string = 'Box',
+  baseUnit: string = 'Piece',
+  unitsPerPack: number = 1
+): string {
+  const getPlural = (count: number, unit: string) => {
+    const u = (unit || 'Box').trim();
+    if (count === 1) return `1 ${u}`;
+    if (u.toLowerCase() === 'box') return `${count} Boxes`;
+    if (u.toLowerCase() === 'case') return `${count} Cases`;
+    if (u.toLowerCase() === 'carton') return `${count} Cartons`;
+    if (u.toLowerCase() === 'bag') return `${count} Bags`;
+    if (u.toLowerCase() === 'tin') return `${count} Tins`;
+    if (u.toLowerCase() === 'dozen') return `${count} Dozens`;
+    if (u.toLowerCase() === 'piece' || u.toLowerCase() === 'packet' || u.toLowerCase() === 'bottle' || u.toLowerCase() === 'pouch' || u.toLowerCase() === 'strip') {
+      return `${count} ${u}s`;
+    }
+    if (u.endsWith('s') || u.endsWith('S')) return `${count} ${u}`;
+    return `${count} ${u}s`;
+  };
+
+  if (baseQty === 0 && looseQty === 0) {
+    return `0 ${tradingUnit.toLowerCase() === 'box' ? 'Boxes' : (tradingUnit.endsWith('s') ? tradingUnit : `${tradingUnit}s`)}`;
+  }
+  if (baseQty > 0 && looseQty > 0) {
+    return `${getPlural(baseQty, tradingUnit)} + ${getPlural(looseQty, baseUnit)}`;
+  }
+  if (baseQty > 0) {
+    return getPlural(baseQty, tradingUnit);
+  }
+  return getPlural(looseQty, baseUnit);
 }
 
 export function formatQuantity(base: number, loose: number): string {
   if (base === 0 && loose === 0) return '0';
-  if (loose > 0) return `${base} + ${loose}`;
-  return `${base}`;
+  if (base > 0 && loose > 0) return `${base} + ${loose}`;
+  if (base > 0) return `${base}`;
+  return `${loose}`;
 }
 
 export function formatCurrency(amount: number): string {
@@ -3404,258 +3629,1568 @@ export function formatDualQuantity(baseQty: number, looseQty: number): string {
   return formatQuantity(baseQty, looseQty);
 }
 
+export function isGodownMatch(recordGodownRef?: string, filterGodown?: string, godowns?: any[]): boolean {
+  if (!filterGodown || filterGodown === 'all') return true;
+  if (!recordGodownRef) return false;
+  
+  const recRef = recordGodownRef.trim().toLowerCase();
+  const filterRef = filterGodown.trim().toLowerCase();
+  
+  if (recRef === filterRef) return true;
+  if (recRef.includes(filterRef) || filterRef.includes(recRef)) return true;
+  
+  if (godowns && godowns.length > 0) {
+    const matchedGodown = godowns.find(g => 
+      (g.id && g.id.toLowerCase() === recRef) ||
+      (g.name && g.name.toLowerCase() === recRef) ||
+      (g.code && g.code.toLowerCase() === recRef)
+    );
+    if (matchedGodown) {
+      if (
+        (matchedGodown.id && matchedGodown.id.toLowerCase() === filterRef) ||
+        (matchedGodown.name && matchedGodown.name.toLowerCase() === filterRef) ||
+        (matchedGodown.code && matchedGodown.code.toLowerCase() === filterRef)
+      ) {
+        return true;
+      }
+    }
+
+    const filterMatchedGodown = godowns.find(g => 
+      (g.id && g.id.toLowerCase() === filterRef) ||
+      (g.name && g.name.toLowerCase() === filterRef) ||
+      (g.code && g.code.toLowerCase() === filterRef)
+    );
+    if (filterMatchedGodown) {
+      if (
+        (filterMatchedGodown.id && filterMatchedGodown.id.toLowerCase() === recRef) ||
+        (filterMatchedGodown.name && filterMatchedGodown.name.toLowerCase() === recRef) ||
+        (filterMatchedGodown.code && filterMatchedGodown.code.toLowerCase() === recRef)
+      ) {
+        return true;
+      }
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Helper to match an invoice's retailer against the active party filter.
+ */
+export function isPartyMatchingInvoice(
+  invRetailerId?: string, 
+  filterPartyId?: string, 
+  retailers?: Retailer[]
+): boolean {
+  if (!filterPartyId || filterPartyId === 'all') return true;
+  if (!invRetailerId) return false;
+  if (invRetailerId === filterPartyId) return true;
+
+  if (retailers && retailers.length > 0) {
+    const r1 = retailers.find(r => r.id === invRetailerId || r.retailer_code === invRetailerId || r.shop_name?.toLowerCase() === invRetailerId.toLowerCase());
+    const r2 = retailers.find(r => r.id === filterPartyId || r.retailer_code === filterPartyId || r.shop_name?.toLowerCase() === filterPartyId.toLowerCase());
+    
+    if (r1 && (r1.id === filterPartyId || r1.retailer_code === filterPartyId || r1.shop_name?.toLowerCase() === filterPartyId.toLowerCase())) {
+      return true;
+    }
+    if (r2 && (r2.id === invRetailerId || r2.retailer_code === invRetailerId || r2.shop_name?.toLowerCase() === invRetailerId.toLowerCase())) {
+      return true;
+    }
+  }
+
+  return invRetailerId.toLowerCase() === filterPartyId.toLowerCase();
+}
+
+/**
+ * Helper to match a purchase's supplier against the active party filter.
+ */
+export function isPartyMatchingPurchase(
+  purSupplierId?: string, 
+  filterPartyId?: string, 
+  suppliers?: Supplier[]
+): boolean {
+  if (!filterPartyId || filterPartyId === 'all') return true;
+  if (!purSupplierId) return false;
+  if (purSupplierId === filterPartyId) return true;
+
+  if (suppliers && suppliers.length > 0) {
+    const s1 = suppliers.find(s => s.id === purSupplierId || s.name.toLowerCase() === purSupplierId.toLowerCase());
+    const s2 = suppliers.find(s => s.id === filterPartyId || s.name.toLowerCase() === filterPartyId.toLowerCase());
+    
+    if (s1 && (s1.id === filterPartyId || s1.name.toLowerCase() === filterPartyId.toLowerCase())) {
+      return true;
+    }
+    if (s2 && (s2.id === purSupplierId || s2.name.toLowerCase() === purSupplierId.toLowerCase())) {
+      return true;
+    }
+  }
+
+  return purSupplierId.toLowerCase() === filterPartyId.toLowerCase();
+}
+
+/**
+ * Main Aggregation Function for "Party Report by Item"
+ * Aggregates actual sales and purchase transactions grouped by Retailer / Party.
+ * Respects all filters: datePreset/custom dates, company, godown, category, item/product, variant, retailer, salesperson, channel, search query.
+ */
 export function getPartyItemReport(
   filters: ReportFilterState,
   db: DbState,
   userContext: UserContext
-): { rows: PartyReportItemRow[]; summary: PartyItemReportSummary } {
+): { rows: PartyReportPartyRow[]; summary: PartyItemReportSummary } {
   const f = applyRbacFilters(filters, userContext);
   const dateRange = getDateRangeFromPreset(f.datePreset, f.customStartDate, f.customEndDate);
 
-  const partyMap = new Map<string, {
-    partyName: string;
-    partyType: 'Customer' | 'Supplier' | 'Both';
-    saleQtyBase: number;
-    saleQtyLoose: number;
-    saleAmount: number;
-    purchaseQtyBase: number;
-    purchaseQtyLoose: number;
-    purchaseAmount: number;
-  }>();
+  // Lookup Maps
+  const orderMap = new Map<string, Order>();
+  (db.orders || []).forEach(o => {
+    orderMap.set(o.id, o);
+    if (o.order_number) orderMap.set(o.order_number, o);
+  });
 
-  // 1. Initialize all registered Retailers (Customers)
+  const retailerMap = new Map<string, Retailer>();
   (db.retailers || []).forEach(r => {
-    if (r.active === false) return;
-    const partyName = r.shop_name 
-      ? `${r.shop_name}${r.owner_name ? ` (${r.owner_name})` : ''}`
-      : r.owner_name || r.retailer_code || 'Retailer';
+    retailerMap.set(r.id, r);
+    if (r.retailer_code) retailerMap.set(r.retailer_code, r);
+  });
 
-    partyMap.set(r.id, {
-      partyName,
-      partyType: 'Customer',
-      saleQtyBase: 0,
-      saleQtyLoose: 0,
-      saleAmount: 0,
-      purchaseQtyBase: 0,
-      purchaseQtyLoose: 0,
-      purchaseAmount: 0
+  const supplierMap = new Map<string, Supplier>();
+  (db.suppliers || []).forEach(s => {
+    supplierMap.set(s.id, s);
+    if (s.name) supplierMap.set(s.name, s);
+  });
+
+  const productMap = new Map<string, Product>();
+  (db.products || []).forEach(p => {
+    productMap.set(p.id, p);
+    if (p.product_code) productMap.set(p.product_code, p);
+  });
+
+  const companyMap = new Map<string, Company>();
+  (db.companies || []).forEach(c => {
+    companyMap.set(c.id, c);
+  });
+
+  // Selected Product Information (if item filter is active)
+  let selectedProductInfo: PartyItemReportSummary['selectedProduct'] | undefined = undefined;
+  if (f.productId && f.productId !== 'all') {
+    const prod = productMap.get(f.productId);
+    if (prod) {
+      selectedProductInfo = {
+        id: prod.id,
+        name: prod.name,
+        brand: prod.brand || '',
+        packSize: prod.pack_size || prod.packing_display || '',
+        tradingUnit: prod.trading_unit || 'Box',
+        mrp: prod.mrp || 0,
+        sellingPrice: prod.selling_price || 0,
+        purchasePrice: prod.purchase_price || 0,
+        gstPercent: (prod.gst_percent !== undefined && prod.gst_percent !== null) ? Number(prod.gst_percent) : 0,
+        hsn: prod.hsn || '',
+        category: prod.category || ''
+      };
+    }
+  }
+
+  // Identify party filter mode
+  const selectedPartyId = f.retailerId || (f as any).partyId || (f as any).supplierId;
+  const isPartyFiltered = !!(selectedPartyId && selectedPartyId !== 'all');
+
+  // Party Accumulator Structure
+  interface PartyAccumulator {
+    partyId: string;
+    retailerId: string;
+    partyName: string;
+    ownerName?: string;
+    retailerCode?: string;
+    mobile?: string;
+    phone?: string;
+    city?: string;
+    gstin?: string;
+    address?: string;
+    partyType: 'Retailer' | 'Supplier' | 'Both';
+    companyId?: string;
+    companyName?: string;
+
+    saleQty: number;
+    saleQtyCartons: number;
+    saleQtyLoose: number;
+    grossSaleAmount: number;
+    saleDiscount: number;
+    saleGst: number;
+    saleReturnAmount: number;
+    invoicesSet: Set<string>;
+
+    purchaseQty: number;
+    purchaseQtyCartons: number;
+    purchaseQtyLoose: number;
+    grossPurchaseAmount: number;
+    purchaseDiscount: number;
+    purchaseGst: number;
+    purchaseReturnAmount: number;
+    purchaseBillsSet: Set<string>;
+
+    salesTransactions: PartyReportSalesTransaction[];
+    purchaseTransactions: PartyReportPurchaseTransaction[];
+    productBreakdownMap: Map<string, {
+      productId: string;
+      productName: string;
+      brand?: string;
+      variant?: string;
+      packSize?: string;
+      tradingUnit?: string;
+      saleQty: number;
+      saleAmount: number;
+      avgRate: number;
+      purchaseQty: number;
+      purchaseAmount: number;
+    }>;
+  }
+
+  const partyAccumulators = new Map<string, PartyAccumulator>();
+
+  // Helper to get or create party accumulator
+  const getOrCreateParty = (
+    partyId: string,
+    type: 'Retailer' | 'Supplier' = 'Retailer'
+  ): PartyAccumulator => {
+    let acc = partyAccumulators.get(partyId);
+    if (!acc) {
+      const retailer = retailerMap.get(partyId);
+      const supplier = supplierMap.get(partyId);
+      const name = retailer?.shop_name || supplier?.name || partyId;
+      const owner = retailer?.owner_name || '';
+      const code = retailer?.retailer_code || '';
+      const mob = retailer?.mobile || retailer?.phone || '';
+      const city = retailer?.city || '';
+      const gstin = retailer?.gstin || supplier?.gstin || '';
+      const addr = retailer?.address || supplier?.address || '';
+
+      acc = {
+        partyId,
+        retailerId: partyId,
+        partyName: name,
+        ownerName: owner,
+        retailerCode: code,
+        mobile: mob,
+        phone: mob,
+        city,
+        gstin,
+        address: addr,
+        partyType: retailer && supplier ? 'Both' : (retailer ? 'Retailer' : (supplier ? 'Supplier' : 'Retailer')),
+        saleQty: 0,
+        saleQtyCartons: 0,
+        saleQtyLoose: 0,
+        grossSaleAmount: 0,
+        saleDiscount: 0,
+        saleGst: 0,
+        saleReturnAmount: 0,
+        invoicesSet: new Set(),
+        purchaseQty: 0,
+        purchaseQtyCartons: 0,
+        purchaseQtyLoose: 0,
+        grossPurchaseAmount: 0,
+        purchaseDiscount: 0,
+        purchaseGst: 0,
+        purchaseReturnAmount: 0,
+        purchaseBillsSet: new Set(),
+        salesTransactions: [],
+        purchaseTransactions: [],
+        productBreakdownMap: new Map()
+      };
+      partyAccumulators.set(partyId, acc);
+    }
+    return acc;
+  };
+
+  // 1. PROCESS SALES INVOICES (ACTUAL SALES TRANSACTIONS)
+  (db.invoices || []).forEach(inv => {
+    // Company isolation filter
+    if (f.companyId && f.companyId !== 'all') {
+      const biz = inv.business_id || inv.company_id || 'biz-saifee';
+      if (biz !== f.companyId) return;
+    }
+
+    // Exclude cancelled invoices
+    if (inv.status === 'Cancelled' || inv.invoice_status === 'Cancelled') return;
+
+    // Date range filter
+    if (!isDateInRange(inv.date || inv.created_at || '', dateRange)) return;
+
+    // Retailer / Party filter
+    if (isPartyFiltered && !isPartyMatchingInvoice(inv.retailer_id, selectedPartyId, db.retailers)) return;
+
+    // Resolve originating order
+    const srcOrderId = (inv.source_order_ids && inv.source_order_ids[0]) || inv.order_ref_id;
+    const srcOrder = srcOrderId ? orderMap.get(srcOrderId) : undefined;
+
+    // Salesperson resolution
+    const spId = srcOrder ? getOrderSalespersonId(srcOrder, db) : getInvoiceSalespersonId(inv, db);
+    const spProfile = spId ? db.profiles.find(p => p.id === spId) : undefined;
+    const spName = spProfile?.full_name || spProfile?.name || getInvoiceSalespersonName(inv, db);
+
+    // Apply Salesperson Filter
+    if (f.salespersonId && f.salespersonId !== 'all') {
+      const matchSp = (spId && spId === f.salespersonId) || 
+                      (spName && spName.toLowerCase().includes(f.salespersonId.toLowerCase()));
+      if (!matchSp) return;
+    }
+
+    // Order channel resolution (Strict 4 Channels)
+    let orderChannel = 'Distributor Salesperson';
+    const rawChan = (srcOrder?.channel || srcOrder?.source || (inv as any).channel || '').toLowerCase();
+    if (rawChan.includes('direct') || rawChan.includes('retailer direct') || rawChan.includes('retailer_direct')) {
+      orderChannel = 'Retailer Direct';
+    } else if (rawChan.includes('company')) {
+      orderChannel = 'Company Salesperson';
+    } else if (rawChan.includes('counter') || rawChan.includes('counter_sale')) {
+      orderChannel = 'On Counter Sale';
+    } else {
+      orderChannel = 'Distributor Salesperson';
+    }
+
+    // Apply Channel Filter
+    if (f.channel && f.channel !== 'all' && orderChannel !== f.channel) {
+      return;
+    }
+
+    // Godown resolution for sales transaction
+    const invGodown = srcOrder?.dispatch_godown || inv.place_of_supply || 'Main Godown';
+
+    // Apply Godown Filter
+    if (f.godown && f.godown !== 'all') {
+      if (!isGodownMatch(invGodown, f.godown, db.godowns)) return;
+    }
+
+    const partyAcc = getOrCreateParty(inv.retailer_id, 'Retailer');
+    const retailer = retailerMap.get(inv.retailer_id);
+    const partyName = retailer?.shop_name || retailer?.owner_name || partyAcc.partyName;
+
+    // Process Line Items
+    (inv.items || []).forEach((item, itemIdx) => {
+      const prod = productMap.get(item.product_id);
+      
+      // Category Filter
+      if (f.category && f.category !== 'all' && prod?.category !== f.category) {
+        return;
+      }
+
+      // Brand Filter
+      if (f.brand && f.brand !== 'all' && prod?.brand !== f.brand) {
+        return;
+      }
+
+      // Product / Item Filter (Variant matching by product_id)
+      if (f.productId && f.productId !== 'all' && item.product_id !== f.productId) {
+        return;
+      }
+
+      // Variant / Pack Size Filter
+      if (f.variantPacking && f.variantPacking !== 'all') {
+        const itemPack = item.packing || prod?.pack_size || '';
+        if (itemPack !== f.variantPacking) return;
+      }
+
+      // Quantities & Calculations
+      const unitsPerPack = item.units_per_box_carton || item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const basePieces = item.base_qty !== undefined ? item.base_qty : (item.quantity !== undefined ? item.quantity : 0);
+      const cQty = item.carton_qty !== undefined ? item.carton_qty : (unitsPerPack > 1 ? Math.floor(basePieces / unitsPerPack) : basePieces);
+      const lQty = item.loose_qty !== undefined ? item.loose_qty : (unitsPerPack > 1 ? (basePieces % unitsPerPack) : 0);
+
+      const unitRate = item.carton_rate || item.rate || item.unit_rate || prod?.selling_price || 0;
+      const flatDiscount = (item.discount || 0) + (item.carton_discount || 0);
+      const effectiveRate = Math.max(0, unitRate - flatDiscount);
+      const effectiveCartons = unitsPerPack > 1 ? (cQty + (lQty / unitsPerPack)) : (cQty > 0 ? cQty : basePieces);
+      const lineTaxable = item.taxable_value !== undefined ? item.taxable_value : Math.round(effectiveCartons * effectiveRate * 100) / 100;
+      const itemGstPct = (item.gst_percent !== undefined && item.gst_percent !== null)
+        ? Number(item.gst_percent)
+        : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+      const lineGst = ((item.cgst || 0) + (item.sgst || 0) + (item.igst || 0)) || Math.round(lineTaxable * (itemGstPct / 100) * 100) / 100;
+      const lineTotal = item.total_amount !== undefined ? item.total_amount : Math.round((lineTaxable + lineGst) * 100) / 100;
+
+      partyAcc.saleQty += basePieces;
+      partyAcc.saleQtyCartons += cQty;
+      partyAcc.saleQtyLoose += lQty;
+      partyAcc.grossSaleAmount += lineTaxable;
+      partyAcc.saleDiscount += (flatDiscount * effectiveCartons);
+      partyAcc.saleGst += lineGst;
+      partyAcc.invoicesSet.add(inv.id);
+
+      // Product Breakdown Map for Drill-down
+      const pKey = item.product_id;
+      let pEntry = partyAcc.productBreakdownMap.get(pKey);
+      if (!pEntry) {
+        pEntry = {
+          productId: item.product_id,
+          productName: item.product_name || prod?.name || 'FMCG Product',
+          brand: prod?.brand,
+          variant: prod?.pack_size || item.packing || 'Standard',
+          packSize: prod?.pack_size || item.packing || 'Standard',
+          tradingUnit: item.trading_unit || prod?.trading_unit || 'Box',
+          saleQty: 0,
+          saleAmount: 0,
+          avgRate: 0,
+          purchaseQty: 0,
+          purchaseAmount: 0
+        };
+        partyAcc.productBreakdownMap.set(pKey, pEntry);
+      }
+      pEntry.saleQty += basePieces;
+      pEntry.saleAmount += lineTaxable;
+      pEntry.avgRate = pEntry.saleQty > 0 ? Math.round((pEntry.saleAmount / pEntry.saleQty) * 100) / 100 : 0;
+
+      // Add to sales transactions list
+      partyAcc.salesTransactions.push({
+        id: item.id || `inv-item-${inv.id}-${itemIdx}`,
+        invoiceId: inv.id,
+        invoiceNumber: inv.invoice_number,
+        orderNumber: srcOrder?.order_number || inv.order_ref_id,
+        orderId: srcOrder?.id,
+        date: inv.date || inv.created_at || '',
+        retailerId: inv.retailer_id,
+        retailerName: partyName,
+        partyName,
+        productId: item.product_id,
+        productName: item.product_name || prod?.name || 'FMCG Product',
+        brand: prod?.brand,
+        variant: prod?.pack_size || item.packing || (unitsPerPack > 1 ? `${unitsPerPack} pcs/box` : '1 pc'),
+        packSize: prod?.pack_size || item.packing || 'Standard',
+        tradingUnit: item.trading_unit || prod?.trading_unit || 'Box',
+        quantity: basePieces,
+        cartonQty: cQty,
+        looseQty: lQty,
+        rate: effectiveRate,
+        discount: flatDiscount,
+        taxableValue: lineTaxable,
+        gstPercent: itemGstPct,
+        gstAmount: lineGst,
+        finalAmount: lineTaxable,
+        paymentMode: inv.payment_mode || 'Credit',
+        salesperson: spName,
+        channel: orderChannel,
+        godown: invGodown,
+        status: inv.status || 'Finalized'
+      });
     });
   });
 
-  // 2. Initialize all registered Suppliers (Vendors)
-  (db.suppliers || []).forEach(s => {
-    if (s.active === false) return;
-    const existing = partyMap.get(s.id);
-    if (existing) {
-      existing.partyType = 'Both';
-    } else {
-      partyMap.set(s.id, {
-        partyName: s.name,
-        partyType: 'Supplier',
-        saleQtyBase: 0,
-        saleQtyLoose: 0,
-        saleAmount: 0,
-        purchaseQtyBase: 0,
-        purchaseQtyLoose: 0,
-        purchaseAmount: 0
-      });
+  // 2. PROCESS SALES RETURNS
+  (db.salesReturns || []).forEach(sr => {
+    if (f.companyId && f.companyId !== 'all') {
+      const biz = sr.business_id || 'biz-saifee';
+      if (biz !== f.companyId) return;
+    }
+
+    if (sr.status === 'Cancelled') return;
+    if (!isDateInRange(sr.return_date, dateRange)) return;
+    if (isPartyFiltered && !isPartyMatchingInvoice(sr.retailer_id || '', selectedPartyId, db.retailers)) return;
+
+    if (sr.retailer_id) {
+      const partyAcc = partyAccumulators.get(sr.retailer_id);
+      if (partyAcc) {
+        (sr.items || []).forEach(srItem => {
+          const prod = productMap.get(srItem.product_id);
+          if (f.category && f.category !== 'all' && prod?.category !== f.category) return;
+          if (f.productId && f.productId !== 'all' && srItem.product_id !== f.productId) return;
+          const returnTaxable = (srItem as any).taxable_value !== undefined ? (srItem as any).taxable_value : (srItem.total_amount || 0);
+          partyAcc.saleReturnAmount += returnTaxable;
+        });
+      }
     }
   });
 
-  // 3. Process Sales from Invoices
-  const invoicedOrderIds = new Set<string>();
-  (db.invoices || []).forEach(inv => {
-    if (inv.order_ref_id) invoicedOrderIds.add(inv.order_ref_id);
-    inv.source_order_ids?.forEach(id => invoicedOrderIds.add(id));
-    if (!isInvoiceMatchingReportFilters(inv, f, db, dateRange)) return;
-
-    const retailer = db.retailers.find(r => r.id === inv.retailer_id);
-    const partyId = retailer?.id || inv.retailer_id || `retailer-${inv.invoice_number}`;
-    const partyName = retailer?.shop_name 
-      ? `${retailer.shop_name}${retailer.owner_name ? ` (${retailer.owner_name})` : ''}`
-      : retailer?.owner_name || retailer?.retailer_code || 'Customer';
-
-    inv.items?.forEach(item => {
-      const prod = db.products.find(p => p.id === item.product_id);
-      if (f.companyId && prod && prod.company_id !== f.companyId) return;
-      if (f.category && prod && prod.category !== f.category) return;
-      if (f.brand && prod && prod.brand !== f.brand) return;
-      if (f.productId && prod && prod.id !== f.productId) return;
-      if (f.variantPacking && prod && prod.pack_size !== f.variantPacking) return;
-
-      const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
-      const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor(item.quantity / unitsPerPack);
-      const lQty = item.loose_qty !== undefined ? item.loose_qty : (item.quantity % unitsPerPack);
-      const lineTotal = item.total_amount !== undefined 
-        ? item.total_amount 
-        : (item.quantity * (item.rate || 0));
-
-      const existing = partyMap.get(partyId) || {
-        partyName,
-        partyType: 'Customer',
-        saleQtyBase: 0,
-        saleQtyLoose: 0,
-        saleAmount: 0,
-        purchaseQtyBase: 0,
-        purchaseQtyLoose: 0,
-        purchaseAmount: 0
-      };
-
-      existing.saleQtyBase += cQty;
-      existing.saleQtyLoose += lQty;
-      existing.saleAmount += lineTotal;
-      partyMap.set(partyId, existing);
-    });
-  });
-
-  // 4. Process Sales from Completed Orders (not separately invoiced)
-  (db.orders || []).forEach(ord => {
-    if (invoicedOrderIds.has(ord.id)) return;
-    if (ord.status !== 'Completed' && ord.status !== 'Delivered' && ord.status !== 'Fully Fulfilled') return;
-    if (!isDateInRange(ord.order_date || ord.created_at || '', dateRange)) return;
-
-    const retailer = db.retailers.find(r => r.id === ord.retailer_id);
-    const partyId = retailer?.id || ord.retailer_id || `retailer-${ord.order_number}`;
-    const partyName = retailer?.shop_name 
-      ? `${retailer.shop_name}${retailer.owner_name ? ` (${retailer.owner_name})` : ''}`
-      : retailer?.owner_name || retailer?.retailer_code || 'Customer';
-
-    ord.items?.forEach(item => {
-      const prod = db.products.find(p => p.id === item.product_id);
-      if (f.companyId && prod && prod.company_id !== f.companyId) return;
-      if (f.category && prod && prod.category !== f.category) return;
-      if (f.brand && prod && prod.brand !== f.brand) return;
-      if (f.productId && prod && prod.id !== f.productId) return;
-      if (f.variantPacking && prod && prod.pack_size !== f.variantPacking) return;
-
-      const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
-      const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor((item.delivered_qty || item.quantity) / unitsPerPack);
-      const lQty = item.loose_qty !== undefined ? item.loose_qty : ((item.delivered_qty || item.quantity) % unitsPerPack);
-      const lineTotal = item.total_amount !== undefined 
-        ? item.total_amount 
-        : ((item.delivered_qty || item.quantity) * (item.carton_rate || item.rate || 0));
-
-      const existing = partyMap.get(partyId) || {
-        partyName,
-        partyType: 'Customer',
-        saleQtyBase: 0,
-        saleQtyLoose: 0,
-        saleAmount: 0,
-        purchaseQtyBase: 0,
-        purchaseQtyLoose: 0,
-        purchaseAmount: 0
-      };
-
-      existing.saleQtyBase += cQty;
-      existing.saleQtyLoose += lQty;
-      existing.saleAmount += lineTotal;
-      partyMap.set(partyId, existing);
-    });
-  });
-
-  // 5. Process Purchases from Purchases Master
+  // 3. PROCESS PURCHASES (ACTUAL PURCHASE TRANSACTIONS)
   (db.purchases || []).forEach(pur => {
+    if (f.companyId && f.companyId !== 'all') {
+      const biz = pur.business_id || 'biz-saifee';
+      if (biz !== f.companyId) return;
+    }
+
+    if (pur.status === 'Draft' || (pur.status as string) === 'Cancelled') return;
     if (!isDateInRange(pur.invoice_date || pur.created_at || '', dateRange)) return;
 
-    const supplier = db.suppliers.find(s => s.id === pur.supplier_id);
-    const partyId = supplier?.id || pur.supplier_id || `supplier-${pur.id}`;
-    const partyName = supplier?.name || 'Supplier';
+    // Party filter for purchases
+    if (isPartyFiltered && !isPartyMatchingPurchase(pur.supplier_id, selectedPartyId, db.suppliers)) return;
 
-    const pItems = pur.items && pur.items.length > 0 ? pur.items : [];
+    // Godown filter for purchases
+    const purGodown = pur.receiving_godown_id || 'Main Godown';
+    if (f.godown && f.godown !== 'all') {
+      if (!isGodownMatch(purGodown, f.godown, db.godowns)) return;
+    }
 
-    pItems.forEach(pItem => {
-      const prod = db.products.find(p => p.id === pItem.product_id);
-      if (f.companyId && prod && prod.company_id !== f.companyId) return;
-      if (f.category && prod && prod.category !== f.category) return;
-      if (f.brand && prod && prod.brand !== f.brand) return;
-      if (f.productId && prod && prod.id !== f.productId) return;
+    const partyAcc = getOrCreateParty(pur.supplier_id, 'Supplier');
+    const supplier = supplierMap.get(pur.supplier_id);
+    const supplierName = supplier?.name || partyAcc.partyName;
 
-      const unitsPerPack = pItem.units_per_trading_unit || prod?.units_per_box_carton || 1;
-      const cQty = pItem.carton_qty !== undefined ? pItem.carton_qty : Math.floor(pItem.quantity / unitsPerPack);
-      const lQty = pItem.loose_qty !== undefined ? pItem.loose_qty : (pItem.quantity % unitsPerPack);
-      const lineCost = (pItem.quantity * (pItem.purchase_rate || pItem.carton_rate || 0)) || (pur.total_amount || 0);
+    (pur.items || []).forEach((pItem, pIdx) => {
+      const prod = productMap.get(pItem.product_id);
 
-      const existing = partyMap.get(partyId) || {
-        partyName,
-        partyType: 'Supplier',
-        saleQtyBase: 0,
-        saleQtyLoose: 0,
-        saleAmount: 0,
-        purchaseQtyBase: 0,
-        purchaseQtyLoose: 0,
-        purchaseAmount: 0
-      };
-
-      if (existing.saleAmount > 0) {
-        existing.partyType = 'Both';
+      // Category Filter
+      if (f.category && f.category !== 'all' && prod?.category !== f.category) {
+        return;
       }
-      existing.purchaseQtyBase += cQty;
-      existing.purchaseQtyLoose += lQty;
-      existing.purchaseAmount += lineCost;
-      partyMap.set(partyId, existing);
+
+      // Brand Filter
+      if (f.brand && f.brand !== 'all' && prod?.brand !== f.brand) {
+        return;
+      }
+
+      // Product / Item Filter
+      if (f.productId && f.productId !== 'all' && pItem.product_id !== f.productId) {
+        return;
+      }
+
+      // Variant Filter
+      if (f.variantPacking && f.variantPacking !== 'all') {
+        const itemPack = prod?.pack_size || '';
+        if (itemPack !== f.variantPacking) return;
+      }
+
+      // Quantities & Calculations
+      const unitsPerPack = pItem.units_per_box_carton || pItem.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const basePieces = pItem.base_qty !== undefined ? pItem.base_qty : (pItem.quantity !== undefined ? pItem.quantity : 0);
+      const cQty = pItem.carton_qty !== undefined ? pItem.carton_qty : (unitsPerPack > 1 ? Math.floor(basePieces / unitsPerPack) : basePieces);
+      const lQty = pItem.loose_qty !== undefined ? pItem.loose_qty : (unitsPerPack > 1 ? (basePieces % unitsPerPack) : 0);
+      const purchaseRate = pItem.purchase_rate || pItem.carton_rate || prod?.purchase_price || 0;
+      const effectiveCartons = unitsPerPack > 1 ? (cQty + (lQty / unitsPerPack)) : (cQty > 0 ? cQty : basePieces);
+      const lineCost = (pItem as any).taxable_value !== undefined ? (pItem as any).taxable_value : Math.round(effectiveCartons * purchaseRate * 100) / 100;
+      const gstPct = pItem.gst_percent !== undefined ? pItem.gst_percent : (prod?.gst_percent !== undefined ? prod.gst_percent : 0);
+      const lineGst = ((pItem as any).cgst || 0) + ((pItem as any).sgst || 0) + ((pItem as any).igst || 0) || Math.round(lineCost * (gstPct / 100) * 100) / 100;
+      const lineTotal = (pItem as any).total_amount !== undefined ? (pItem as any).total_amount : Math.round((lineCost + lineGst) * 100) / 100;
+
+      partyAcc.purchaseQty += basePieces;
+      partyAcc.purchaseQtyCartons += cQty;
+      partyAcc.purchaseQtyLoose += lQty;
+      partyAcc.grossPurchaseAmount += lineCost;
+      partyAcc.purchaseGst += lineGst;
+      partyAcc.purchaseBillsSet.add(pur.id);
+
+      // Product Breakdown Map for Drill-down
+      const pKey = pItem.product_id;
+      let pEntry = partyAcc.productBreakdownMap.get(pKey);
+      if (!pEntry) {
+        pEntry = {
+          productId: pItem.product_id,
+          productName: prod?.name || 'FMCG Product',
+          brand: prod?.brand,
+          variant: prod?.pack_size || 'Standard',
+          packSize: prod?.pack_size || 'Standard',
+          tradingUnit: pItem.trading_unit || prod?.trading_unit || 'Box',
+          saleQty: 0,
+          saleAmount: 0,
+          avgRate: 0,
+          purchaseQty: 0,
+          purchaseAmount: 0
+        };
+        partyAcc.productBreakdownMap.set(pKey, pEntry);
+      }
+      pEntry.purchaseQty += basePieces;
+      pEntry.purchaseAmount += lineCost;
+
+      // Add to purchase transactions list
+      partyAcc.purchaseTransactions.push({
+        id: pItem.id || `pur-item-${pur.id}-${pIdx}`,
+        purchaseId: pur.id,
+        purchaseNumber: pur.invoice_number,
+        date: pur.invoice_date || pur.created_at || '',
+        supplierId: pur.supplier_id,
+        supplierName,
+        partyName: supplierName,
+        productId: pItem.product_id,
+        productName: prod?.name || 'FMCG Product',
+        brand: prod?.brand,
+        variant: prod?.pack_size || (unitsPerPack > 1 ? `${unitsPerPack} pcs/box` : '1 pc'),
+        packSize: prod?.pack_size || 'Standard',
+        tradingUnit: pItem.trading_unit || prod?.trading_unit || 'Box',
+        quantity: basePieces,
+        cartonQty: cQty,
+        looseQty: lQty,
+        purchaseRate,
+        discount: pItem.discount || 0,
+        gstPercent: (pItem.gst_percent !== undefined && pItem.gst_percent !== null) 
+          ? Number(pItem.gst_percent) 
+          : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0),
+        gstAmount: lineGst,
+        purchaseAmount: lineCost,
+        godown: purGodown,
+        status: pur.status || 'Confirmed'
+      });
     });
   });
 
-  // 6. Convert to formatted rows
-  let rows: PartyReportItemRow[] = [];
-  let idx = 1;
+  // 4. CONSTRUCT PARTY ROWS
+  let rows: PartyReportPartyRow[] = [];
+  let rowIdx = 1;
 
-  partyMap.forEach((val, id) => {
-    const finalSaleBase = val.saleQtyBase + Math.floor(val.saleQtyLoose / 24);
-    const finalSaleLoose = val.saleQtyLoose % 24;
-    const finalPurchaseBase = val.purchaseQtyBase + Math.floor(val.purchaseQtyLoose / 24);
-    const finalPurchaseLoose = val.purchaseQtyLoose % 24;
+  partyAccumulators.forEach((acc) => {
+    // Only include parties with transactions in the filtered set
+    const hasSales = acc.saleQty > 0 || acc.grossSaleAmount > 0;
+    const hasPurchases = acc.purchaseQty > 0 || acc.grossPurchaseAmount > 0;
 
-    rows.push({
-      id,
-      srNo: idx++,
-      partyName: val.partyName,
-      partyType: val.partyType,
-      saleQtyBase: finalSaleBase,
-      saleQtyLoose: finalSaleLoose,
-      saleQtyDisplay: formatQuantity(finalSaleBase, finalSaleLoose),
-      saleAmount: Math.round(val.saleAmount * 100) / 100,
-      purchaseQtyBase: finalPurchaseBase,
-      purchaseQtyLoose: finalPurchaseLoose,
-      purchaseQtyDisplay: formatQuantity(finalPurchaseBase, finalPurchaseLoose),
-      purchaseAmount: Math.round(val.purchaseAmount * 100) / 100
-    });
+    if (!hasSales && !hasPurchases && !isPartyFiltered) {
+      return;
+    }
+
+    const netSaleAmt = Math.max(0, acc.grossSaleAmount - acc.saleReturnAmount);
+    const saleAmt = Math.round(netSaleAmt * 100) / 100;
+    const purAmt = Math.round(acc.grossPurchaseAmount * 100) / 100;
+    const avgBillingRate = acc.saleQty > 0 ? Math.round((saleAmt / acc.saleQty) * 100) / 100 : 0;
+    const avgPurchaseRate = acc.purchaseQty > 0 ? Math.round((purAmt / acc.purchaseQty) * 100) / 100 : 0;
+
+    const row: PartyReportPartyRow = {
+      id: acc.partyId,
+      partyId: acc.partyId,
+      retailerId: acc.partyId,
+      srNo: rowIdx++,
+      partyName: acc.partyName,
+      ownerName: acc.ownerName,
+      retailerCode: acc.retailerCode,
+      mobile: acc.mobile,
+      phone: acc.phone,
+      city: acc.city,
+      gstin: acc.gstin,
+      address: acc.address,
+      partyType: acc.partyType,
+      companyId: acc.companyId,
+      companyName: acc.companyName,
+
+      // Sales Metrics
+      saleQty: acc.saleQty,
+      saleQtyCartons: acc.saleQtyCartons,
+      saleQtyLoose: acc.saleQtyLoose,
+      saleQtyDisplay: selectedProductInfo ? formatUnitQuantity(acc.saleQtyCartons, acc.saleQtyLoose, selectedProductInfo.tradingUnit, 'Piece', 1) : formatQuantity(acc.saleQtyCartons, acc.saleQtyLoose),
+      grossSaleAmount: Math.round(acc.grossSaleAmount * 100) / 100,
+      saleDiscount: Math.round(acc.saleDiscount * 100) / 100,
+      saleGst: Math.round(acc.saleGst * 100) / 100,
+      saleReturnAmount: Math.round(acc.saleReturnAmount * 100) / 100,
+      netSaleAmount: saleAmt,
+      saleAmount: saleAmt,
+      invoicesCount: acc.invoicesSet.size,
+      avgBillingRate,
+
+      // Purchase Metrics
+      purchaseQty: acc.purchaseQty,
+      purchaseQtyCartons: acc.purchaseQtyCartons,
+      purchaseQtyLoose: acc.purchaseQtyLoose,
+      purchaseQtyDisplay: selectedProductInfo ? formatUnitQuantity(acc.purchaseQtyCartons, acc.purchaseQtyLoose, selectedProductInfo.tradingUnit, 'Piece', 1) : formatQuantity(acc.purchaseQtyCartons, acc.purchaseQtyLoose),
+      grossPurchaseAmount: purAmt,
+      purchaseDiscount: Math.round(acc.purchaseDiscount * 100) / 100,
+      purchaseGst: Math.round(acc.purchaseGst * 100) / 100,
+      purchaseReturnAmount: Math.round(acc.purchaseReturnAmount * 100) / 100,
+      netPurchaseAmount: purAmt,
+      purchaseAmount: purAmt,
+      billsCount: acc.purchaseBillsSet.size,
+      purchaseBillsCount: acc.purchaseBillsSet.size,
+      avgPurchaseRate,
+
+      // Compatibility fields
+      productName: acc.partyName,
+      totalSaleQtyPieces: acc.saleQty,
+      totalPurchaseQtyPieces: acc.purchaseQty,
+      totalSaleQtyBase: acc.saleQtyCartons,
+      totalPurchaseQtyBase: acc.purchaseQtyCartons,
+      closingInventoryDisplay: '0',
+      totalClosingPhysicalPieces: 0,
+
+      // Transactions & Breakdown
+      salesTransactions: acc.salesTransactions,
+      purchaseTransactions: acc.purchaseTransactions,
+      productBreakdown: Array.from(acc.productBreakdownMap.values()).sort((a, b) => b.saleAmount - a.saleAmount)
+    };
+
+    rows.push(row);
   });
 
-  // 7. Real-time Search Query Filtering
+  // 5. SEARCH FILTER ACROSS MULTIPLE FIELDS
   if (f.searchQuery && f.searchQuery.trim()) {
     const q = f.searchQuery.trim().toLowerCase();
-    rows = rows.filter(r => r.partyName.toLowerCase().includes(q));
+    rows = rows.filter(r => {
+      // 1. Retailer Name & Info
+      if (r.partyName.toLowerCase().includes(q)) return true;
+      if (r.ownerName && r.ownerName.toLowerCase().includes(q)) return true;
+      if (r.retailerCode && r.retailerCode.toLowerCase().includes(q)) return true;
+      if (r.mobile && r.mobile.includes(q)) return true;
+      if (r.phone && r.phone.includes(q)) return true;
+      if (r.city && r.city.toLowerCase().includes(q)) return true;
+      if (r.gstin && r.gstin.toLowerCase().includes(q)) return true;
+
+      // 2. Product Name, SKU, Order #, Invoice # in Sales Transactions
+      const matchInSales = r.salesTransactions.some(t =>
+        (t.productName && t.productName.toLowerCase().includes(q)) ||
+        (t.brand && t.brand.toLowerCase().includes(q)) ||
+        (t.invoiceNumber && t.invoiceNumber.toLowerCase().includes(q)) ||
+        (t.orderNumber && t.orderNumber.toLowerCase().includes(q)) ||
+        (t.salesperson && t.salesperson.toLowerCase().includes(q))
+      );
+      if (matchInSales) return true;
+
+      // 3. Purchase Transactions
+      const matchInPurchase = r.purchaseTransactions.some(t =>
+        (t.productName && t.productName.toLowerCase().includes(q)) ||
+        (t.purchaseNumber && t.purchaseNumber.toLowerCase().includes(q)) ||
+        (t.supplierName && t.supplierName.toLowerCase().includes(q))
+      );
+      if (matchInPurchase) return true;
+
+      // 4. Product Breakdown
+      const matchInBreakdown = r.productBreakdown.some(pb =>
+        pb.productName.toLowerCase().includes(q) ||
+        (pb.brand && pb.brand.toLowerCase().includes(q))
+      );
+      if (matchInBreakdown) return true;
+
+      return false;
+    });
+
+    // Re-index serial numbers
     rows = rows.map((r, i) => ({ ...r, srNo: i + 1 }));
   }
 
-  // 8. Aggregate Summary Totals
-  let totalSaleBase = 0;
-  let totalSaleLoose = 0;
-  let totalSaleAmt = 0;
-  let totalPurchaseBase = 0;
-  let totalPurchaseLoose = 0;
-  let totalPurchaseAmt = 0;
+  // 6. CALCULATE TOTALS ACCORDING TO FILTERED DATASET
+  let totalSaleQty = 0;
+  let totalSaleQtyCartons = 0;
+  let totalSaleQtyLoose = 0;
+  let totalGrossSales = 0;
+  let totalSalesReturn = 0;
+  let totalNetSales = 0;
+  let totalSaleGst = 0;
+  let totalSaleDiscount = 0;
+  let totalInvoicesCount = 0;
+
+  let totalPurchaseQty = 0;
+  let totalPurchaseQtyCartons = 0;
+  let totalPurchaseQtyLoose = 0;
+  let totalGrossPurchases = 0;
+  let totalPurchaseReturn = 0;
+  let totalNetPurchases = 0;
+  let totalPurchaseGst = 0;
+  let totalPurchaseDiscount = 0;
+  let totalPurchaseBillsCount = 0;
+
+  const countedInvoiceIds = new Set<string>();
+  const countedPurchaseIds = new Set<string>();
 
   rows.forEach(r => {
-    totalSaleBase += r.saleQtyBase;
-    totalSaleLoose += r.saleQtyLoose;
-    totalSaleAmt += r.saleAmount;
-    totalPurchaseBase += r.purchaseQtyBase;
-    totalPurchaseLoose += r.purchaseQtyLoose;
-    totalPurchaseAmt += r.purchaseAmount;
+    totalSaleQty += r.saleQty;
+    totalSaleQtyCartons += r.saleQtyCartons;
+    totalSaleQtyLoose += r.saleQtyLoose;
+    totalGrossSales += r.grossSaleAmount;
+    totalSalesReturn += r.saleReturnAmount;
+    totalNetSales += r.saleAmount;
+    totalSaleGst += r.saleGst;
+    totalSaleDiscount += r.saleDiscount;
+
+    r.salesTransactions.forEach(t => countedInvoiceIds.add(t.invoiceId));
+
+    totalPurchaseQty += r.purchaseQty;
+    totalPurchaseQtyCartons += r.purchaseQtyCartons;
+    totalPurchaseQtyLoose += r.purchaseQtyLoose;
+    totalGrossPurchases += r.purchaseAmount;
+    totalPurchaseReturn += r.purchaseReturnAmount;
+    totalNetPurchases += r.netPurchaseAmount;
+    totalPurchaseGst += r.purchaseGst;
+    totalPurchaseDiscount += r.purchaseDiscount;
+
+    r.purchaseTransactions.forEach(t => countedPurchaseIds.add(t.purchaseId));
   });
 
+  totalInvoicesCount = countedInvoiceIds.size;
+  totalPurchaseBillsCount = countedPurchaseIds.size;
+
   const summary: PartyItemReportSummary = {
-    totalSaleQtyBase: totalSaleBase,
-    totalSaleQtyLoose: totalSaleLoose,
-    totalSaleAmount: Math.round(totalSaleAmt * 100) / 100,
-    totalPurchaseQtyBase: totalPurchaseBase,
-    totalPurchaseQtyLoose: totalPurchaseLoose,
-    totalPurchaseAmount: Math.round(totalPurchaseAmt * 100) / 100,
-    recordCount: rows.length
+    recordCount: rows.length,
+    totalSaleQty,
+    totalSaleQtyCartons,
+    totalSaleQtyLoose,
+    totalSaleQtyDisplay: totalSaleQty.toLocaleString('en-IN'),
+    totalGrossSales: Math.round(totalGrossSales * 100) / 100,
+    totalSalesReturn: Math.round(totalSalesReturn * 100) / 100,
+    totalNetSales: Math.round(totalNetSales * 100) / 100,
+    totalSaleGst: Math.round(totalSaleGst * 100) / 100,
+    totalSaleDiscount: Math.round(totalSaleDiscount * 100) / 100,
+    totalSaleAmount: Math.round(totalNetSales * 100) / 100,
+    totalInvoicesCount,
+
+    totalPurchaseQty,
+    totalPurchaseQtyCartons,
+    totalPurchaseQtyLoose,
+    totalPurchaseQtyDisplay: totalPurchaseQty.toLocaleString('en-IN'),
+    totalGrossPurchases: Math.round(totalGrossPurchases * 100) / 100,
+    totalPurchaseReturn: Math.round(totalPurchaseReturn * 100) / 100,
+    totalNetPurchases: Math.round(totalNetPurchases * 100) / 100,
+    totalPurchaseGst: Math.round(totalPurchaseGst * 100) / 100,
+    totalPurchaseDiscount: Math.round(totalPurchaseDiscount * 100) / 100,
+    totalPurchaseAmount: Math.round(totalGrossPurchases * 100) / 100,
+    totalPurchaseBillsCount,
+
+    // Compatibility fields
+    totalSaleQtyPieces: totalSaleQty,
+    totalSaleQtyBase: totalSaleQtyCartons,
+    totalGrossSaleAmount: Math.round(totalGrossSales * 100) / 100,
+    totalSaleGstAmount: Math.round(totalSaleGst * 100) / 100,
+    totalPurchaseQtyPieces: totalPurchaseQty,
+    totalPurchaseQtyBase: totalPurchaseQtyCartons,
+    totalClosingDisplay: '0',
+
+    selectedProduct: selectedProductInfo
   };
 
   return { rows, summary };
 }
+
+// ----------------------------------------------------
+// ITEM REPORT BY PARTY (PRODUCT-WISE SALES, PURCHASES & CLOSING INVENTORY)
+// ----------------------------------------------------
+
+export interface ItemReportByPartyRow {
+  id: string; // product_id
+  productId: string;
+  variantId?: string;
+  srNo: number;
+  productName: string;
+  productCode?: string;
+  sku: string;
+  barcode?: string;
+  brand?: string;
+  category?: string;
+  packSize: string;
+  variantPacking?: string;
+  tradingUnit: string;
+  baseUnit: string;
+  unitsPerPack: number;
+  companyId?: string;
+  companyName?: string;
+  mrp: number;
+  sellingPrice: number;
+  purchasePrice: number;
+  gstPercent?: number;
+  hsn?: string;
+
+  // 1. Sales Metrics
+  saleQtyBase: number;
+  saleQtyLoose: number;
+  saleQtyDisplay: string;
+  totalSaleQtyPieces: number;
+  grossSaleAmount: number;
+  saleDiscount: number;
+  saleGst: number;
+  saleReturnAmount: number;
+  saleAmount: number; // Net Sales
+  invoicesCount: number;
+  avgSaleRate: number;
+
+  // 2. Purchase Metrics
+  purchaseQtyBase: number;
+  purchaseQtyLoose: number;
+  purchaseQtyDisplay: string;
+  totalPurchaseQtyPieces: number;
+  purchaseAmount: number;
+  purchaseBillsCount: number;
+  avgPurchaseRate: number;
+
+  // 3. Closing Inventory (Current Physical Godown Stock)
+  closingInventoryBase: number;
+  closingInventoryLoose: number;
+  closingInventoryDisplay: string;
+  totalClosingPhysicalPieces: number;
+
+  // Inventory breakdown
+  physicalStockPieces: number;
+  physicalStockDisplay: string;
+  reservedStockPieces: number;
+  reservedStockDisplay: string;
+  availableStockPieces: number;
+  availableStockDisplay: string;
+  damagedStockPieces: number;
+  damagedStockDisplay: string;
+  expiredStockPieces: number;
+  expiredStockDisplay: string;
+  pendingStockPieces: number;
+  pendingStockDisplay: string;
+
+  // Godown breakdown
+  godownStockBreakdown: {
+    godownId: string;
+    godownName: string;
+    physical: number;
+    reserved: number;
+    available: number;
+    damaged: number;
+    expired: number;
+  }[];
+
+  // Party breakdown for drill-down inspection
+  partySalesBreakdown: {
+    partyId: string;
+    partyName: string;
+    partyType: 'Retailer' | 'Supplier' | 'Customer';
+    saleQty: number;
+    saleQtyDisplay: string;
+    saleAmount: number;
+    invoiceCount: number;
+  }[];
+  partyPurchaseBreakdown: {
+    partyId: string;
+    partyName: string;
+    purchaseQty: number;
+    purchaseQtyDisplay: string;
+    purchaseAmount: number;
+    billCount: number;
+  }[];
+
+  // Transaction Lists for Drill-Down
+  salesTransactions: PartyReportSalesTransaction[];
+  purchaseTransactions: PartyReportPurchaseTransaction[];
+  stockMovements: StockLedgerEntry[];
+}
+
+export interface ItemReportByPartySummary {
+  recordCount: number;
+  totalSaleQtyPieces: number;
+  totalSaleQtyBase: number;
+  totalSaleQtyLoose: number;
+  totalGrossSaleAmount: number;
+  totalSaleDiscount: number;
+  totalSaleGst: number;
+  totalSaleReturnAmount: number;
+  totalSaleAmount: number; // Net Sales
+  totalPurchaseQtyPieces: number;
+  totalPurchaseQtyBase: number;
+  totalPurchaseQtyLoose: number;
+  totalPurchaseAmount: number;
+
+  // Closing Inventory Totals
+  totalClosingPhysicalPieces: number;
+  totalClosingDisplay: string;
+  isSingleUnitType: boolean;
+  commonTradingUnit?: string;
+  unitWiseTotals: { [unit: string]: number };
+}
+
+/**
+ * Aggregation Function for "Item Report by Party"
+ * Product-Centric: Primary table row is each Product / Item.
+ * Calculates Sales, Purchases, Party Breakdown, and Godown Physical Stock.
+ */
+export function getItemReportByParty(
+  filters: ReportFilterState,
+  db: DbState,
+  userContext: UserContext
+): { rows: ItemReportByPartyRow[]; summary: ItemReportByPartySummary } {
+  const f = applyRbacFilters(filters, userContext);
+  const dateRange = getDateRangeFromPreset(f.datePreset, f.customStartDate, f.customEndDate);
+
+  const orderMap = new Map<string, Order>();
+  (db.orders || []).forEach(o => {
+    orderMap.set(o.id, o);
+    if (o.order_number) orderMap.set(o.order_number, o);
+  });
+
+  const retailerMap = new Map<string, Retailer>();
+  (db.retailers || []).forEach(r => {
+    retailerMap.set(r.id, r);
+    if (r.retailer_code) retailerMap.set(r.retailer_code, r);
+  });
+
+  const supplierMap = new Map<string, Supplier>();
+  (db.suppliers || []).forEach(s => {
+    supplierMap.set(s.id, s);
+    if (s.name) supplierMap.set(s.name, s);
+  });
+
+  const companyMap = new Map<string, Company>();
+  (db.companies || []).forEach(c => {
+    companyMap.set(c.id, c);
+  });
+
+  const selectedPartyId = f.retailerId || (f as any).partyId || (f as any).supplierId;
+  const isPartyFiltered = !!(selectedPartyId && selectedPartyId !== 'all');
+
+  // Candidate products based on category/brand/company/product filter
+  const candidateProducts = (db.products || []).filter(prod => {
+    if (f.companyId && f.companyId !== 'all' && prod.company_id && prod.company_id !== f.companyId) return false;
+    if (f.category && f.category !== 'all' && prod.category !== f.category) return false;
+    if (f.brand && f.brand !== 'all' && prod.brand !== f.brand) return false;
+    if (f.productId && f.productId !== 'all' && prod.id !== f.productId) return false;
+    if (f.variantPacking && f.variantPacking !== 'all' && prod.pack_size !== f.variantPacking) return false;
+    return true;
+  });
+
+  interface ProductAccumulator {
+    product: Product;
+    saleQtyBase: number;
+    saleQtyLoose: number;
+    totalSaleQtyPieces: number;
+    grossSaleAmount: number;
+    saleDiscount: number;
+    saleGst: number;
+    saleReturnAmount: number;
+    invoicesSet: Set<string>;
+    purchaseQtyBase: number;
+    purchaseQtyLoose: number;
+    totalPurchaseQtyPieces: number;
+    purchaseAmount: number;
+    purchaseBillsSet: Set<string>;
+    salesTransactions: PartyReportSalesTransaction[];
+    purchaseTransactions: PartyReportPurchaseTransaction[];
+    partySalesMap: Map<string, { partyId: string; partyName: string; partyType: 'Retailer' | 'Supplier' | 'Customer'; saleQty: number; saleAmount: number; invoiceCount: number }>;
+    partyPurchaseMap: Map<string, { partyId: string; partyName: string; purchaseQty: number; purchaseAmount: number; billCount: number }>;
+  }
+
+  const productAccumulators = new Map<string, ProductAccumulator>();
+
+  candidateProducts.forEach(prod => {
+    productAccumulators.set(prod.id, {
+      product: prod,
+      saleQtyBase: 0,
+      saleQtyLoose: 0,
+      totalSaleQtyPieces: 0,
+      grossSaleAmount: 0,
+      saleDiscount: 0,
+      saleGst: 0,
+      saleReturnAmount: 0,
+      invoicesSet: new Set(),
+      purchaseQtyBase: 0,
+      purchaseQtyLoose: 0,
+      totalPurchaseQtyPieces: 0,
+      purchaseAmount: 0,
+      purchaseBillsSet: new Set(),
+      salesTransactions: [],
+      purchaseTransactions: [],
+      partySalesMap: new Map(),
+      partyPurchaseMap: new Map()
+    });
+  });
+
+  // 1. Process Sales Invoices
+  (db.invoices || []).forEach(inv => {
+    if (f.companyId && f.companyId !== 'all') {
+      const biz = inv.business_id || inv.company_id || 'biz-saifee';
+      if (biz !== f.companyId) return;
+    }
+
+    if (inv.status === 'Cancelled' || inv.invoice_status === 'Cancelled') return;
+    if (!isDateInRange(inv.date || inv.created_at || '', dateRange)) return;
+    if (isPartyFiltered && !isPartyMatchingInvoice(inv.retailer_id, selectedPartyId, db.retailers)) return;
+
+    const srcOrderId = (inv.source_order_ids && inv.source_order_ids[0]) || inv.order_ref_id;
+    const srcOrder = srcOrderId ? orderMap.get(srcOrderId) : undefined;
+
+    const spId = srcOrder ? getOrderSalespersonId(srcOrder, db) : getInvoiceSalespersonId(inv, db);
+    const spProfile = spId ? db.profiles.find(p => p.id === spId) : undefined;
+    const spName = spProfile?.full_name || spProfile?.name || getInvoiceSalespersonName(inv, db);
+
+    if (f.salespersonId && f.salespersonId !== 'all') {
+      const matchSp = (spId && spId === f.salespersonId) || 
+                      (spName && spName.toLowerCase().includes(f.salespersonId.toLowerCase()));
+      if (!matchSp) return;
+    }
+
+    let orderChannel = 'Distributor Salesperson';
+    const rawChan = (srcOrder?.channel || srcOrder?.source || (inv as any).channel || '').toLowerCase();
+    if (rawChan.includes('direct') || rawChan.includes('retailer direct')) {
+      orderChannel = 'Retailer Direct';
+    } else if (rawChan.includes('company')) {
+      orderChannel = 'Company Salesperson';
+    } else if (rawChan.includes('counter')) {
+      orderChannel = 'On Counter Sale';
+    } else {
+      orderChannel = 'Distributor Salesperson';
+    }
+
+    if (f.channel && f.channel !== 'all' && orderChannel !== f.channel) return;
+
+    const invGodown = srcOrder?.dispatch_godown || inv.place_of_supply || 'Main Godown';
+    if (f.godown && f.godown !== 'all') {
+      if (!isGodownMatch(invGodown, f.godown, db.godowns)) return;
+    }
+
+    const retailer = retailerMap.get(inv.retailer_id);
+    const partyName = retailer?.shop_name || retailer?.owner_name || inv.retailer_id || 'Retailer';
+
+    (inv.items || []).forEach((item, itemIdx) => {
+      const accum = productAccumulators.get(item.product_id);
+      if (!accum) return;
+
+      const prod = accum.product;
+      const unitsPerPack = item.units_per_box_carton || item.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const basePieces = item.base_qty !== undefined ? item.base_qty : (item.quantity !== undefined ? item.quantity : 0);
+      const cQty = item.carton_qty !== undefined ? item.carton_qty : (unitsPerPack > 1 ? Math.floor(basePieces / unitsPerPack) : basePieces);
+      const lQty = item.loose_qty !== undefined ? item.loose_qty : (unitsPerPack > 1 ? (basePieces % unitsPerPack) : 0);
+
+      const unitRate = item.carton_rate || item.rate || item.unit_rate || prod?.selling_price || 0;
+      const flatDiscount = (item.discount || 0) + (item.carton_discount || 0);
+      const effectiveRate = Math.max(0, unitRate - flatDiscount);
+      const effectiveCartons = unitsPerPack > 1 ? (cQty + (lQty / unitsPerPack)) : (cQty > 0 ? cQty : basePieces);
+      const lineTaxable = item.taxable_value !== undefined ? item.taxable_value : Math.round(effectiveCartons * effectiveRate * 100) / 100;
+      const itemGstPct = (item.gst_percent !== undefined && item.gst_percent !== null)
+        ? Number(item.gst_percent)
+        : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+      const lineGst = ((item.cgst || 0) + (item.sgst || 0) + (item.igst || 0)) || Math.round(lineTaxable * (itemGstPct / 100) * 100) / 100;
+      const lineTotal = item.total_amount !== undefined ? item.total_amount : Math.round((lineTaxable + lineGst) * 100) / 100;
+
+      accum.saleQtyBase += cQty;
+      accum.saleQtyLoose += lQty;
+      accum.totalSaleQtyPieces += basePieces;
+      accum.grossSaleAmount += lineTaxable;
+      accum.saleDiscount += (flatDiscount * effectiveCartons);
+      accum.saleGst += lineGst;
+      accum.invoicesSet.add(inv.id);
+
+      const pKey = inv.retailer_id || partyName;
+      let partyEntry = accum.partySalesMap.get(pKey);
+      if (!partyEntry) {
+        partyEntry = {
+          partyId: inv.retailer_id,
+          partyName,
+          partyType: 'Retailer',
+          saleQty: 0,
+          saleAmount: 0,
+          invoiceCount: 0
+        };
+        accum.partySalesMap.set(pKey, partyEntry);
+      }
+      partyEntry.saleQty += basePieces;
+      partyEntry.saleAmount += lineTaxable;
+      partyEntry.invoiceCount += 1;
+
+      accum.salesTransactions.push({
+        id: item.id || `inv-item-${inv.id}-${itemIdx}`,
+        invoiceId: inv.id,
+        invoiceNumber: inv.invoice_number,
+        orderNumber: srcOrder?.order_number || inv.order_ref_id,
+        orderId: srcOrder?.id,
+        date: inv.date || inv.created_at || '',
+        retailerId: inv.retailer_id,
+        retailerName: partyName,
+        partyName,
+        productId: item.product_id,
+        productName: item.product_name || prod?.name || 'FMCG Product',
+        brand: prod?.brand,
+        variant: prod?.pack_size || item.packing || (unitsPerPack > 1 ? `${unitsPerPack} pcs/box` : '1 pc'),
+        packSize: prod?.pack_size || item.packing || 'Standard',
+        tradingUnit: item.trading_unit || prod?.trading_unit || 'Box',
+        quantity: basePieces,
+        cartonQty: cQty,
+        looseQty: lQty,
+        rate: effectiveRate,
+        discount: flatDiscount,
+        taxableValue: lineTaxable,
+        gstPercent: itemGstPct,
+        gstAmount: lineGst,
+        finalAmount: lineTaxable,
+        paymentMode: inv.payment_mode || 'Credit',
+        salesperson: spName,
+        channel: orderChannel,
+        godown: invGodown,
+        status: inv.status || 'Finalized'
+      });
+    });
+  });
+
+  // 2. Process Sales Returns
+  (db.salesReturns || []).forEach(sr => {
+    if (f.companyId && f.companyId !== 'all') {
+      const biz = sr.business_id || 'biz-saifee';
+      if (biz !== f.companyId) return;
+    }
+
+    if (sr.status === 'Cancelled') return;
+    if (!isDateInRange(sr.return_date, dateRange)) return;
+    if (isPartyFiltered && !isPartyMatchingInvoice(sr.retailer_id || '', selectedPartyId, db.retailers)) return;
+
+    (sr.items || []).forEach(srItem => {
+      const accum = productAccumulators.get(srItem.product_id);
+      if (!accum) return;
+      const returnTaxable = (srItem as any).taxable_value !== undefined ? (srItem as any).taxable_value : (srItem.total_amount || 0);
+      accum.saleReturnAmount += returnTaxable;
+    });
+  });
+
+  // 3. Process Purchases
+  (db.purchases || []).forEach(pur => {
+    if (f.companyId && f.companyId !== 'all') {
+      const biz = pur.business_id || 'biz-saifee';
+      if (biz !== f.companyId) return;
+    }
+
+    if (pur.status === 'Draft' || (pur.status as string) === 'Cancelled') return;
+    if (!isDateInRange(pur.invoice_date || pur.created_at || '', dateRange)) return;
+    if (isPartyFiltered && !isPartyMatchingPurchase(pur.supplier_id, selectedPartyId, db.suppliers)) return;
+
+    const purGodown = pur.receiving_godown_id || 'Main Godown';
+    if (f.godown && f.godown !== 'all') {
+      if (!isGodownMatch(purGodown, f.godown, db.godowns)) return;
+    }
+
+    const supplier = supplierMap.get(pur.supplier_id);
+    const supplierName = supplier?.name || pur.supplier_id || 'Supplier';
+
+    (pur.items || []).forEach((pItem, pIdx) => {
+      const accum = productAccumulators.get(pItem.product_id);
+      if (!accum) return;
+
+      const prod = accum.product;
+      const unitsPerPack = pItem.units_per_box_carton || pItem.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const basePieces = pItem.base_qty !== undefined ? pItem.base_qty : (pItem.quantity !== undefined ? pItem.quantity : 0);
+      const cQty = pItem.carton_qty !== undefined ? pItem.carton_qty : (unitsPerPack > 1 ? Math.floor(basePieces / unitsPerPack) : basePieces);
+      const lQty = pItem.loose_qty !== undefined ? pItem.loose_qty : (unitsPerPack > 1 ? (basePieces % unitsPerPack) : 0);
+      const purchaseRate = pItem.purchase_rate || pItem.carton_rate || prod?.purchase_price || 0;
+      const effectiveCartons = unitsPerPack > 1 ? (cQty + (lQty / unitsPerPack)) : (cQty > 0 ? cQty : basePieces);
+      const lineCost = (pItem as any).taxable_value !== undefined ? (pItem as any).taxable_value : Math.round(effectiveCartons * purchaseRate * 100) / 100;
+      const gstPct = pItem.gst_percent !== undefined ? pItem.gst_percent : (prod?.gst_percent !== undefined ? prod.gst_percent : 0);
+      const lineGst = ((pItem as any).cgst || 0) + ((pItem as any).sgst || 0) + ((pItem as any).igst || 0) || Math.round(lineCost * (gstPct / 100) * 100) / 100;
+      const lineTotal = (pItem as any).total_amount !== undefined ? (pItem as any).total_amount : Math.round((lineCost + lineGst) * 100) / 100;
+
+      accum.purchaseQtyBase += cQty;
+      accum.purchaseQtyLoose += lQty;
+      accum.totalPurchaseQtyPieces += basePieces;
+      accum.purchaseAmount += lineCost;
+      accum.purchaseBillsSet.add(pur.id);
+
+      const sKey = pur.supplier_id || supplierName;
+      let partyEntry = accum.partyPurchaseMap.get(sKey);
+      if (!partyEntry) {
+        partyEntry = {
+          partyId: pur.supplier_id,
+          partyName: supplierName,
+          purchaseQty: 0,
+          purchaseAmount: 0,
+          billCount: 0
+        };
+        accum.partyPurchaseMap.set(sKey, partyEntry);
+      }
+      partyEntry.purchaseQty += basePieces;
+      partyEntry.purchaseAmount += lineCost;
+      partyEntry.billCount += 1;
+
+      accum.purchaseTransactions.push({
+        id: pItem.id || `pur-item-${pur.id}-${pIdx}`,
+        purchaseId: pur.id,
+        purchaseNumber: pur.invoice_number,
+        date: pur.invoice_date || pur.created_at || '',
+        supplierId: pur.supplier_id,
+        supplierName,
+        partyName: supplierName,
+        productId: pItem.product_id,
+        productName: prod?.name || 'FMCG Product',
+        brand: prod?.brand,
+        variant: prod?.pack_size || (unitsPerPack > 1 ? `${unitsPerPack} pcs/box` : '1 pc'),
+        packSize: prod?.pack_size || 'Standard',
+        tradingUnit: pItem.trading_unit || prod?.trading_unit || 'Box',
+        quantity: basePieces,
+        cartonQty: cQty,
+        looseQty: lQty,
+        purchaseRate,
+        discount: pItem.discount || 0,
+        gstPercent: pItem.gst_percent !== undefined ? pItem.gst_percent : (prod?.gst_percent !== undefined ? prod.gst_percent : 0),
+        gstAmount: lineGst,
+        purchaseAmount: lineCost,
+        godown: purGodown,
+        status: pur.status || 'Confirmed'
+      });
+    });
+  });
+
+  // 4. Construct Item Rows with Godown Physical Inventory
+  const allGodowns = (db.godowns && db.godowns.length > 0) ? db.godowns : [
+    { id: 'gdn-saifee-main', name: 'Main Godown', code: 'GD01' },
+    { id: 'gdn-saifee-secondary', name: 'Secondary Godown', code: 'GD02' }
+  ];
+
+  let rows: ItemReportByPartyRow[] = [];
+  let rowIdx = 1;
+
+  productAccumulators.forEach((accum) => {
+    const prod = accum.product;
+    const comp = companyMap.get(prod.company_id);
+    const unitsPerPack = prod.units_per_box_carton || prod.units_per_trading_unit || 1;
+    const tradingUnit = prod.trading_unit || 'Box';
+    const baseUnit = prod.base_unit || 'Piece';
+
+    // Closing Inventory (Current Physical Godown Stock)
+    let rawInvRows = (db.inventory || []).filter(i => i.product_id === prod.id);
+    if (f.companyId && f.companyId !== 'all') {
+      rawInvRows = rawInvRows.filter(i => (i.business_id || 'biz-saifee') === f.companyId);
+    }
+
+    let totPhysicalPieces = 0;
+    let totReservedPieces = 0;
+    let totAvailablePieces = 0;
+    let totDamagedPieces = 0;
+    let totExpiredPieces = 0;
+    let totPendingPieces = 0;
+
+    const godownBreakdown: ItemReportByPartyRow['godownStockBreakdown'] = [];
+
+    // Discover all unique godowns from both configured godowns and inventory records
+    const godownList: { id: string; name: string; code: string }[] = [];
+    const seenGodowns = new Set<string>();
+
+    (allGodowns as any[]).forEach((g: any) => {
+      const gKey = g.id || g.name;
+      if (!seenGodowns.has(gKey)) {
+        seenGodowns.add(gKey);
+        godownList.push({ id: g.id, name: g.name, code: g.code || g.id });
+      }
+    });
+
+    rawInvRows.forEach(r => {
+      if (r.godown_id && !seenGodowns.has(r.godown_id)) {
+        seenGodowns.add(r.godown_id);
+        const gName = (r as any).godown_name || r.godown_id;
+        godownList.push({ id: r.godown_id, name: gName, code: r.godown_id });
+      }
+    });
+
+    godownList.forEach(g => {
+      const gInv = rawInvRows.find(r => r.godown_id === g.id || r.godown_id === g.name || r.godown_id === g.code);
+      let p = gInv ? (gInv.physical_qty !== undefined ? gInv.physical_qty : ((gInv as any).quantity || 0)) : 0;
+      let r = gInv?.reserved_qty || 0;
+      let a = gInv ? (gInv.available_qty !== undefined ? gInv.available_qty : Math.max(0, p - r)) : 0;
+      let d = gInv?.damaged_qty || 0;
+      let e = gInv?.expired_qty || 0;
+
+      if (!gInv) {
+        const gBatches = (db.batches || []).filter(b => 
+          b.product_id === prod.id && 
+          (b.godown_id === g.id || b.godown?.toLowerCase().includes(g.name.toLowerCase()))
+        );
+        if (gBatches.length > 0) {
+          p = gBatches.reduce((acc, b) => acc + (b.quantity || 0), 0);
+          a = p;
+        }
+      }
+
+      godownBreakdown.push({
+        godownId: g.id,
+        godownName: g.name,
+        physical: p,
+        reserved: r,
+        available: a,
+        damaged: d,
+        expired: e
+      });
+
+      if (f.godown && f.godown !== 'all') {
+        const isMatch = isGodownMatch(g.id, f.godown, db.godowns) || isGodownMatch(g.name, f.godown, db.godowns) || isGodownMatch(g.code, f.godown, db.godowns);
+        if (isMatch) {
+          totPhysicalPieces += p;
+          totReservedPieces += r;
+          totAvailablePieces += a;
+          totDamagedPieces += d;
+          totExpiredPieces += e;
+        }
+      } else {
+        totPhysicalPieces += p;
+        totReservedPieces += r;
+        totAvailablePieces += a;
+        totDamagedPieces += d;
+        totExpiredPieces += e;
+      }
+    });
+
+    const closingInvBase = unitsPerPack > 1 ? Math.floor(totPhysicalPieces / unitsPerPack) : totPhysicalPieces;
+    const closingInvLoose = unitsPerPack > 1 ? (totPhysicalPieces % unitsPerPack) : 0;
+    const closingInvDisplay = formatUnitQuantity(closingInvBase, closingInvLoose, tradingUnit, baseUnit, unitsPerPack);
+
+    const netSaleAmount = Math.max(0, accum.grossSaleAmount - accum.saleReturnAmount);
+    const avgSaleRate = accum.saleQtyBase > 0 ? Math.round((netSaleAmount / accum.saleQtyBase) * 100) / 100 : 0;
+    const avgPurchaseRate = accum.purchaseQtyBase > 0 ? Math.round((accum.purchaseAmount / accum.purchaseQtyBase) * 100) / 100 : 0;
+
+    const partySalesBreakdown = Array.from(accum.partySalesMap.values()).map(p => ({
+      ...p,
+      saleQtyDisplay: formatUnitQuantity(
+        unitsPerPack > 1 ? Math.floor(p.saleQty / unitsPerPack) : p.saleQty,
+        unitsPerPack > 1 ? (p.saleQty % unitsPerPack) : 0,
+        tradingUnit, baseUnit, unitsPerPack
+      )
+    }));
+
+    const partyPurchaseBreakdown = Array.from(accum.partyPurchaseMap.values()).map(p => ({
+      ...p,
+      purchaseQtyDisplay: formatUnitQuantity(
+        unitsPerPack > 1 ? Math.floor(p.purchaseQty / unitsPerPack) : p.purchaseQty,
+        unitsPerPack > 1 ? (p.purchaseQty % unitsPerPack) : 0,
+        tradingUnit, baseUnit, unitsPerPack
+      )
+    }));
+
+    const hasPartyActivity = accum.grossSaleAmount > 0 || accum.purchaseAmount > 0;
+    const hasGeneralActivity = accum.grossSaleAmount > 0 || accum.purchaseAmount > 0 || totPhysicalPieces > 0;
+
+    if (isPartyFiltered) {
+      if (!hasPartyActivity && !f.productId) {
+        return;
+      }
+    } else {
+      if (!hasGeneralActivity && !f.productId && !f.category && !f.companyId && !f.brand) {
+        return;
+      }
+    }
+
+    rows.push({
+      id: prod.id,
+      productId: prod.id,
+      variantId: prod.parent_product_id,
+      srNo: rowIdx++,
+      productName: prod.name,
+      productCode: prod.product_code,
+      sku: prod.sku || prod.product_code || `SKU-${prod.id}`,
+      barcode: prod.barcode,
+      brand: prod.brand,
+      category: prod.category,
+      packSize: prod.pack_size || prod.packing_display || 'Standard',
+      variantPacking: prod.pack_size || prod.packing_display || 'Standard',
+      tradingUnit,
+      baseUnit,
+      unitsPerPack,
+      companyId: prod.company_id,
+      companyName: comp?.name || 'Company',
+      mrp: prod.mrp,
+      sellingPrice: prod.selling_price,
+      purchasePrice: prod.purchase_price,
+      gstPercent: (prod.gst_percent !== undefined && prod.gst_percent !== null) ? Number(prod.gst_percent) : 0,
+      hsn: prod.hsn || '',
+
+      saleQtyBase: accum.saleQtyBase,
+      saleQtyLoose: accum.saleQtyLoose,
+      saleQtyDisplay: formatUnitQuantity(accum.saleQtyBase, accum.saleQtyLoose, tradingUnit, baseUnit, unitsPerPack),
+      totalSaleQtyPieces: accum.totalSaleQtyPieces,
+      grossSaleAmount: Math.round(accum.grossSaleAmount * 100) / 100,
+      saleDiscount: Math.round(accum.saleDiscount * 100) / 100,
+      saleGst: Math.round(accum.saleGst * 100) / 100,
+      saleReturnAmount: Math.round(accum.saleReturnAmount * 100) / 100,
+      saleAmount: Math.round(netSaleAmount * 100) / 100,
+      invoicesCount: accum.invoicesSet.size,
+      avgSaleRate,
+
+      purchaseQtyBase: accum.purchaseQtyBase,
+      purchaseQtyLoose: accum.purchaseQtyLoose,
+      purchaseQtyDisplay: formatUnitQuantity(accum.purchaseQtyBase, accum.purchaseQtyLoose, tradingUnit, baseUnit, unitsPerPack),
+      totalPurchaseQtyPieces: accum.totalPurchaseQtyPieces,
+      purchaseAmount: Math.round(accum.purchaseAmount * 100) / 100,
+      purchaseBillsCount: accum.purchaseBillsSet.size,
+      avgPurchaseRate,
+
+      closingInventoryBase: closingInvBase,
+      closingInventoryLoose: closingInvLoose,
+      closingInventoryDisplay: closingInvDisplay,
+      totalClosingPhysicalPieces: totPhysicalPieces,
+
+      physicalStockPieces: totPhysicalPieces,
+      physicalStockDisplay: closingInvDisplay,
+      reservedStockPieces: totReservedPieces,
+      reservedStockDisplay: formatUnitQuantity(totReservedPieces, 0, tradingUnit, baseUnit, unitsPerPack),
+      availableStockPieces: totAvailablePieces,
+      availableStockDisplay: formatUnitQuantity(totAvailablePieces, 0, tradingUnit, baseUnit, unitsPerPack),
+      damagedStockPieces: totDamagedPieces,
+      damagedStockDisplay: formatUnitQuantity(totDamagedPieces, 0, tradingUnit, baseUnit, unitsPerPack),
+      expiredStockPieces: totExpiredPieces,
+      expiredStockDisplay: formatUnitQuantity(totExpiredPieces, 0, tradingUnit, baseUnit, unitsPerPack),
+      pendingStockPieces: totPendingPieces,
+      pendingStockDisplay: formatUnitQuantity(totPendingPieces, 0, tradingUnit, baseUnit, unitsPerPack),
+
+      godownStockBreakdown: godownBreakdown,
+      partySalesBreakdown,
+      partyPurchaseBreakdown,
+      salesTransactions: accum.salesTransactions,
+      purchaseTransactions: accum.purchaseTransactions,
+      stockMovements: (db.ledger || []).filter(l => l.product_id === prod.id)
+    });
+  });
+
+  // 5. Search Filter
+  if (f.searchQuery && f.searchQuery.trim()) {
+    const q = f.searchQuery.trim().toLowerCase();
+    rows = rows.filter(r => 
+      r.productName.toLowerCase().includes(q) ||
+      (r.sku && r.sku.toLowerCase().includes(q)) ||
+      (r.brand && r.brand.toLowerCase().includes(q)) ||
+      (r.category && r.category.toLowerCase().includes(q)) ||
+      r.salesTransactions.some(t => t.retailerName.toLowerCase().includes(q) || t.invoiceNumber.toLowerCase().includes(q)) ||
+      r.purchaseTransactions.some(t => t.supplierName.toLowerCase().includes(q) || t.purchaseNumber.toLowerCase().includes(q))
+    );
+    rows = rows.map((r, i) => ({ ...r, srNo: i + 1 }));
+  }
+
+  // 6. Aggregate Summary Totals
+  let totalSalePieces = 0;
+  let totalSaleBase = 0;
+  let totalSaleLoose = 0;
+  let totalGrossSaleAmt = 0;
+  let totalDiscount = 0;
+  let totalGst = 0;
+  let totalReturnAmt = 0;
+  let totalNetSaleAmt = 0;
+  let totalPurchasePieces = 0;
+  let totalPurchaseBase = 0;
+  let totalPurchaseLoose = 0;
+  let totalPurchaseAmt = 0;
+  let totalClosingPhysical = 0;
+
+  const unitWiseTotals: { [unit: string]: number } = {};
+  const distinctTradingUnits = new Set<string>();
+
+  rows.forEach(r => {
+    totalSalePieces += r.totalSaleQtyPieces;
+    totalSaleBase += r.saleQtyBase;
+    totalSaleLoose += r.saleQtyLoose;
+    totalGrossSaleAmt += r.grossSaleAmount;
+    totalDiscount += r.saleDiscount;
+    totalGst += r.saleGst;
+    totalReturnAmt += r.saleReturnAmount;
+    totalNetSaleAmt += r.saleAmount;
+    totalPurchasePieces += r.totalPurchaseQtyPieces;
+    totalPurchaseBase += r.purchaseQtyBase;
+    totalPurchaseLoose += r.purchaseQtyLoose;
+    totalPurchaseAmt += r.purchaseAmount;
+    totalClosingPhysical += r.totalClosingPhysicalPieces;
+
+    const unit = r.tradingUnit || 'Box';
+    distinctTradingUnits.add(unit);
+    unitWiseTotals[unit] = (unitWiseTotals[unit] || 0) + r.closingInventoryBase;
+  });
+
+  const isSingleUnitType = distinctTradingUnits.size === 1;
+  const commonTradingUnit = isSingleUnitType ? Array.from(distinctTradingUnits)[0] : undefined;
+
+  let totalClosingDisplay = 'Multiple Units';
+  if (isSingleUnitType && commonTradingUnit) {
+    totalClosingDisplay = formatUnitQuantity(unitWiseTotals[commonTradingUnit], 0, commonTradingUnit, 'Piece', 1);
+  } else if (rows.length === 0) {
+    totalClosingDisplay = '0 Boxes';
+  } else {
+    const unitSummaryParts = Object.entries(unitWiseTotals)
+      .filter(([_, count]) => count > 0)
+      .map(([unit, count]) => `${count} ${unit.toLowerCase() === 'box' ? 'Boxes' : (unit.endsWith('s') ? unit : `${unit}s`)}`);
+    totalClosingDisplay = unitSummaryParts.length > 0 ? unitSummaryParts.join(', ') : 'Multiple Units';
+  }
+
+  const summary: ItemReportByPartySummary = {
+    recordCount: rows.length,
+    totalSaleQtyPieces: totalSalePieces,
+    totalSaleQtyBase: totalSaleBase,
+    totalSaleQtyLoose: totalSaleLoose,
+    totalGrossSaleAmount: Math.round(totalGrossSaleAmt * 100) / 100,
+    totalSaleDiscount: Math.round(totalDiscount * 100) / 100,
+    totalSaleGst: Math.round(totalGst * 100) / 100,
+    totalSaleReturnAmount: Math.round(totalReturnAmt * 100) / 100,
+    totalSaleAmount: Math.round(totalNetSaleAmt * 100) / 100,
+    totalPurchaseQtyPieces: totalPurchasePieces,
+    totalPurchaseQtyBase: totalPurchaseBase,
+    totalPurchaseQtyLoose: totalPurchaseLoose,
+    totalPurchaseAmount: Math.round(totalPurchaseAmt * 100) / 100,
+    totalClosingPhysicalPieces: totalClosingPhysical,
+    totalClosingDisplay,
+    isSingleUnitType,
+    commonTradingUnit,
+    unitWiseTotals
+  };
+
+  return { rows, summary };
+}
+
+
+
 

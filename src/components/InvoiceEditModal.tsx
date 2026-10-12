@@ -97,7 +97,9 @@ export default function InvoiceEditModal({
           loose_rate: lRate,
           carton_discount: item.carton_discount ?? 0,
           loose_discount: item.loose_discount ?? 0,
-          gst_percent: prod?.gst_percent ?? 18,
+          gst_percent: (item.gst_percent !== undefined && item.gst_percent !== null)
+            ? Number(item.gst_percent)
+            : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0),
           batch_number: item.batch_number,
           batch_id: item.batch_id,
           mrp: item.mrp ?? prod?.mrp,
@@ -245,7 +247,7 @@ export default function InvoiceEditModal({
       loose_rate: lRate,
       carton_discount: prod.carton_discount || 0,
       loose_discount: prod.loose_discount || 0,
-      gst_percent: prod.gst_percent || 18,
+      gst_percent: (prod.gst_percent !== undefined && prod.gst_percent !== null) ? Number(prod.gst_percent) : 0,
       mrp: prod.mrp,
       purchase_rate: prod.purchase_price
     };

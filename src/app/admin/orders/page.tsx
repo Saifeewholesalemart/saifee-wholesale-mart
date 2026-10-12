@@ -3,45 +3,100 @@
 import React, { useState, useEffect, Suspense, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useSearchParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { 
-  Order, Retailer, Product, OrderItem, Invoice, DeliveryChallan,
-  formatAutoBoxQuantity, formatProductStockDisplay
+  Order, OrderItem, Retailer, Product, Invoice, DeliveryChallan, Payment, Profile, Godown, Company,
+  deriveOrderChannel, OrderChannel, formatAutoBoxQuantity, formatProductStockDisplay, splitBaseQuantity,
+  calculateItemAmounts
 } from '@/lib/db';
-import { 
-  UserRole, can, getCompositeKey, PackingLotItem, 
-  RetailerPackingLot, BackorderQueueItem, DeletedItemRecord, OriginBadgeInfo 
-} from '@/lib/orderTerminalTypes';
-import RecycleBinDrawer from '@/components/orders/RecycleBinDrawer';
-import AddItemToLotModal from '@/components/orders/AddItemToLotModal';
-import ShortCloseBackorderModal from '@/components/orders/ShortCloseBackorderModal';
+import { UserRole, can } from '@/lib/orderTerminalTypes';
+import OrderDetailDrawer from '@/components/orders/OrderDetailDrawer';
 import InvoicePreviewModal from '@/components/orders/InvoicePreviewModal';
-import RateIntelligenceModal from '@/components/orders/RateIntelligenceModal';
+import OrderProcessingWorkflowModal from '@/components/orders/OrderProcessingWorkflowModal';
 import SpotOrderModal from '@/components/orders/SpotOrderModal';
-import LastBillingRatesModal from '@/components/LastBillingRatesModal';
+import ShortCloseBackorderModal from '@/components/orders/ShortCloseBackorderModal';
+import AdminPackingFloorModal from '@/components/orders/AdminPackingFloorModal';
+import AdminBillingOverrideModal from '@/components/orders/AdminBillingOverrideModal';
+import BackorderResolutionModal from '@/components/orders/BackorderResolutionModal';
 import { 
-  Search, Check, Clock, Package, Truck, Receipt, 
+  X, Search, Check, Clock, Package, Truck, Receipt, Printer,
   ChevronRight, ChevronDown, ChevronUp, ArrowRight,
-  CheckCircle2, RotateCcw, Sparkles, Combine, MapPin, 
-  AlertCircle, TrendingUp, Store, Edit3, X, Trash2,
-  FileText, History as HistoryIcon, ShieldCheck, Minus, Plus,
-  Printer, UserCheck, ShieldAlert, AlertTriangle, Filter,
-  Phone, HelpCircle, Ban, RefreshCw, Layers, Calendar,
-  ArrowUpDown, SlidersHorizontal, ChevronLeft, ChevronsLeft,
-  ChevronsRight, DollarSign, IndianRupee, Save, BookmarkCheck,
-  CheckCheck
+  CheckCircle2, RotateCcw, MapPin, Store, Plus,
+  FileText, Calendar, ArrowUpDown, SlidersHorizontal, 
+  ChevronLeft, IndianRupee, Layers, Phone, User,
+  Building2, Warehouse, CreditCard, Copy, Filter,
+  ShieldCheck, AlertCircle, Sparkles, Ban, Edit3,
+  TrendingUp, TrendingDown, RefreshCw, Eye, CheckSquare, Trash2
 } from 'lucide-react';
 
-export type SortOption = 
-  | 'DEFAULT'
-  | 'ITEMS_DESC' 
-  | 'ITEMS_ASC' 
-  | 'PIECES_DESC' 
-  | 'PIECES_ASC' 
-  | 'VALUE_DESC' 
-  | 'VALUE_ASC' 
-  | 'DATE_ASC' 
-  | 'DATE_DESC';
+export type StageTab = 'ALL_ORDERS' | 'TO_PACK' | 'PACKED' | 'PARTIAL_PENDING' | 'INVOICED';
+export type DateFilterPreset = 'ALL' | 'TODAY' | 'YESTERDAY' | 'THIS_WEEK' | 'THIS_MONTH' | 'CUSTOM';
+export type MainSortOption = 'LATEST' | 'OLDEST' | 'VALUE_DESC' | 'VALUE_ASC' | 'PENDING_DESC' | 'PENDING_ASC';
+export type LineItemsSortOption = 'NONE' | 'HIGH_TO_LOW' | 'LOW_TO_HIGH';
+
+export interface UnifiedOrderRecord {
+  order: Order;
+  retailer: Retailer | null;
+  salesperson: Profile | null;
+  company: Company | null;
+  godown: Godown | null;
+  channel: {
+    code: string;
+    label: OrderChannel;
+    badgeClass: string;
+  };
+  lineItemsCount: number;
+  totalUnits: number;
+  totalAmount: number;
+  status: string;
+  isPartial: boolean;
+  totalOrdered: number;
+  totalFulfilled: number;
+  totalPending: number;
+  pendingValue: number;
+  invoice: Invoice | null;
+  deliveryChallan: DeliveryChallan | null;
+  payments: Payment[];
+  totalPaid: number;
+  outstandingAmount: number;
+  paymentStatus: 'Paid' | 'Partial' | 'Unpaid' | 'Credit';
+  orderDateTs: number;
+  formattedDate: string;
+  formattedTime: string;
+}
+
+export interface UnifiedRetailerGroup {
+  retailerId: string;
+  retailer: Retailer | null;
+  retailerName: string;
+  ownerName: string;
+  phone: string;
+  city: string;
+  route: string;
+  address: string;
+  currentOutstanding: number;
+  creditLimit: number;
+  orders: UnifiedOrderRecord[];
+  pendingOrders: UnifiedOrderRecord[];
+  packedOrders: UnifiedOrderRecord[];
+  completedOrders: UnifiedOrderRecord[];
+  totalPackedValueSum: number;
+  totalPackedPiecesSum: number;
+  totalCompletedValueSum: number;
+  invoicesList: Invoice[];
+  retailerBackorders: Order[];
+  hasPendingBackorders: boolean;
+  backorderPiecesTotal: number;
+  totalOrdersCount: number;
+  totalLineItemsCount: number;
+  totalUnitsSum: number;
+  totalOrderValueSum: number;
+  totalPendingPiecesSum: number;
+  totalPendingValueSum: number;
+  latestOrder: UnifiedOrderRecord;
+  earliestOrder: UnifiedOrderRecord;
+  statusSummaryList: string[];
+  channelSet: Set<string>;
+}
 
 function formatINR(val?: number) {
   if (val === undefined || isNaN(val)) return '₹0.00';
@@ -50,1209 +105,967 @@ function formatINR(val?: number) {
 
 function AdminOrdersContent() {
   const { 
-    orders, retailers, products, inventory, companies, invoices, activeCompany,
-    dispatchOrder, dispatchRetailerPackingLot, clearAllOrders, currentUser, deleteOrder, 
-    addOrderItemToOrder, removeOrderItem, updateOrderItemQuantity,
-    confirmOrderQuantities, allocateAndPackOrder, profiles,
-    saveLotPackingProgress
+    orders, retailers, products, inventory, companies, invoices, deliveryChallans,
+    payments, activeCompany, confirmOrder, currentUser, profiles, godowns, generateInvoiceForPackedLot,
+    clearAllOrders, clearDummyOrders
   } = useDb();
 
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  // Mount state for SSR hydration safety
+  // Hydration safety
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Role Permissions Architecture (Default to ROLE_ADMIN so all controls are active)
-  const [userRole, setUserRole] = useState<UserRole>('ROLE_ADMIN');
+  // Active Lifecycle Stage Tab (5 Stages)
+  const [activeStageTab, setActiveStageTab] = useState<StageTab>('ALL_ORDERS');
 
-  // 3-Tab Architecture
-  const [activeTab, setActiveTab] = useState<'ready_to_pack' | 'partial_pending' | 'completed_history'>('ready_to_pack');
-
-  // Omnibar Search & Comprehensive Multi-Criteria Filter States
+  // Search & Global Filter States
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedLocation, setSelectedLocation] = useState<string>('ALL');
-  const [dateFilterPreset, setDateFilterPreset] = useState<'ALL' | 'TODAY' | 'YESTERDAY' | 'CUSTOM'>('ALL');
+  const [selectedCity, setSelectedCity] = useState<string>('ALL');
+  const [dateFilterPreset, setDateFilterPreset] = useState<DateFilterPreset>('ALL');
   const [customFromDate, setCustomFromDate] = useState<string>('');
   const [customToDate, setCustomToDate] = useState<string>('');
+  const [selectedRetailerId, setSelectedRetailerId] = useState<string>('ALL');
+  const [selectedSalespersonId, setSelectedSalespersonId] = useState<string>('ALL');
   const [selectedChannel, setSelectedChannel] = useState<string>('ALL');
-  const [selectedPackingStatus, setSelectedPackingStatus] = useState<'ALL' | 'READY_TO_PACK' | 'PARTIAL_PACKED' | 'COMPLETED'>('ALL');
-  const [selectedValueSlab, setSelectedValueSlab] = useState<'ALL' | 'PETTY' | 'STANDARD' | 'BULK'>('ALL');
-  const [sortBy, setSortBy] = useState<SortOption>('DEFAULT');
+  const [minValueInput, setMinValueInput] = useState<string>('');
+  const [maxValueInput, setMaxValueInput] = useState<string>('');
+  
+  // Sorting States
+  const [lineItemsSort, setLineItemsSort] = useState<LineItemsSortOption>('NONE');
+  const [mainSort, setMainSort] = useState<MainSortOption>('LATEST');
 
-  // Interactive Table Pagination (Reset on filter/sort change)
+  // Pagination
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
 
-  // Accordion Expand State for Retailer Lots (All expanded by default for warehouse speed)
-  const [expandedLots, setExpandedLots] = useState<{ [retailerId: string]: boolean }>({});
+  // Accordion Expand State for Retailer Groups
+  const [expandedRetailers, setExpandedRetailers] = useState<{ [retailerId: string]: boolean }>({});
 
-  // Inline Edits per Item Key: { [compositeKey_orderId]: { packedPieces?: number; packedCartons?: number; packedLoose?: number; unitRate?: number } }
-  const [inlineEdits, setInlineEdits] = useState<{
-    [key: string]: { packedPieces?: number; packedCartons?: number; packedLoose?: number; unitRate?: number };
-  }>({});
+  // Modals
+  const [selectedOrderDetailId, setSelectedOrderDetailId] = useState<string | null>(null);
+  const [isOrderDetailDrawerOpen, setIsOrderDetailDrawerOpen] = useState(false);
+  
+  const [selectedInvoiceForPreview, setSelectedInvoiceForPreview] = useState<Invoice | null>(null);
+  const [selectedChallanForPreview, setSelectedChallanForPreview] = useState<DeliveryChallan | null>(null);
+  const [selectedRetailerForPreview, setSelectedRetailerForPreview] = useState<Retailer | null>(null);
+  const [isInvoicePreviewOpen, setIsInvoicePreviewOpen] = useState(false);
 
-  // Two-Tier Soft Delete Safety Net
-  const [deletedRecords, setDeletedRecords] = useState<DeletedItemRecord[]>([]);
-  const [undoToast, setUndoToast] = useState<{
-    record: DeletedItemRecord;
-    countdown: number;
-    timerId?: any;
-  } | null>(null);
-  const [isRecycleBinOpen, setIsRecycleBinOpen] = useState(false);
-
-  // Modals State
-  const [addItemModal, setAddItemModal] = useState<{
-    isOpen: boolean;
-    orderId: string;
-    orderNumber: string;
-    retailerName: string;
-  } | null>(null);
-
-  const [shortCloseModal, setShortCloseModal] = useState<{
-    isOpen: boolean;
-    item: BackorderQueueItem | null;
-  } | null>(null);
-
-  const [invoicePreviewModal, setInvoicePreviewModal] = useState<{
-    isOpen: boolean;
-    invoice: Invoice | null;
-    challan?: DeliveryChallan | null;
-    retailer?: Retailer | null;
-  } | null>(null);
+  const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
+  const [processingStage, setProcessingStage] = useState<'review' | 'confirm' | 'pack' | 'dispatch' | 'invoice' | 'payment' | 'challan'>('review');
+  const [isProcessingModalOpen, setIsProcessingModalOpen] = useState(false);
 
   const [isSpotOrderModalOpen, setIsSpotOrderModalOpen] = useState(false);
 
-  // Sync ?action=counter or ?new_counter=true from URL params
+  // New Redesign Dedicated Modals
+  const [packingFloorRetailer, setPackingFloorRetailer] = useState<Retailer | null>(null);
+  const [packingFloorOrders, setPackingFloorOrders] = useState<Order[]>([]);
+  const [packingFloorBackorders, setPackingFloorBackorders] = useState<Order[]>([]);
+  const [isPackingFloorOpen, setIsPackingFloorOpen] = useState(false);
+
+  const [billingOverrideOrder, setBillingOverrideOrder] = useState<Order | null>(null);
+  const [billingOverrideOrders, setBillingOverrideOrders] = useState<Order[]>([]);
+  const [billingOverrideRetailer, setBillingOverrideRetailer] = useState<Retailer | null>(null);
+  const [isBillingOverrideOpen, setIsBillingOverrideOpen] = useState(false);
+
+  const [backorderRetailer, setBackorderRetailer] = useState<Retailer | null>(null);
+  const [backorderList, setBackorderList] = useState<Order[]>([]);
+  const [isBackorderModalOpen, setIsBackorderModalOpen] = useState(false);
+
+  // URL query params sync
   useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam === 'to_pack' || tabParam === 'pack') setActiveStageTab('TO_PACK');
+    else if (tabParam === 'packed') setActiveStageTab('PACKED');
+    else if (tabParam === 'partial' || tabParam === 'pending') setActiveStageTab('PARTIAL_PENDING');
+    else if (tabParam === 'invoice' || tabParam === 'invoiced' || tabParam === 'completed') setActiveStageTab('INVOICED');
+
     if (searchParams.get('action') === 'counter' || searchParams.get('new_counter') === 'true') {
       setIsSpotOrderModalOpen(true);
     }
   }, [searchParams]);
 
-  const [rateIntelligenceModal, setRateIntelligenceModal] = useState<{
-    isOpen: boolean;
-    retailerId: string;
-    retailerName: string;
-    retailerCity?: string;
-    productId: string;
-    productName: string;
-    sku: string;
-    mrp: number;
-    tradingUnit: string;
-    baseUnit?: string;
-    unitsPerPack: number;
-    purchaseCost: number;
-    currentUnitRate: number;
-    itemEditKey: string;
-  } | null>(null);
-
-  // Processing & draft saving state per lot
-  const [isPackingLot, setIsPackingLot] = useState<{ [retailerId: string]: boolean }>({});
-  const [isSavingLot, setIsSavingLot] = useState<{ [retailerId: string]: boolean }>({});
-
-  // Toast notification for successful draft / progress save
-  const [saveSuccessToast, setSaveSuccessToast] = useState<{
-    message: string;
-    retailerName?: string;
-    timestamp?: string;
-  } | null>(null);
-
-  // Auto-dismiss saveSuccessToast after 4 seconds
+  // Reset pagination on filter or tab change
   useEffect(() => {
-    if (saveSuccessToast) {
-      const timer = setTimeout(() => {
-        setSaveSuccessToast(null);
-      }, 4000);
-      return () => clearTimeout(timer);
-    }
-  }, [saveSuccessToast]);
+    setCurrentPage(1);
+  }, [
+    activeStageTab,
+    searchTerm, 
+    selectedCity,
+    dateFilterPreset, 
+    customFromDate, 
+    customToDate, 
+    selectedRetailerId,
+    selectedSalespersonId, 
+    selectedChannel, 
+    minValueInput,
+    maxValueInput,
+    lineItemsSort, 
+    mainSort
+  ]);
 
-  // Unsaved changes confirmation dialog guard
-  const [unsavedChangesModal, setUnsavedChangesModal] = useState<{
-    isOpen: boolean;
-    targetTab?: 'ready_to_pack' | 'partial_pending' | 'completed_history';
-    targetAction?: () => void;
-  } | null>(null);
-
-  // Helper to check if a specific lot has uncommitted modifications in inlineEdits
-  const isLotDirty = (lot: RetailerPackingLot) => {
-    return lot.items.some(item => {
-      const itemEditKey = `${item.compositeKey}__${item.originOrderId}__${item.originItemId}`;
-      return inlineEdits[itemEditKey] !== undefined;
-    });
-  };
-
-  const hasUnsavedEdits = Object.keys(inlineEdits).length > 0;
-
-  // Browser-level beforeunload guard for unsaved modifications
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (hasUnsavedEdits) {
-        e.preventDefault();
-        e.returnValue = 'You have unsaved packing changes. Would you like to Save Progress before leaving?';
-        return e.returnValue;
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [hasUnsavedEdits]);
-
-  // Tab switcher with dirty changes guard
-  const handleTabClick = (targetTab: 'ready_to_pack' | 'partial_pending' | 'completed_history') => {
-    if (activeTab === targetTab) return;
-    if (activeTab === 'ready_to_pack' && hasUnsavedEdits) {
-      setUnsavedChangesModal({
-        isOpen: true,
-        targetTab
-      });
-      return;
-    }
-    setActiveTab(targetTab);
-  };
-
-  // Extract distinct retailer cities / areas / beats dynamically from master records
-  const availableLocations = useMemo(() => {
-    const locs = new Set<string>();
+  // Extract unique cities/beats from retailers
+  const availableCities = useMemo(() => {
+    const set = new Set<string>();
     retailers.forEach(r => {
-      if (r.beat_name && r.beat_name.trim()) locs.add(r.beat_name.trim());
-      if (r.route && r.route.trim()) locs.add(r.route.trim());
-      if (r.city && r.city.trim()) locs.add(r.city.trim());
+      if (r.city && r.city.trim()) set.add(r.city.trim());
+      if (r.beat_name && r.beat_name.trim()) set.add(r.beat_name.trim());
     });
-    return Array.from(locs).sort();
+    return Array.from(set).sort();
   }, [retailers]);
 
-  // Calendar date boundary matching helper
-  const isDateMatching = (dateStr?: string) => {
+  // Date boundary check helper
+  const isDateMatching = (orderDateStr?: string) => {
     if (dateFilterPreset === 'ALL') return true;
-    if (!dateStr) return false;
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return false;
-    const iso = d.toISOString().slice(0, 10);
-    const todayIso = new Date().toISOString().slice(0, 10);
-    
+    if (!orderDateStr) return false;
+
+    const orderDate = new Date(orderDateStr);
+    if (isNaN(orderDate.getTime())) return false;
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfTomorrow = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
+    const startOfYesterday = new Date(startOfToday.getTime() - 24 * 60 * 60 * 1000);
+
     if (dateFilterPreset === 'TODAY') {
-      return iso === todayIso;
+      return orderDate >= startOfToday && orderDate < startOfTomorrow;
     }
     if (dateFilterPreset === 'YESTERDAY') {
-      const y = new Date();
-      y.setDate(y.getDate() - 1);
-      return iso === y.toISOString().slice(0, 10);
+      return orderDate >= startOfYesterday && orderDate < startOfToday;
+    }
+    if (dateFilterPreset === 'THIS_WEEK') {
+      const dayOfWeek = now.getDay();
+      const startOfWeek = new Date(startOfToday.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
+      return orderDate >= startOfWeek && orderDate < startOfTomorrow;
+    }
+    if (dateFilterPreset === 'THIS_MONTH') {
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      return orderDate >= startOfMonth && orderDate < startOfTomorrow;
     }
     if (dateFilterPreset === 'CUSTOM') {
-      if (customFromDate && iso < customFromDate) return false;
-      if (customToDate && iso > customToDate) return false;
+      if (customFromDate && customToDate) {
+        const f = new Date(customFromDate);
+        f.setHours(0, 0, 0, 0);
+        const t = new Date(customToDate);
+        t.setHours(23, 59, 59, 999);
+        return orderDate >= f && orderDate <= t;
+      }
+      if (customFromDate) {
+        const f = new Date(customFromDate);
+        f.setHours(0, 0, 0, 0);
+        return orderDate >= f;
+      }
+      if (customToDate) {
+        const t = new Date(customToDate);
+        t.setHours(23, 59, 59, 999);
+        return orderDate <= t;
+      }
       return true;
     }
     return true;
   };
 
-  // Check if any non-default filter is currently active
-  const hasActiveFilters = useMemo(() => {
-    return (
-      searchTerm.trim() !== '' ||
-      selectedLocation !== 'ALL' ||
-      dateFilterPreset !== 'ALL' ||
-      customFromDate !== '' ||
-      customToDate !== '' ||
-      selectedChannel !== 'ALL' ||
-      selectedPackingStatus !== 'ALL' ||
-      selectedValueSlab !== 'ALL' ||
-      sortBy !== 'DEFAULT'
-    );
-  }, [searchTerm, selectedLocation, dateFilterPreset, customFromDate, customToDate, selectedChannel, selectedPackingStatus, selectedValueSlab, sortBy]);
+  // =========================================================================
+  // 1. TRANSFORM ORDERS INTO ENRICHED UNIFIED RECORDS
+  // =========================================================================
+  const enrichedOrders = useMemo<UnifiedOrderRecord[]>(() => {
+    return orders.map(ord => {
+      const ret = retailers.find(r => r.id === ord.retailer_id) || null;
+      const sp = ord.created_by ? (profiles.find(p => p.id === ord.created_by || p.email === ord.created_by || p.name === ord.created_by) || null) : null;
+      const comp = ord.business_id ? (companies.find(c => c.id === ord.business_id || (c as any).business_id === ord.business_id) || companies[0] || null) : companies[0] || null;
+      const gdn = ord.dispatch_godown ? ((godowns || []).find(g => g.id === ord.dispatch_godown || g.name === ord.dispatch_godown) || (godowns || [])[0] || null) : (godowns || [])[0] || null;
+      
+      const channel = deriveOrderChannel(ord);
+      const lineItemsCount = (ord.items || []).length;
 
-  // 1-Click Master Reset
-  const handleResetAllFilters = () => {
-    setSearchTerm('');
-    setSelectedLocation('ALL');
-    setDateFilterPreset('ALL');
-    setCustomFromDate('');
-    setCustomToDate('');
-    setSelectedChannel('ALL');
-    setSelectedPackingStatus('ALL');
-    setSelectedValueSlab('ALL');
-    setSortBy('DEFAULT');
-    setCurrentPage(1);
-  };
+      let totalOrdered = 0;
+      let totalFulfilled = 0;
+      let totalPending = 0;
+      let pendingValue = 0;
 
-  // Clickable column header sort toggle
-  const toggleSort = (target: 'ITEMS' | 'PIECES' | 'VALUE' | 'DATE') => {
-    setSortBy(current => {
-      if (target === 'ITEMS') {
-        return current === 'ITEMS_DESC' ? 'ITEMS_ASC' : 'ITEMS_DESC';
+      (ord.items || []).forEach(it => {
+        const ordQty = it.ordered_qty ?? it.ordered_pieces ?? it.base_qty ?? it.quantity ?? 0;
+        const fulQty = it.fulfilled_qty ?? it.fulfilled_pieces ?? it.dispatched_qty ?? (ord.status === 'Completed' || ord.status === 'Dispatched' ? ordQty : 0);
+        const canQty = it.cancelled_qty ?? it.cancelled_pieces ?? 0;
+        const remQty = it.remaining_qty !== undefined ? it.remaining_qty : Math.max(0, ordQty - fulQty - canQty);
+        const unitRate = it.rate || it.carton_rate || it.base_price || 0;
+
+        totalOrdered += ordQty;
+        totalFulfilled += fulQty;
+        totalPending += remQty;
+        pendingValue += (remQty * unitRate);
+      });
+
+      const isPartial = totalPending > 0 && (totalFulfilled > 0 || ord.status === 'Partially Confirmed' || ord.status === 'Partially Fulfilled' || ord.status === 'Partially Dispatched' || ord.order_number?.includes('-BO'));
+
+      // Invoice matching
+      const inv = invoices.find(i => 
+        i.id === ord.invoice_id ||
+        i.order_ref_id === ord.id || 
+        i.source_order_ids?.includes(ord.id) ||
+        (ord.order_number && (i.order_numbers?.includes(ord.order_number) || i.source_order_numbers?.includes(ord.order_number)))
+      ) || null;
+
+      // Delivery Challan matching
+      const challan = (deliveryChallans || []).find((dc: DeliveryChallan) => 
+        dc.order_id === ord.id || 
+        dc.order_number === ord.order_number || 
+        (inv && dc.invoice_id === inv.id) ||
+        (ord.challan_id && dc.id === ord.challan_id)
+      ) || null;
+
+      // Payments matching
+      const ordPayments = payments.filter((p: Payment) => 
+        p.retailer_id === ord.retailer_id && (
+          p.notes?.includes(ord.order_number) || 
+          p.reference_number === ord.order_number || 
+          (inv && (p.notes?.includes(inv.invoice_number) || p.reference_number === inv.invoice_number))
+        )
+      );
+      const totalPaid = inv?.paid_amount ?? ordPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+      const totalOrderVal = inv?.grand_total ?? ord.total_amount ?? 0;
+      const outstandingAmount = inv?.outstanding_amount ?? Math.max(0, totalOrderVal - totalPaid);
+
+      let paymentStatus: 'Paid' | 'Partial' | 'Unpaid' | 'Credit' = 'Unpaid';
+      if (inv?.payment_status === 'Paid' || (totalOrderVal > 0 && totalPaid >= totalOrderVal)) {
+        paymentStatus = 'Paid';
+      } else if (inv?.payment_status === 'Partial' || totalPaid > 0) {
+        paymentStatus = 'Partial';
+      } else if ((ord as any).is_credit || (ord as any).payment_terms === 'credit' || inv?.payment_mode === 'Credit') {
+        paymentStatus = 'Credit';
+      } else {
+        paymentStatus = 'Unpaid';
       }
-      if (target === 'PIECES') {
-        return current === 'PIECES_DESC' ? 'PIECES_ASC' : 'PIECES_DESC';
-      }
-      if (target === 'VALUE') {
-        return current === 'VALUE_DESC' ? 'VALUE_ASC' : 'VALUE_DESC';
-      }
-      if (target === 'DATE') {
-        return current === 'DATE_DESC' ? 'DATE_ASC' : 'DATE_DESC';
-      }
-      return 'DEFAULT';
+
+      const orderDateTs = new Date(ord.order_date || ord.created_at || Date.now()).getTime();
+      const dateObj = new Date(ord.order_date || ord.created_at || Date.now());
+
+      return {
+        order: ord,
+        retailer: ret,
+        salesperson: sp,
+        company: comp,
+        godown: gdn,
+        channel,
+        lineItemsCount,
+        totalUnits: totalOrdered,
+        totalAmount: ord.total_amount || 0,
+        status: ord.status,
+        isPartial,
+        totalOrdered,
+        totalFulfilled,
+        totalPending,
+        pendingValue: Math.round(pendingValue * 100) / 100,
+        invoice: inv,
+        deliveryChallan: challan,
+        payments: ordPayments,
+        totalPaid,
+        outstandingAmount,
+        paymentStatus,
+        orderDateTs,
+        formattedDate: dateObj.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+        formattedTime: dateObj.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+      };
     });
-  };
+  }, [orders, retailers, profiles, companies, godowns, invoices, deliveryChallans, payments]);
 
-  // Rule 3: Any filter or sort parameter change resets pagination back to Page 1
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [
-    searchTerm, 
-    selectedLocation, 
-    dateFilterPreset, 
-    customFromDate, 
-    customToDate, 
-    selectedChannel, 
-    selectedPackingStatus, 
-    selectedValueSlab, 
-    sortBy, 
-    activeTab
-  ]);
+  // =========================================================================
+  // 2. STAGE METRIC COUNTERS (For Top 5 Active Status Cards)
+  // =========================================================================
+  const stageCounters = useMemo(() => {
+    let allCount = 0;
+    let toPackCount = 0;
+    let packedCount = 0;
+    let partialPendingCount = 0;
+    let invoicedCount = 0;
 
-  // Helper to resolve salesperson or creator human-friendly name
-  const resolveSalespersonName = (idOrName?: string) => {
-    if (!idOrName) return '';
-    const sp = profiles?.find(p => p.id === idOrName || p.name === idOrName || p.email === idOrName);
-    if (sp) {
-      // Strip out role tags like "(Parle Salesperson)" or "(Distributor Sales)" for a clean name
-      const cleanName = sp.name
-        .replace(/\s*\((Distributor Sales|Parle Salesperson|Britannia Salesperson|HUL Salesperson|Retailer Direct|Dist|Co|Salesperson)\)/gi, '')
-        .replace(/\s*\([^)]*sales[^)]*\)/gi, '')
-        .trim();
-      return cleanName || sp.name;
-    }
-    return idOrName;
-  };
+    enrichedOrders.forEach(rec => {
+      const st = rec.status;
+      allCount++;
 
-  // Channel helper
-  const getChannelBadge = (source?: string, channel?: string, orderNum?: string, createdBy?: string): OriginBadgeInfo => {
-    let channelCode = 'CH_COUNTER';
-    let channelLabel = 'Counter Spot';
-    let badgeClass = 'bg-cyan-50 text-cyan-800 border-cyan-200';
+      if (st === 'Draft' || st === 'Submitted' || st === 'Under Review' || st === 'Confirmed' || st === 'Partially Confirmed' || st === 'PENDING') {
+        toPackCount++;
+      } else if (st === 'Packed' || st === 'PACKED_AND_SEALED' || st === 'PACKING_IN_PROGRESS' || st === 'Ready for Dispatch') {
+        packedCount++;
+      }
 
-    const spName = resolveSalespersonName(createdBy);
+      if (st === 'Partially Fulfilled' || st === 'Partially Dispatched' || st === 'PARTIAL_PENDING' || rec.isPartial || (rec.totalPending > 0 && rec.totalFulfilled > 0)) {
+        partialPendingCount++;
+      }
 
-    if (source === 'distributor_salesperson' || channel === 'Distributor Salesperson') {
-      channelCode = 'CH_DIST_SALES';
-      channelLabel = `Dist Sales${spName ? `: ${spName}` : ''}`;
-      badgeClass = 'bg-amber-50 text-amber-900 border-amber-200';
-    } else if (source === 'company_salesperson' || channel === 'Company Salesperson') {
-      channelCode = 'CH_CO_SALES';
-      channelLabel = `Company Rep${spName ? `: ${spName}` : ''}`;
-      badgeClass = 'bg-purple-50 text-purple-900 border-purple-200';
-    } else if (source === 'retailer_direct' || channel === 'Retailer Direct') {
-      channelCode = 'CH_RETAILER_PWA';
-      channelLabel = 'Retailer Direct App';
-      badgeClass = 'bg-emerald-50 text-emerald-900 border-emerald-200';
-    }
+      if (st === 'Completed' || st === 'Dispatched' || st === 'Delivered' || st === 'Fully Fulfilled' || rec.invoice !== null) {
+        invoicedCount++;
+      }
+    });
 
     return {
-      orderId: '',
-      orderNumber: orderNum || '',
-      source: source || 'counter_sale',
-      channelCode,
-      channelLabel,
-      badgeClass,
-      orderDate: '',
-      totalAmount: 0,
-      salespersonName: spName
+      all: allCount,
+      toPack: toPackCount,
+      packed: packedCount,
+      partialPending: partialPendingCount,
+      invoiced: invoicedCount
     };
-  };
-
-  // ==========================================
-  // TAB 1: RETAILER PACKING LOTS CONSOLIDATION
-  // ==========================================
-  const retailerPackingLots = useMemo<RetailerPackingLot[]>(() => {
-    // 1. Group active open orders by Retailer
-    const activeOrders = orders.filter(o => {
-      const isClosed = o.status === 'Completed' || o.status === 'Delivered' || o.status === 'Cancelled';
-      return !isClosed;
-    });
-
-    const lotsByRetailer = new Map<string, {
-      retailer: Retailer;
-      orders: Order[];
-    }>();
-
-    activeOrders.forEach(ord => {
-      const ret = retailers.find(r => r.id === ord.retailer_id) || ({
-        id: ord.retailer_id || 'UNKNOWN',
-        retailer_code: 'RET-WALKIN',
-        shop_name: 'Walk-in Retailer',
-        owner_name: 'Counter Customer',
-        address: 'Direct Counter',
-        phone: 'N/A',
-        mobile: 'N/A',
-        city: 'Nagpur',
-        state_code: '27',
-        outstanding: 0,
-        outstanding_balance: 0,
-        current_balance: 0,
-        credit_limit: 50000,
-        active: true
-      } as Retailer);
-
-      if (!lotsByRetailer.has(ret.id)) {
-        lotsByRetailer.set(ret.id, {
-          retailer: ret,
-          orders: []
-        });
-      }
-      lotsByRetailer.get(ret.id)!.orders.push(ord);
-    });
-
-    const lots: RetailerPackingLot[] = [];
-
-    lotsByRetailer.forEach(({ retailer, orders: sourceOrders }) => {
-      // Origin badges for each order in the lot
-      const originBadges: OriginBadgeInfo[] = sourceOrders.map(ord => {
-        const badge = getChannelBadge(ord.source, ord.channel, ord.order_number, ord.created_by);
-        return {
-          ...badge,
-          orderId: ord.id,
-          orderNumber: ord.order_number,
-          orderDate: ord.order_date,
-          totalAmount: ord.total_amount
-        };
-      });
-
-      // Composite Key grouping ("MRP IS HERO")
-      const lotItemsMap = new Map<string, PackingLotItem>();
-
-      sourceOrders.forEach(ord => {
-        (ord.items || []).forEach(it => {
-          const prod = products.find(p => p.id === it.product_id);
-          const totalOrdered = it.ordered_qty ?? it.ordered_pieces ?? it.base_qty ?? it.quantity ?? 0;
-          const fulfilled = it.fulfilled_qty ?? it.fulfilled_pieces ?? it.dispatched_qty ?? 0;
-          const cancelled = it.cancelled_qty ?? it.cancelled_pieces ?? 0;
-          const pendingBase = it.remaining_qty !== undefined ? it.remaining_qty : Math.max(0, totalOrdered - fulfilled - cancelled);
-
-          // If the item has already been 100% fulfilled in a prior lot, skip it from active packing lot
-          if (pendingBase <= 0 && (fulfilled > 0 || ord.status === 'Completed')) {
-            return;
-          }
-
-          const mrp = it.mrp || it.selected_mrp || prod?.mrp || 0;
-          const sku = prod?.sku || 'SKU';
-          const compositeKey = getCompositeKey(sku, mrp);
-          const itemEditKey = `${compositeKey}__${ord.id}__${it.id}`;
-
-          // Ordered quantity is strictly in pieces
-          const orderedPieces = pendingBase;
-
-          // Check if there are staged / saved packed quantities from prior "Save Packing Progress"
-          const savedPacked = it.packed_qty !== undefined 
-            ? it.packed_qty 
-            : (it.packed_pieces !== undefined 
-                ? it.packed_pieces 
-                : (it.packed_cartons !== undefined ? it.packed_cartons : undefined));
-          const defaultPacked = savedPacked !== undefined ? savedPacked : orderedPieces;
-
-          // Check user inline edits
-          const userEdit = inlineEdits[itemEditKey];
-          const packedPieces = userEdit?.packedPieces !== undefined 
-            ? userEdit.packedPieces 
-            : (userEdit?.packedCartons !== undefined ? userEdit.packedCartons : defaultPacked);
-
-          const defaultRate = it.rate || it.unit_rate || it.carton_rate || it.base_price || prod?.selling_price || 0;
-          const unitRate = userEdit?.unitRate !== undefined ? userEdit.unitRate : defaultRate;
-
-          // Dist cost and live margin (Strictly Rate per piece)
-          const purchaseCost = prod?.purchase_price || (defaultRate * 0.88);
-          const marginPct = unitRate > 0 && purchaseCost > 0
-            ? Math.round(((unitRate - purchaseCost) / unitRate) * 10000) / 100
-            : null;
-
-          // Financials: taxable = packed_qty_in_pieces * unit_rate_per_piece
-          const gstPercent = prod?.gst_percent || 18;
-          const lineTaxable = Math.round(packedPieces * unitRate * 100) / 100;
-          const lineGst = Math.round(lineTaxable * (gstPercent / 100) * 100) / 100;
-          const lineTotal = lineTaxable + lineGst;
-
-          // Available inventory stock in pieces
-          const invItem = inventory.find(i => i.product_id === it.product_id);
-          const availStockPieces = invItem?.available_qty || 0;
-
-          // Calculate pendency days
-          const orderDate = new Date(ord.order_date || ord.created_at || Date.now()).getTime();
-          const daysPending = Math.max(0, Math.floor((Date.now() - orderDate) / (1000 * 60 * 60 * 24)));
-
-          const isBackorder = (it.fulfilled_qty || 0) > 0 && (it.remaining_qty || 0) > 0;
-
-          if (!lotItemsMap.has(itemEditKey)) {
-            lotItemsMap.set(itemEditKey, {
-              compositeKey,
-              productId: it.product_id,
-              productName: prod?.name || it.product_id,
-              brand: prod?.brand,
-              sku,
-              hsn: prod?.hsn,
-              mrp,
-              tradingUnit: 'Piece',
-              baseUnit: 'Piece',
-              unitsPerPack: 1,
-              orderedPieces,
-              packedPieces,
-              orderedCartons: orderedPieces,
-              orderedLoose: 0,
-              orderedBaseQty: orderedPieces,
-              packedCartons: packedPieces,
-              packedLoose: 0,
-              packedBaseQty: packedPieces,
-              effectivePackedCartons: packedPieces,
-              unitRate,
-              purchaseCost,
-              marginPct,
-              gstPercent,
-              lineTaxable,
-              lineGst,
-              lineTotal,
-              availStockPieces,
-              availStockCartons: availStockPieces,
-              isBackorder,
-              originOrderNumber: ord.order_number,
-              originOrderId: ord.id,
-              originItemId: it.id,
-              originTag: (it as any).packing_notes || (isBackorder 
-                ? `⏳ Pending from ${ord.order_number} (${new Date(ord.order_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })})`
-                : `${ord.order_number}`),
-              daysPending
-            });
-          }
-        });
-      });
-
-      const items = Array.from(lotItemsMap.values());
-      const totalOrderedPieces = items.reduce((sum, i) => sum + (i.orderedPieces ?? i.orderedCartons), 0);
-      const totalPackedPieces = items.reduce((sum, i) => sum + (i.packedPieces ?? i.packedCartons), 0);
-      const taxableSubtotal = items.reduce((sum, i) => sum + i.lineTaxable, 0);
-      const gstTotal = items.reduce((sum, i) => sum + i.lineGst, 0);
-      const netGrandTotal = Math.round((taxableSubtotal + gstTotal) * 100) / 100;
-
-      // Calculate weighted average margin
-      const validMarginItems = items.filter(i => i.marginPct !== null && i.lineTaxable > 0);
-      const totalWeightedMargin = validMarginItems.reduce((sum, i) => sum + (i.marginPct! * i.lineTaxable), 0);
-      const averageMarginPct = taxableSubtotal > 0 && validMarginItems.length > 0
-        ? Math.round((totalWeightedMargin / taxableSubtotal) * 100) / 100
-        : null;
-
-      // Credit health
-      const currentOutstanding = retailer.outstanding ?? retailer.outstanding_balance ?? retailer.current_balance ?? 0;
-      const creditLimit = retailer.credit_limit || 50000;
-      const postBillOutstanding = currentOutstanding + netGrandTotal;
-      const creditLimitExceeded = postBillOutstanding > creditLimit;
-      const exceededAmount = creditLimitExceeded ? postBillOutstanding - creditLimit : 0;
-      const hasBackordersInjected = items.some(i => i.isBackorder);
-
-      lots.push({
-        retailer,
-        sourceOrders,
-        originBadges,
-        items,
-        totalPieces: totalOrderedPieces,
-        totalPackedPieces,
-        totalCartons: totalOrderedPieces,
-        totalPackedCartons: totalPackedPieces,
-        taxableSubtotal,
-        gstTotal,
-        netGrandTotal,
-        averageMarginPct,
-        currentOutstanding,
-        creditLimit,
-        postBillOutstanding,
-        creditLimitExceeded,
-        exceededAmount,
-        hasBackordersInjected
-      });
-    });
-
-    return lots;
-  }, [orders, retailers, products, inventory, inlineEdits]);
+  }, [enrichedOrders]);
 
   // =========================================================================
-  // TAB 1: FILTERED & MULTI-CRITERIA SORTED RETAILER PACKING LOTS
+  // 3. MULTI-CRITERIA FILTERING & GROUPING BY RETAILER
   // =========================================================================
-  const filteredAndSortedPackingLots = useMemo(() => {
-    let result = retailerPackingLots.filter(lot => {
-      // 1. Retailer Location / Beat / Area Filter
-      if (selectedLocation !== 'ALL') {
-        const retLoc = `${lot.retailer.beat_name || ''} ${lot.retailer.route || ''} ${lot.retailer.city || ''} ${lot.retailer.address || ''}`.toLowerCase();
-        if (!retLoc.includes(selectedLocation.toLowerCase())) return false;
-      }
-
-      // 2. Date Filter (matches if any source order falls within calendar boundary)
-      if (dateFilterPreset !== 'ALL') {
-        const matchesDate = lot.sourceOrders.some(o => isDateMatching(o.order_date || o.created_at));
-        if (!matchesDate) return false;
-      }
-
-      // 3. Ingestion Channel Filter (All 4 channels: Dist Sales, Retailer PWA, Counter Spot, Company Rep)
-      if (selectedChannel !== 'ALL') {
-        const matchesChannel = lot.sourceOrders.some(o => {
-          if (selectedChannel === 'distributor_salesperson' || selectedChannel === 'CH_DIST_SALES') {
-            return o.source === 'distributor_salesperson' || (o.channel as any) === 'Distributor Salesperson';
-          }
-          if (selectedChannel === 'retailer_direct' || selectedChannel === 'CH_RETAILER_PWA') {
-            return o.source === 'retailer_direct' || (o.channel as any) === 'Retailer Direct';
-          }
-          if (selectedChannel === 'counter_sale' || selectedChannel === 'CH_COUNTER') {
-            return o.source === 'counter_sale' || (o.channel as any) === 'On Counter Sale' || (o.channel as any) === 'Counter Spot';
-          }
-          if (selectedChannel === 'company_salesperson' || selectedChannel === 'CH_CO_SALES') {
-            return o.source === 'company_salesperson' || (o.channel as any) === 'Company Salesperson';
-          }
+  const filteredAndGroupedRetailers = useMemo<UnifiedRetailerGroup[]>(() => {
+    // A. Filter individual order records
+    const filteredOrders = enrichedOrders.filter(rec => {
+      // 1. Stage Tab Filtering
+      const st = rec.status;
+      if (activeStageTab === 'TO_PACK') {
+        if (st !== 'Draft' && st !== 'Submitted' && st !== 'Under Review' && st !== 'Confirmed' && st !== 'Partially Confirmed' && st !== 'PENDING') {
           return false;
-        });
-        if (!matchesChannel) return false;
+        }
+      } else if (activeStageTab === 'PACKED') {
+        if (st !== 'Packed' && st !== 'PACKED_AND_SEALED' && st !== 'PACKING_IN_PROGRESS' && st !== 'Ready for Dispatch') {
+          return false;
+        }
+      } else if (activeStageTab === 'PARTIAL_PENDING') {
+        if (st !== 'Partially Fulfilled' && st !== 'Partially Dispatched' && st !== 'PARTIAL_PENDING' && !rec.isPartial && rec.totalPending <= 0) {
+          return false;
+        }
+      } else if (activeStageTab === 'INVOICED') {
+        if (st !== 'Completed' && st !== 'Dispatched' && st !== 'Delivered' && st !== 'Fully Fulfilled' && rec.invoice === null) {
+          return false;
+        }
       }
 
-      // 4. Packing Status Filter
-      if (selectedPackingStatus === 'READY_TO_PACK') {
-        if (lot.hasBackordersInjected) return false;
-      } else if (selectedPackingStatus === 'PARTIAL_PACKED') {
-        if (!lot.hasBackordersInjected) return false;
-      } else if (selectedPackingStatus === 'COMPLETED') {
+      // 2. Company Isolation
+      if (activeCompany && rec.order.business_id && rec.order.business_id !== activeCompany.id && rec.order.business_id !== (activeCompany as any).business_id) {
         return false;
       }
 
-      // 5. Order Value Slab Filter
-      if (selectedValueSlab !== 'ALL') {
-        const val = lot.netGrandTotal;
-        if (selectedValueSlab === 'PETTY' && val >= 2000) return false;
-        if (selectedValueSlab === 'STANDARD' && (val < 2000 || val > 10000)) return false;
-        if (selectedValueSlab === 'BULK' && val <= 10000) return false;
+      // 3. Date Filter
+      if (!isDateMatching(rec.order.order_date || rec.order.created_at)) return false;
+
+      // 4. City / Beat Filter
+      if (selectedCity !== 'ALL') {
+        const retCity = (rec.retailer?.city || '').toLowerCase();
+        const retBeat = (rec.retailer?.beat_name || (rec.retailer as any)?.route || '').toLowerCase();
+        const targetCity = selectedCity.toLowerCase();
+        if (!retCity.includes(targetCity) && !retBeat.includes(targetCity)) {
+          return false;
+        }
       }
 
-      // 6. Omnibar Search Filter
+      // 5. Retailer Filter
+      if (selectedRetailerId !== 'ALL' && rec.order.retailer_id !== selectedRetailerId) return false;
+
+      // 6. Salesperson Filter
+      if (selectedSalespersonId !== 'ALL' && rec.order.created_by !== selectedSalespersonId) return false;
+
+      // 7. Channel Filter
+      if (selectedChannel !== 'ALL') {
+        if (rec.channel.code !== selectedChannel && rec.channel.label !== selectedChannel) return false;
+      }
+
+      // 8. Order Value Range Filter
+      const ordVal = rec.invoice?.grand_total ?? rec.order.total_amount ?? 0;
+      if (minValueInput.trim()) {
+        const min = parseFloat(minValueInput);
+        if (!isNaN(min) && ordVal < min) return false;
+      }
+      if (maxValueInput.trim()) {
+        const max = parseFloat(maxValueInput);
+        if (!isNaN(max) && ordVal > max) return false;
+      }
+
+      // 9. Search Term
       if (searchTerm.trim()) {
         const term = searchTerm.toLowerCase();
-        const matchesRetailer = lot.retailer.shop_name.toLowerCase().includes(term) ||
-          (lot.retailer.owner_name && lot.retailer.owner_name.toLowerCase().includes(term)) ||
-          (lot.retailer.mobile && lot.retailer.mobile.includes(term)) ||
-          (lot.retailer.phone && lot.retailer.phone.includes(term)) ||
-          (lot.retailer.beat_name && lot.retailer.beat_name.toLowerCase().includes(term)) ||
-          (lot.retailer.city && lot.retailer.city.toLowerCase().includes(term));
-
-        const matchesOrder = lot.sourceOrders.some(o => o.order_number.toLowerCase().includes(term));
-        const matchesSalesperson = lot.originBadges.some(b => b.channelLabel.toLowerCase().includes(term) || (b.salespersonName && b.salespersonName.toLowerCase().includes(term)));
-        const matchesProduct = lot.items.some(i => 
-          i.productName.toLowerCase().includes(term) || 
-          i.sku.toLowerCase().includes(term)
+        const retName = (rec.retailer?.shop_name || '').toLowerCase();
+        const retOwner = (rec.retailer?.owner_name || '').toLowerCase();
+        const retPhone = (rec.retailer?.phone || rec.retailer?.mobile || '').toLowerCase();
+        const ordNo = (rec.order.order_number || '').toLowerCase();
+        const invNo = (rec.invoice?.invoice_number || '').toLowerCase();
+        const spName = (rec.salesperson?.name || '').toLowerCase();
+        const hasProdMatch = (rec.order.items || []).some(it => 
+          (it.product_name || (it as any).name || '').toLowerCase().includes(term) || 
+          (it.product_id || '').toLowerCase().includes(term)
         );
-
-        return matchesRetailer || matchesOrder || matchesSalesperson || matchesProduct;
+        if (!retName.includes(term) && !retOwner.includes(term) && !retPhone.includes(term) && !ordNo.includes(term) && !invNo.includes(term) && !spName.includes(term) && !hasProdMatch) {
+          return false;
+        }
       }
 
       return true;
     });
 
-    // Multi-Criteria Sorting Engine
-    switch (sortBy) {
-      case 'ITEMS_DESC':
-        return [...result].sort((a, b) => b.items.length - a.items.length);
-      case 'ITEMS_ASC':
-        return [...result].sort((a, b) => a.items.length - b.items.length);
-      case 'PIECES_DESC':
-        return [...result].sort((a, b) => (b.totalPieces ?? b.totalCartons ?? 0) - (a.totalPieces ?? a.totalCartons ?? 0));
-      case 'PIECES_ASC':
-        return [...result].sort((a, b) => (a.totalPieces ?? a.totalCartons ?? 0) - (b.totalPieces ?? b.totalCartons ?? 0));
+    // B. Group Orders by Retailer
+    const groupsMap = new Map<string, {
+      retailerId: string;
+      retailer: Retailer | null;
+      orders: UnifiedOrderRecord[];
+    }>();
+
+    filteredOrders.forEach(ordRec => {
+      const retId = ordRec.order.retailer_id || 'UNKNOWN_RETAILER';
+      let grp = groupsMap.get(retId);
+      if (!grp) {
+        grp = {
+          retailerId: retId,
+          retailer: ordRec.retailer,
+          orders: []
+        };
+        groupsMap.set(retId, grp);
+      }
+      grp.orders.push(ordRec);
+    });
+
+    const groups: UnifiedRetailerGroup[] = [];
+
+    groupsMap.forEach(({ retailerId, retailer, orders: grpOrders }) => {
+      let sortedOrders = [...grpOrders];
+
+      // Line Items Sort
+      if (lineItemsSort === 'HIGH_TO_LOW') {
+        sortedOrders.sort((a, b) => b.lineItemsCount - a.lineItemsCount);
+      } else if (lineItemsSort === 'LOW_TO_HIGH') {
+        sortedOrders.sort((a, b) => a.lineItemsCount - b.lineItemsCount);
+      } else {
+        // Main Sort
+        switch (mainSort) {
+          case 'LATEST':
+            sortedOrders.sort((a, b) => b.orderDateTs - a.orderDateTs);
+            break;
+          case 'OLDEST':
+            sortedOrders.sort((a, b) => a.orderDateTs - b.orderDateTs);
+            break;
+          case 'VALUE_DESC':
+            sortedOrders.sort((a, b) => b.totalAmount - a.totalAmount);
+            break;
+          case 'VALUE_ASC':
+            sortedOrders.sort((a, b) => a.totalAmount - b.totalAmount);
+            break;
+          case 'PENDING_DESC':
+            sortedOrders.sort((a, b) => b.totalPending - a.totalPending);
+            break;
+          case 'PENDING_ASC':
+            sortedOrders.sort((a, b) => a.totalPending - b.totalPending);
+            break;
+          default:
+            sortedOrders.sort((a, b) => b.orderDateTs - a.orderDateTs);
+            break;
+        }
+      }
+
+      let totalLineItems = 0;
+      let totalUnitsSum = 0;
+      let totalOrderValueSum = 0;
+      let totalPendingPiecesSum = 0;
+      let totalPendingValueSum = 0;
+      const channelSet = new Set<string>();
+      const statusCountMap: { [st: string]: number } = {};
+
+      sortedOrders.forEach(o => {
+        totalLineItems += o.lineItemsCount;
+        totalUnitsSum += o.totalUnits;
+        totalOrderValueSum += o.totalAmount;
+        totalPendingPiecesSum += o.totalPending;
+        totalPendingValueSum += o.pendingValue;
+        channelSet.add(o.channel.label);
+
+        const st = o.status;
+        statusCountMap[st] = (statusCountMap[st] || 0) + 1;
+      });
+
+      const statusSummaryList: string[] = [];
+      Object.entries(statusCountMap).forEach(([st, cnt]) => {
+        statusSummaryList.push(`${cnt} ${st}`);
+      });
+
+      const chronoSorted = [...grpOrders].sort((a, b) => b.orderDateTs - a.orderDateTs);
+      const latestOrder = chronoSorted[0];
+      const earliestOrder = chronoSorted[chronoSorted.length - 1];
+
+      const currentOutstanding = retailer?.outstanding ?? retailer?.outstanding_balance ?? 0;
+      const creditLimit = retailer?.credit_limit || 50000;
+
+      const pendingOrders = sortedOrders.filter(o => 
+        o.status === 'Draft' || 
+        o.status === 'Submitted' || 
+        o.status === 'Under Review' || 
+        o.status === 'Confirmed' || 
+        o.status === 'Partially Confirmed' || 
+        (o.status as string) === 'PENDING'
+      );
+
+      const packedOrders = sortedOrders.filter(o => 
+        o.status === 'Packed' || 
+        o.status === 'PACKED_AND_SEALED' || 
+        o.status === 'Ready for Dispatch' ||
+        (o.status as string) === 'PACKING_IN_PROGRESS'
+      );
+
+      let totalPackedValueSum = 0;
+      let totalPackedPiecesSum = 0;
+      packedOrders.forEach(o => {
+        totalPackedValueSum += (o.order.total_amount || 0);
+        (o.order.items || []).forEach(it => {
+          totalPackedPiecesSum += (it.packed_qty ?? it.confirmed_qty ?? it.base_qty ?? it.quantity ?? 0);
+        });
+      });
+
+      const completedOrders = sortedOrders.filter(o => 
+        o.status === 'Completed' || 
+        o.status === 'Fully Fulfilled' || 
+        o.status === 'Dispatched' || 
+        o.status === 'Delivered' ||
+        (o.invoice !== null && o.invoice !== undefined)
+      );
+
+      let totalCompletedValueSum = 0;
+      completedOrders.forEach(o => {
+        totalCompletedValueSum += (o.order.total_amount || o.totalAmount || 0);
+      });
+
+      const groupInvoicesMap = new Map<string, Invoice>();
+      sortedOrders.forEach(o => {
+        if (o.invoice) {
+          groupInvoicesMap.set(o.invoice.id, o.invoice);
+        }
+      });
+      const invoicesList = Array.from(groupInvoicesMap.values());
+
+      // Find all active backorders for this retailer in system
+      const retailerBackorders = orders.filter(o => 
+        o.retailer_id === retailerId && (
+          o.status === 'Partially Fulfilled' || 
+          (o.status as string) === 'PARTIAL_PENDING' || 
+          o.order_number?.includes('-BO') ||
+          (o.items && o.items.some(i => (i.remaining_qty || 0) > 0 && (i.status === 'PARTIAL_PENDING' || (i as any).status === 'PARTIALLY_FULFILLED')))
+        ) && o.status !== 'Completed' && o.status !== 'Cancelled'
+      );
+
+      let backorderPiecesTotal = 0;
+      retailerBackorders.forEach(bo => {
+        bo.items?.forEach(it => {
+          const rem = it.remaining_qty !== undefined && it.remaining_qty > 0 
+            ? it.remaining_qty 
+            : ((it.ordered_qty ?? it.base_qty ?? it.quantity ?? 0) - (it.fulfilled_qty || 0) - (it.cancelled_qty || 0));
+          if (rem > 0) backorderPiecesTotal += rem;
+        });
+      });
+      const hasPendingBackorders = backorderPiecesTotal > 0 || retailerBackorders.length > 0;
+
+      groups.push({
+        retailerId,
+        retailer,
+        retailerName: retailer?.shop_name || 'Retailer Customer',
+        ownerName: retailer?.owner_name || 'N/A',
+        phone: retailer?.phone || retailer?.mobile || 'N/A',
+        city: retailer?.city || 'Indore',
+        route: retailer?.beat_name || (retailer as any)?.route || 'Main Market',
+        address: retailer?.address || (retailer as any)?.shop_address || '',
+        currentOutstanding,
+        creditLimit,
+        orders: sortedOrders,
+        pendingOrders,
+        packedOrders,
+        completedOrders,
+        totalPackedValueSum: Math.round(totalPackedValueSum * 100) / 100,
+        totalPackedPiecesSum,
+        totalCompletedValueSum: Math.round(totalCompletedValueSum * 100) / 100,
+        invoicesList,
+        retailerBackorders,
+        hasPendingBackorders,
+        backorderPiecesTotal,
+        totalOrdersCount: sortedOrders.length,
+        totalLineItemsCount: totalLineItems,
+        totalUnitsSum,
+        totalOrderValueSum: Math.round(totalOrderValueSum * 100) / 100,
+        totalPendingPiecesSum,
+        totalPendingValueSum: Math.round(totalPendingValueSum * 100) / 100,
+        latestOrder,
+        earliestOrder,
+        statusSummaryList,
+        channelSet
+      });
+    });
+
+    // Sort groups
+    switch (mainSort) {
+      case 'LATEST':
+        return [...groups].sort((a, b) => b.latestOrder.orderDateTs - a.latestOrder.orderDateTs);
+      case 'OLDEST':
+        return [...groups].sort((a, b) => a.earliestOrder.orderDateTs - b.earliestOrder.orderDateTs);
       case 'VALUE_DESC':
-        return [...result].sort((a, b) => b.netGrandTotal - a.netGrandTotal);
+        return [...groups].sort((a, b) => b.totalOrderValueSum - a.totalOrderValueSum);
       case 'VALUE_ASC':
-        return [...result].sort((a, b) => a.netGrandTotal - b.netGrandTotal);
-      case 'DATE_ASC': // Oldest First (FIFO Priority Dispatch)
-        return [...result].sort((a, b) => {
-          const dateA = Math.min(...a.sourceOrders.map(o => new Date(o.order_date || o.created_at || 0).getTime()));
-          const dateB = Math.min(...b.sourceOrders.map(o => new Date(o.order_date || o.created_at || 0).getTime()));
-          return dateA - dateB;
-        });
-      case 'DATE_DESC': // Newest First
-        return [...result].sort((a, b) => {
-          const dateA = Math.max(...a.sourceOrders.map(o => new Date(o.order_date || o.created_at || 0).getTime()));
-          const dateB = Math.max(...b.sourceOrders.map(o => new Date(o.order_date || o.created_at || 0).getTime()));
-          return dateB - dateA;
-        });
+        return [...groups].sort((a, b) => a.totalOrderValueSum - b.totalOrderValueSum);
+      case 'PENDING_DESC':
+        return [...groups].sort((a, b) => b.totalPendingPiecesSum - a.totalPendingPiecesSum);
+      case 'PENDING_ASC':
+        return [...groups].sort((a, b) => a.totalPendingPiecesSum - b.totalPendingPiecesSum);
       default:
-        return result;
+        return [...groups].sort((a, b) => b.latestOrder.orderDateTs - a.latestOrder.orderDateTs);
     }
-  }, [retailerPackingLots, selectedLocation, dateFilterPreset, customFromDate, customToDate, selectedChannel, selectedPackingStatus, selectedValueSlab, searchTerm, sortBy]);
+  }, [
+    enrichedOrders, activeStageTab, activeCompany, dateFilterPreset, customFromDate, customToDate,
+    selectedCity, selectedRetailerId, selectedSalespersonId, selectedChannel,
+    minValueInput, maxValueInput, searchTerm, lineItemsSort, mainSort
+  ]);
 
-  // Order count metrics across filtered lots
+  // Grand totals across filtered groups
   const totalFilteredOrdersCount = useMemo(() => {
-    return filteredAndSortedPackingLots.reduce((acc, lot) => acc + lot.sourceOrders.length, 0);
-  }, [filteredAndSortedPackingLots]);
-  
-  const masterTotalOrdersCount = useMemo(() => {
-    return retailerPackingLots.reduce((acc, lot) => acc + lot.sourceOrders.length, 0);
-  }, [retailerPackingLots]);
+    return filteredAndGroupedRetailers.reduce((sum, g) => sum + g.totalOrdersCount, 0);
+  }, [filteredAndGroupedRetailers]);
 
-  // Paginated lots for Tab 1
-  const totalPackingLotsCount = filteredAndSortedPackingLots.length;
-  const totalPackingPages = Math.max(1, Math.ceil(totalPackingLotsCount / (pageSize === -1 ? 999999 : pageSize)));
-  const validPackingPage = Math.min(currentPage, totalPackingPages);
-  
-  const pagedPackingLots = useMemo(() => {
-    if (pageSize === -1) return filteredAndSortedPackingLots;
-    const start = (validPackingPage - 1) * pageSize;
-    return filteredAndSortedPackingLots.slice(start, start + pageSize);
-  }, [filteredAndSortedPackingLots, validPackingPage, pageSize]);
+  const totalFilteredValueSum = useMemo(() => {
+    return filteredAndGroupedRetailers.reduce((sum, g) => sum + g.totalOrderValueSum, 0);
+  }, [filteredAndGroupedRetailers]);
 
-  // ==========================================
-  // TAB 2: PARTIAL PENDING QUEUE (BACKORDER HUB)
-  // ==========================================
-  const backorderQueueItems = useMemo<BackorderQueueItem[]>(() => {
-    const queue: BackorderQueueItem[] = [];
+  // Pagination for Retailer Groups
+  const totalRetailerPages = Math.max(1, Math.ceil(filteredAndGroupedRetailers.length / (pageSize === -1 ? 999999 : pageSize)));
+  const validCurrentPage = Math.min(currentPage, totalRetailerPages);
 
-    orders.forEach(ord => {
-      if (ord.status === 'Cancelled') return;
+  const pagedRetailerGroups = useMemo(() => {
+    if (pageSize === -1) return filteredAndGroupedRetailers;
+    const start = (validCurrentPage - 1) * pageSize;
+    return filteredAndGroupedRetailers.slice(start, start + pageSize);
+  }, [filteredAndGroupedRetailers, validCurrentPage, pageSize]);
 
-      const ret = retailers.find(r => r.id === ord.retailer_id);
-      const retName = ret?.shop_name || 'Retailer';
-      const retCity = ret?.city || 'Nagpur';
-      const retBeat = ret?.beat_name || ret?.route;
-      const retPhone = ret?.phone || ret?.mobile;
+  // Accordion Expand/Collapse Helpers
+  const toggleRetailerExpand = (retailerId: string) => {
+    setExpandedRetailers(prev => ({
+      ...prev,
+      [retailerId]: prev[retailerId] === false ? true : false
+    }));
+  };
 
+  const handleExpandAll = () => {
+    const next: { [retId: string]: boolean } = {};
+    filteredAndGroupedRetailers.forEach(g => { next[g.retailerId] = true; });
+    setExpandedRetailers(next);
+  };
+
+  const handleCollapseAll = () => {
+    const next: { [retId: string]: boolean } = {};
+    filteredAndGroupedRetailers.forEach(g => { next[g.retailerId] = false; });
+    setExpandedRetailers(next);
+  };
+
+  const handleClearFilters = () => {
+    setSearchTerm('');
+    setSelectedCity('ALL');
+    setDateFilterPreset('ALL');
+    setCustomFromDate('');
+    setCustomToDate('');
+    setSelectedRetailerId('ALL');
+    setSelectedSalespersonId('ALL');
+    setSelectedChannel('ALL');
+    setMinValueInput('');
+    setMaxValueInput('');
+    setLineItemsSort('NONE');
+    setMainSort('LATEST');
+    setCurrentPage(1);
+  };
+
+  const hasActiveFilters = (
+    searchTerm.trim() !== '' ||
+    selectedCity !== 'ALL' ||
+    dateFilterPreset !== 'ALL' ||
+    selectedRetailerId !== 'ALL' ||
+    selectedSalespersonId !== 'ALL' ||
+    selectedChannel !== 'ALL' ||
+    minValueInput.trim() !== '' ||
+    maxValueInput.trim() !== '' ||
+    lineItemsSort !== 'NONE' ||
+    mainSort !== 'LATEST'
+  );
+
+  // Workflow Triggers
+  const handleOpenPackingFloor = (retailer: Retailer | null, targetOrders: Order[], backorders: Order[] = []) => {
+    setPackingFloorRetailer(retailer);
+    setPackingFloorOrders(targetOrders);
+    setPackingFloorBackorders(backorders);
+    setIsPackingFloorOpen(true);
+  };
+
+  const handleOpenBillingOverride = (order: Order) => {
+    setBillingOverrideOrder(order);
+    setBillingOverrideOrders([order]);
+    setBillingOverrideRetailer(retailers.find(r => r.id === order.retailer_id) || null);
+    setIsBillingOverrideOpen(true);
+  };
+
+  const handleOpenBillingOverrideConsolidated = (retailer: Retailer | null, packedOrders: Order[]) => {
+    setBillingOverrideOrder(packedOrders[0] || null);
+    setBillingOverrideOrders(packedOrders);
+    setBillingOverrideRetailer(retailer);
+    setIsBillingOverrideOpen(true);
+  };
+
+  const handleGenerateConsolidatedTaxInvoice = (retailer: Retailer | null, packedOrders: Order[]) => {
+    if (!retailer || packedOrders.length === 0) return;
+
+    // Aggregate packed items across all packed orders for this retailer
+    const allPackedLotItems: any[] = [];
+    packedOrders.forEach(ord => {
       (ord.items || []).forEach(it => {
         const prod = products.find(p => p.id === it.product_id);
-        const totalOrdered = it.ordered_qty ?? it.ordered_pieces ?? it.base_qty ?? it.quantity ?? 0;
-        const fulfilled = it.fulfilled_qty ?? it.fulfilled_pieces ?? it.dispatched_qty ?? 0;
-        const cancelled = it.cancelled_qty ?? it.cancelled_pieces ?? 0;
-        const pendingBase = it.remaining_qty !== undefined ? it.remaining_qty : Math.max(0, totalOrdered - fulfilled - cancelled);
-
-        const isShortageOrPartial = pendingBase > 0 && (
-          fulfilled > 0 || 
-          ord.status === 'Partially Confirmed' || 
-          ord.status === 'Partially Fulfilled' || 
-          ord.status === 'Partially Dispatched' ||
-          it.status === 'PARTIALLY_FULFILLED' ||
-          it.status === 'WAITING_STOCK'
-        );
-
-        if (isShortageOrPartial) {
-          const mrp = it.mrp || it.selected_mrp || prod?.mrp || 0;
-          const lockedUnitRate = it.rate || it.unit_rate || it.order_time_rate || it.manual_billing_rate || it.base_price || prod?.selling_price || 0;
-
-          const invItem = inventory.find(i => i.product_id === it.product_id);
-          const availStockPieces = invItem?.available_qty || 0;
-
-          const orderDateTs = new Date(ord.order_date || ord.created_at || Date.now()).getTime();
-          const daysPending = Math.max(0, Math.floor((Date.now() - orderDateTs) / (1000 * 60 * 60 * 24)));
-
-          queue.push({
-            orderId: ord.id,
-            orderNumber: ord.order_number,
-            orderDate: ord.order_date,
-            retailerId: ord.retailer_id,
-            retailerName: retName,
-            retailerCity: retCity,
-            retailerBeat: retBeat,
-            retailerPhone: retPhone,
-            itemId: it.id,
+        const unitsPerPack = it.units_per_trading_unit || prod?.units_per_box_carton || 1;
+        const packedPieces = it.packed_qty ?? it.confirmed_qty ?? it.base_qty ?? it.quantity ?? 0;
+        if (packedPieces > 0) {
+          const { cartonQty, looseQty } = splitBaseQuantity(packedPieces, unitsPerPack);
+          const unitRate = it.manual_billing_rate || it.carton_rate || it.order_time_rate || it.base_price || prod?.selling_price || 0;
+          allPackedLotItems.push({
+            originOrderId: ord.id,
+            originItemId: it.id,
             productId: it.product_id,
-            productName: prod?.name || it.product_name || it.product_id,
+            productName: prod?.name || (it as any).name || 'Product Item',
             sku: prod?.sku || 'SKU',
-            mrp,
-            unitsPerPack: 1,
-            tradingUnit: 'Piece',
-            baseUnit: 'Piece',
-            orderedPieces: totalOrdered,
-            fulfilledPieces: fulfilled,
-            pendingPieces: pendingBase,
-            orderedCartons: totalOrdered,
-            orderedLoose: 0,
-            fulfilledCartons: fulfilled,
-            fulfilledLoose: 0,
-            pendingCartons: pendingBase,
-            pendingLoose: 0,
-            lockedUnitRate,
-            daysPending,
-            availStockPieces,
-            availStockCartons: availStockPieces,
-            lastInvoiceNumber: ord.invoice_id,
-            compositeKey: getCompositeKey(prod?.sku || 'SKU', mrp)
+            mrp: it.selected_mrp || prod?.mrp || 0,
+            unitsPerPack,
+            tradingUnit: it.trading_unit || prod?.trading_unit || 'Carton',
+            baseUnit: it.base_unit || prod?.base_unit || 'Piece',
+            packedCartons: cartonQty,
+            packedLoose: looseQty,
+            packedPieces,
+            unitRate,
+            flatDiscount: it.carton_discount || it.discount || 0,
+            purchaseCost: it.purchase_rate || prod?.purchase_price || 0,
+            hsn: (it as any).hsn || prod?.hsn || '1902'
           });
         }
       });
     });
 
-    return queue;
-  }, [orders, retailers, products, inventory]);
-
-  const filteredAndSortedBackorders = useMemo(() => {
-    let result = backorderQueueItems.filter(bo => {
-      // 1. Retailer Location
-      if (selectedLocation !== 'ALL') {
-        const ret = retailers.find(r => r.id === bo.retailerId);
-        const loc = `${bo.retailerBeat || ''} ${bo.retailerCity || ''} ${ret?.address || ''}`.toLowerCase();
-        if (!loc.includes(selectedLocation.toLowerCase())) return false;
-      }
-
-      // 2. Date
-      if (dateFilterPreset !== 'ALL') {
-        if (!isDateMatching(bo.orderDate)) return false;
-      }
-
-      // 3. Channel
-      if (selectedChannel !== 'ALL') {
-        const matchOrd = orders.find(o => o.id === bo.orderId);
-        if (matchOrd) {
-          if (selectedChannel === 'distributor_salesperson' || selectedChannel === 'CH_DIST_SALES') {
-            if (matchOrd.source !== 'distributor_salesperson' && (matchOrd.channel as any) !== 'Distributor Salesperson') return false;
-          } else if (selectedChannel === 'retailer_direct' || selectedChannel === 'CH_RETAILER_PWA') {
-            if (matchOrd.source !== 'retailer_direct' && (matchOrd.channel as any) !== 'Retailer Direct') return false;
-          } else if (selectedChannel === 'counter_sale' || selectedChannel === 'CH_COUNTER') {
-            if (matchOrd.source !== 'counter_sale' && (matchOrd.channel as any) !== 'On Counter Sale' && (matchOrd.channel as any) !== 'Counter Spot') return false;
-          } else if (selectedChannel === 'company_salesperson' || selectedChannel === 'CH_CO_SALES') {
-            if (matchOrd.source !== 'company_salesperson' && (matchOrd.channel as any) !== 'Company Salesperson') return false;
-          }
-        }
-      }
-
-      // 4. Status filter
-      if (selectedPackingStatus === 'COMPLETED') return false;
-
-      // 5. Value Slab
-      if (selectedValueSlab !== 'ALL') {
-        const val = bo.pendingPieces * bo.lockedUnitRate;
-        if (selectedValueSlab === 'PETTY' && val >= 2000) return false;
-        if (selectedValueSlab === 'STANDARD' && (val < 2000 || val > 10000)) return false;
-        if (selectedValueSlab === 'BULK' && val <= 10000) return false;
-      }
-
-      // 6. Search
-      if (searchTerm.trim()) {
-        const term = searchTerm.toLowerCase();
-        return (
-          bo.retailerName.toLowerCase().includes(term) ||
-          bo.orderNumber.toLowerCase().includes(term) ||
-          bo.productName.toLowerCase().includes(term) ||
-          bo.sku.toLowerCase().includes(term) ||
-          bo.retailerCity.toLowerCase().includes(term) ||
-          (bo.retailerBeat && bo.retailerBeat.toLowerCase().includes(term))
-        );
-      }
-
-      return true;
-    });
-
-    // Sorting
-    switch (sortBy) {
-      case 'PIECES_DESC':
-        return [...result].sort((a, b) => b.pendingPieces - a.pendingPieces);
-      case 'PIECES_ASC':
-        return [...result].sort((a, b) => a.pendingPieces - b.pendingPieces);
-      case 'VALUE_DESC':
-        return [...result].sort((a, b) => (b.pendingPieces * b.lockedUnitRate) - (a.pendingPieces * a.lockedUnitRate));
-      case 'VALUE_ASC':
-        return [...result].sort((a, b) => (a.pendingPieces * a.lockedUnitRate) - (b.pendingPieces * b.lockedUnitRate));
-      case 'DATE_ASC':
-        return [...result].sort((a, b) => new Date(a.orderDate).getTime() - new Date(b.orderDate).getTime());
-      case 'DATE_DESC':
-        return [...result].sort((a, b) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime());
-      default:
-        return result;
-    }
-  }, [backorderQueueItems, selectedLocation, dateFilterPreset, customFromDate, customToDate, selectedChannel, selectedPackingStatus, selectedValueSlab, searchTerm, sortBy, orders, retailers]);
-
-  const totalBackordersCount = filteredAndSortedBackorders.length;
-  const totalBackorderPages = Math.max(1, Math.ceil(totalBackordersCount / (pageSize === -1 ? 999999 : pageSize)));
-  const validBackorderPage = Math.min(currentPage, totalBackorderPages);
-
-  const pagedBackorders = useMemo(() => {
-    if (pageSize === -1) return filteredAndSortedBackorders;
-    const start = (validBackorderPage - 1) * pageSize;
-    return filteredAndSortedBackorders.slice(start, start + pageSize);
-  }, [filteredAndSortedBackorders, validBackorderPage, pageSize]);
-
-  // ==========================================
-  // TAB 3: COMPLETED & DISPATCHED HISTORY
-  // ==========================================
-  const completedInvoicesList = useMemo(() => {
-    const list = invoices.map(inv => {
-      const ret = retailers.find(r => r.id === inv.retailer_id);
-      return {
-        ...inv,
-        retailerName: ret?.shop_name || 'Retailer Customer',
-        retailerBeat: ret?.beat_name || ret?.route || ret?.city || 'Nagpur',
-        retailerPhone: ret?.phone || ret?.mobile
-      };
-    });
-
-    return list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [invoices, retailers]);
-
-  const filteredAndSortedInvoices = useMemo(() => {
-    let result = completedInvoicesList.filter(inv => {
-      // 1. Location
-      if (selectedLocation !== 'ALL') {
-        const loc = `${inv.retailerBeat || ''} ${inv.retailerName || ''}`.toLowerCase();
-        if (!loc.includes(selectedLocation.toLowerCase())) return false;
-      }
-
-      // 2. Date
-      if (dateFilterPreset !== 'ALL') {
-        if (!isDateMatching(inv.date || (inv as any).created_at)) return false;
-      }
-
-      // 3. Status filter
-      if (selectedPackingStatus === 'READY_TO_PACK' || selectedPackingStatus === 'PARTIAL_PACKED') {
-        return false;
-      }
-
-      // 4. Value Slab
-      if (selectedValueSlab !== 'ALL') {
-        const val = inv.grand_total || 0;
-        if (selectedValueSlab === 'PETTY' && val >= 2000) return false;
-        if (selectedValueSlab === 'STANDARD' && (val < 2000 || val > 10000)) return false;
-        if (selectedValueSlab === 'BULK' && val <= 10000) return false;
-      }
-
-      // 5. Search
-      if (searchTerm.trim()) {
-        const term = searchTerm.toLowerCase();
-        return (
-          inv.invoice_number.toLowerCase().includes(term) ||
-          inv.retailerName.toLowerCase().includes(term) ||
-          (inv.source_order_numbers && inv.source_order_numbers.some(o => o.toLowerCase().includes(term)))
-        );
-      }
-
-      return true;
-    });
-
-    // Sorting
-    switch (sortBy) {
-      case 'ITEMS_DESC':
-        return [...result].sort((a, b) => (b.items?.length || 0) - (a.items?.length || 0));
-      case 'ITEMS_ASC':
-        return [...result].sort((a, b) => (a.items?.length || 0) - (b.items?.length || 0));
-      case 'VALUE_DESC':
-        return [...result].sort((a, b) => (b.grand_total || 0) - (a.grand_total || 0));
-      case 'VALUE_ASC':
-        return [...result].sort((a, b) => (a.grand_total || 0) - (b.grand_total || 0));
-      case 'DATE_ASC':
-        return [...result].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-      case 'DATE_DESC':
-        return [...result].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      default:
-        return result;
-    }
-  }, [completedInvoicesList, selectedLocation, dateFilterPreset, customFromDate, customToDate, selectedPackingStatus, selectedValueSlab, searchTerm, sortBy]);
-
-  const totalInvoicesCount = filteredAndSortedInvoices.length;
-  const totalInvoicePages = Math.max(1, Math.ceil(totalInvoicesCount / (pageSize === -1 ? 999999 : pageSize)));
-  const validInvoicePage = Math.min(currentPage, totalInvoicePages);
-
-  const pagedInvoices = useMemo(() => {
-    if (pageSize === -1) return filteredAndSortedInvoices;
-    const start = (validInvoicePage - 1) * pageSize;
-    return filteredAndSortedInvoices.slice(start, start + pageSize);
-  }, [filteredAndSortedInvoices, validInvoicePage, pageSize]);
-
-  // ==========================================
-  // INLINE OPERATIONAL FREEDOM HANDLERS (PIECES & PIECE RATES)
-  // ==========================================
-
-  const handlePackedPiecesChange = (itemEditKey: string, val: number) => {
-    if (!can(userRole, 'EDIT_PACKED_QTY')) return;
-    setInlineEdits(prev => ({
-      ...prev,
-      [itemEditKey]: {
-        ...prev[itemEditKey],
-        packedPieces: Math.max(0, val),
-        packedCartons: Math.max(0, val)
-      }
-    }));
-  };
-
-  const handlePackedCartonsChange = handlePackedPiecesChange;
-  const handlePackedLooseChange = (_itemEditKey: string, _val: number) => {};
-  const handlePackedQtyChange = handlePackedPiecesChange;
-
-  const handleUnitRateChange = (itemEditKey: string, val: number) => {
-    if (!can(userRole, 'EDIT_RATES')) return;
-    setInlineEdits(prev => ({
-      ...prev,
-      [itemEditKey]: {
-        ...prev[itemEditKey],
-        unitRate: Math.max(0, val)
-      }
-    }));
-  };
-
-  // Soft-delete line item with two-tier recovery
-  const handleRemoveLineItem = (lot: RetailerPackingLot, item: PackingLotItem) => {
-    if (!can(userRole, 'REMOVE_ITEM')) return;
-
-    const record: DeletedItemRecord = {
-      id: `del-item-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      type: 'ITEM',
-      deletedAt: new Date().toISOString(),
-      deletedBy: userRole.replace('ROLE_', ''),
-      retailerId: lot.retailer.id,
-      retailerName: lot.retailer.shop_name,
-      orderId: item.originOrderId,
-      orderNumber: item.originOrderNumber,
-      itemId: item.originItemId,
-      productName: item.productName,
-      sku: item.sku,
-      mrp: item.mrp,
-      pieceQty: item.packedPieces ?? item.packedCartons,
-      cartonQty: item.packedPieces ?? item.packedCartons,
-      unitRate: item.unitRate
-    };
-
-    // 1. Remove from database
-    removeOrderItem(item.originOrderId, item.originItemId);
-
-    // 2. Add to Tier 2 Recycle Bin
-    setDeletedRecords(prev => [record, ...prev]);
-
-    // 3. Trigger Tier 1 Floating 8-Second Undo Toast
-    if (undoToast?.timerId) clearTimeout(undoToast.timerId);
-
-    const timerId = setTimeout(() => {
-      setUndoToast(null);
-    }, 8000);
-
-    setUndoToast({
-      record,
-      countdown: 8,
-      timerId
-    });
-  };
-
-  // Soft-delete entire lot / order
-  const handleDeleteEntireLot = (lot: RetailerPackingLot) => {
-    if (!can(userRole, 'DELETE_LOT')) return;
-    if (!window.confirm(`Are you sure you want to cancel and remove all ${lot.sourceOrders.length} orders for ${lot.retailer.shop_name}?`)) {
+    if (allPackedLotItems.length === 0) {
+      alert('No packed items found across the selected orders. Please pack the orders on the packing floor first.');
       return;
     }
 
-    lot.sourceOrders.forEach(ord => {
-      const record: DeletedItemRecord = {
-        id: `del-lot-${Date.now()}-${ord.id}`,
-        type: 'LOT_ORDER',
-        deletedAt: new Date().toISOString(),
-        deletedBy: userRole.replace('ROLE_', ''),
-        retailerId: lot.retailer.id,
-        retailerName: lot.retailer.shop_name,
-        orderId: ord.id,
-        orderNumber: ord.order_number,
-        productName: `Full Lot Order (${ord.items?.length || 0} items)`,
-        pieceQty: lot.totalPackedPieces ?? lot.totalPackedCartons,
-        cartonQty: lot.totalPackedPieces ?? lot.totalPackedCartons,
-        unitRate: lot.taxableSubtotal
-      };
-
-      setDeletedRecords(prev => [record, ...prev]);
-      deleteOrder(ord.id);
-    });
-
-    const summaryRecord: DeletedItemRecord = {
-      id: `del-lot-summary-${Date.now()}`,
-      type: 'LOT_ORDER',
-      deletedAt: new Date().toISOString(),
-      deletedBy: userRole.replace('ROLE_', ''),
-      retailerId: lot.retailer.id,
-      retailerName: lot.retailer.shop_name,
-      orderId: lot.sourceOrders[0]?.id || '',
-      orderNumber: lot.sourceOrders.map(o => o.order_number).join(', '),
-      productName: `Retailer Lot (${lot.items.length} items)`,
-      pieceQty: lot.totalPackedPieces ?? lot.totalPackedCartons,
-      cartonQty: lot.totalPackedPieces ?? lot.totalPackedCartons,
-      unitRate: lot.netGrandTotal
-    };
-
-    if (undoToast?.timerId) clearTimeout(undoToast.timerId);
-
-    const timerId = setTimeout(() => {
-      setUndoToast(null);
-    }, 8000);
-
-    setUndoToast({
-      record: summaryRecord,
-      countdown: 8,
-      timerId
-    });
-  };
-
-  // Restore action from Tier 1 Toast or Tier 2 Drawer
-  const handleRestoreDeleted = (record: DeletedItemRecord) => {
-    if (record.type === 'ITEM' && record.orderId && record.rawItemData) {
-      addOrderItemToOrder(record.orderId, {
-        productId: record.rawItemData.product_id,
-        selectedMrp: record.mrp,
-        pieceQty: record.pieceQty ?? record.cartonQty ?? 0,
-        cartonQty: record.pieceQty ?? record.cartonQty ?? 0,
-        unitRate: record.unitRate,
-        notes: 'Restored from Recycle Bin'
-      });
-    }
-
-    // Remove from deleted records
-    setDeletedRecords(prev => prev.filter(r => r.id !== record.id));
-    if (undoToast?.record.id === record.id) {
-      if (undoToast.timerId) clearTimeout(undoToast.timerId);
-      setUndoToast(null);
-    }
-  };
-
-  // ==========================================
-  // SAVE PACKING PROGRESS (DRAFT PERSISTENCE)
-  // ==========================================
-  const handleSavePackingProgress = async (lot: RetailerPackingLot) => {
-    setIsSavingLot(prev => ({ ...prev, [lot.retailer.id]: true }));
-
-    try {
-      const res = saveLotPackingProgress({
-        retailerId: lot.retailer.id,
-        sourceOrderIds: lot.sourceOrders.map(o => o.id),
-        items: lot.items.map(item => ({
-          originOrderId: item.originOrderId,
-          originItemId: item.originItemId,
-          productId: item.productId,
-          packedPieces: item.packedPieces ?? item.packedCartons ?? 0,
-          packedCartons: item.packedPieces ?? item.packedCartons ?? 0,
-          packedLoose: 0,
-          unitRate: item.unitRate,
-          notes: item.originTag
-        }))
-      }, currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
-
-      // Clear inline edits for this lot since values are now safely stored in the database
-      setInlineEdits(prev => {
-        const next = { ...prev };
-        lot.items.forEach(it => {
-          const itemEditKey = `${it.compositeKey}__${it.originOrderId}__${it.originItemId}`;
-          delete next[itemEditKey];
-        });
-        return next;
-      });
-
-      setIsSavingLot(prev => ({ ...prev, [lot.retailer.id]: false }));
-
-      // Clean success toast
-      setSaveSuccessToast({
-        message: 'Packing progress saved successfully. Bill remains open for editing.',
-        retailerName: lot.retailer.shop_name,
-        timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      });
-    } catch (err: any) {
-      setIsSavingLot(prev => ({ ...prev, [lot.retailer.id]: false }));
-      alert(`Failed to save packing progress: ${err?.message || 'Unexpected error'}`);
-    }
-  };
-
-  const handleSaveAllDirtyLots = () => {
-    const dirtyLots = retailerPackingLots.filter(isLotDirty);
-    dirtyLots.forEach(lot => {
-      handleSavePackingProgress(lot);
-    });
-  };
-
-  // ==========================================
-  // 1-CLICK DISPATCH & GST INVOICE GENERATOR
-  // ==========================================
-  const handleMarkPackedAndGenerateInvoice = async (lot: RetailerPackingLot) => {
-    if (!can(userRole, 'GENERATE_INVOICE')) {
-      alert('Your current role does not have permission to generate invoices.');
-      return;
-    }
-
-    if (lot.items.length === 0) {
-      alert('Cannot generate invoice for an empty lot.');
-      return;
-    }
-
-    const totalPackedUnits = lot.items.reduce((sum, it) => sum + (it.packedPieces ?? it.packedCartons ?? 0), 0);
-    if (totalPackedUnits <= 0) {
-      alert('Please enter at least 1 packed piece quantity to generate a bill.');
-      return;
-    }
-
-    setIsPackingLot(prev => ({ ...prev, [lot.retailer.id]: true }));
-
-    try {
-      // 1. Dispatch all orders in the lot into EXACTLY ONE consolidated GST Tax Invoice
-      // Atomic dispatch calculates fulfilled quantities and leftover backorders strictly in pieces
-      const res = dispatchRetailerPackingLot({
-        retailerId: lot.retailer.id,
-        sourceOrderIds: lot.sourceOrders.map(o => o.id),
-        items: lot.items.map(item => ({
-          originOrderId: item.originOrderId,
-          originItemId: item.originItemId,
-          productId: item.productId,
-          productName: item.productName,
-          sku: item.sku,
-          mrp: item.mrp,
-          unitsPerPack: 1,
-          tradingUnit: 'Piece',
-          baseUnit: 'Piece',
-          orderedPieces: item.orderedPieces ?? item.orderedCartons,
-          packedPieces: item.packedPieces ?? item.packedCartons,
-          orderedCartons: item.orderedPieces ?? item.orderedCartons,
-          orderedLoose: 0,
-          packedCartons: item.packedPieces ?? item.packedCartons,
-          packedLoose: 0,
-          unitRate: item.unitRate,
-          purchaseCost: item.purchaseCost,
-          hsn: item.hsn
-        }))
-      }, {
-        transportMode: 'Direct Delivery Van',
-        notes: `Packed & Billed from Terminal Lot. Merged Orders: ${lot.sourceOrders.map(o => o.order_number).join(', ')}`,
+    const adminUser = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
+    const res = generateInvoiceForPackedLot(
+      {
+        retailerId: retailer.id,
+        sourceOrderIds: packedOrders.map(o => o.id),
+        items: allPackedLotItems
+      },
+      {
+        date: new Date().toISOString(),
+        notes: `Consolidated GST Tax Invoice for ${packedOrders.length} packed order(s): ${packedOrders.map(o => o.order_number).join(', ')}`,
         generateChallan: true
-      });
+      },
+      adminUser
+    );
 
-      // Clear inlineEdits for this lot so fresh state is loaded
-      setInlineEdits(prev => {
-        const next = { ...prev };
-        lot.items.forEach(it => {
-          const itemEditKey = `${it.compositeKey}__${it.originOrderId}__${it.originItemId}`;
-          delete next[itemEditKey];
-        });
-        return next;
-      });
-
-      setIsPackingLot(prev => ({ ...prev, [lot.retailer.id]: false }));
-
-      if (res?.invoice) {
-        // Open Invoice Preview & Print Modal
-        setInvoicePreviewModal({
-          isOpen: true,
-          invoice: res.invoice,
-          challan: res.challan || null,
-          retailer: lot.retailer
-        });
-      }
-    } catch (err: any) {
-      setIsPackingLot(prev => ({ ...prev, [lot.retailer.id]: false }));
-      alert(`Failed to pack & generate invoice: ${err?.message || 'Unexpected error'}`);
+    if (res && res.invoice) {
+      setSelectedInvoiceForPreview(res.invoice);
+      setSelectedChallanForPreview(res.challan || null);
+      setSelectedRetailerForPreview(retailer);
+      setIsInvoicePreviewOpen(true);
     }
   };
 
-  // Fulfill remaining backorder directly from Tab 2
-  const handleFulfillBackorderNow = (item: BackorderQueueItem) => {
-    const res = dispatchOrder(item.orderId, {
-      generateChallan: true,
-      notes: `Backorder fulfillment for ${item.productName}`
+  const handlePrintConsolidatedTaxInvoice = (retailer: Retailer | null, targetOrders: Order[]) => {
+    if (!retailer || targetOrders.length === 0) return;
+
+    // 1. Find all associated invoices in the DB for these orders
+    const matchingInvoices = invoices.filter(inv => {
+      return inv.retailer_id === retailer.id && (
+        targetOrders.some(to => to.invoice_id === inv.id || to.id === inv.order_ref_id) ||
+        (inv.source_order_ids && targetOrders.some(to => inv.source_order_ids?.includes(to.id))) ||
+        (inv.source_order_numbers && targetOrders.some(to => inv.source_order_numbers?.includes(to.order_number))) ||
+        (inv.order_numbers && targetOrders.some(to => inv.order_numbers?.includes(to.order_number)))
+      );
     });
 
-    if (res?.invoice) {
-      const ret = retailers.find(r => r.id === item.retailerId);
-      setInvoicePreviewModal({
-        isOpen: true,
-        invoice: res.invoice,
-        challan: res.challan,
-        retailer: ret
+    // 2. Resolve or aggregate matching Delivery Challan
+    const matchingChallans = deliveryChallans.filter(dc => {
+      return (
+        targetOrders.some(to => to.challan_id === dc.id || to.id === dc.order_id || to.order_number === dc.order_number) ||
+        matchingInvoices.some(inv => inv.id === dc.invoice_id)
+      );
+    });
+    const primaryChallan = matchingChallans[0] || null;
+
+    // 3. Build/Aggregate ALL line items across ALL target completed orders (merging duplicate SKUs, distinct products on own rows)
+    const aggregatedItemsMap = new Map<string, any>();
+    let calcSubtotal = 0;
+    let calcTaxable = 0;
+    let calcCgst = 0;
+    let calcSgst = 0;
+    let calcIgst = 0;
+    const isLocal = (retailer.state_code || '27') === '27';
+
+    const processOrderItem = (it: any, idx: number, fallbackInvId: string) => {
+      const prod = products.find(p => p.id === it.product_id);
+      const unitsPerPack = it.units_per_trading_unit || it.units_per_box_carton || prod?.units_per_box_carton || 1;
+      const baseQty = it.fulfilled_qty || it.confirmed_qty || it.packed_qty || it.ordered_qty || it.base_qty || it.quantity || 0;
+      if (baseQty <= 0) return;
+
+      const cartonRate = it.manual_billing_rate || it.carton_rate || it.rate || it.order_time_rate || it.base_price || prod?.selling_price || 0;
+      const looseRate = it.loose_rate || prod?.loose_selling_price || (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
+      
+      // Strict GST rate from product master or line item
+      const prodGst = (prod?.gst_percent !== undefined && prod?.gst_percent !== null)
+        ? Number(prod.gst_percent)
+        : ((it.gst_percent !== undefined && it.gst_percent !== null) ? Number(it.gst_percent) : 0);
+
+      const { cartonQty, looseQty } = it.carton_qty !== undefined && it.loose_qty !== undefined && (it.carton_qty > 0 || it.loose_qty > 0)
+        ? { cartonQty: it.carton_qty, looseQty: it.loose_qty }
+        : splitBaseQuantity(baseQty, unitsPerPack);
+
+      const disc = it.discount || ((it.carton_discount || 0) * cartonQty + (it.loose_discount || 0) * looseQty) || 0;
+      const taxable = Math.max(0, Math.round(((baseQty * (cartonRate / Math.max(1, unitsPerPack))) - disc) * 100) / 100) ||
+                      (it.taxable_value !== undefined ? Number(it.taxable_value) : Math.round(cartonQty * cartonRate * 100) / 100);
+
+      // Strict Mathematical Logic: If 0% GST -> tax is strictly 0
+      const lineGst = prodGst > 0 ? Math.round(taxable * (prodGst / 100) * 100) / 100 : 0;
+      const cgst = isLocal ? Math.round((lineGst / 2) * 100) / 100 : 0;
+      const sgst = isLocal ? Math.round((lineGst / 2) * 100) / 100 : 0;
+      const igst = !isLocal ? lineGst : 0;
+      const lineTotal = Math.round((taxable + lineGst) * 100) / 100;
+
+      const itemKey = `${it.product_id}_${cartonRate}`;
+      const existing = aggregatedItemsMap.get(itemKey);
+      if (existing) {
+        existing.quantity += baseQty;
+        existing.base_qty = (existing.base_qty || 0) + baseQty;
+        existing.carton_qty = (existing.carton_qty || 0) + cartonQty;
+        existing.loose_qty = (existing.loose_qty || 0) + looseQty;
+        existing.discount = Math.round(((existing.discount || 0) + disc) * 100) / 100;
+        existing.taxable_value = Math.round(((existing.taxable_value || 0) + taxable) * 100) / 100;
+        existing.gst_percent = prodGst;
+        const aggLineGst = prodGst > 0 ? Math.round(existing.taxable_value * (prodGst / 100) * 100) / 100 : 0;
+        existing.cgst = isLocal ? Math.round((aggLineGst / 2) * 100) / 100 : 0;
+        existing.sgst = isLocal ? Math.round((aggLineGst / 2) * 100) / 100 : 0;
+        existing.igst = !isLocal ? aggLineGst : 0;
+        existing.total_amount = Math.round((existing.taxable_value + aggLineGst) * 100) / 100;
+      } else {
+        aggregatedItemsMap.set(itemKey, {
+          id: it.id || `inv-agg-item-${idx}`,
+          invoice_id: fallbackInvId,
+          product_id: it.product_id,
+          product_name: prod?.name || (it as any).product_name || (it as any).name || (it as any).description || 'Product Item',
+          variant_name: prod?.name || (it as any).variant_name || (it as any).name || 'Product Item',
+          description: prod?.name || (it as any).description || (it as any).name || 'Product Item',
+          hsn: (it as any).hsn || prod?.hsn || '1905',
+          packing: (it as any).pack_size || (it as any).packing || prod?.pack_size || `${unitsPerPack} ${it.base_unit || 'Piece'}/Ctn`,
+          quantity: baseQty,
+          base_qty: baseQty,
+          carton_qty: cartonQty,
+          loose_qty: looseQty,
+          trading_unit: it.trading_unit || prod?.trading_unit || 'Carton',
+          base_unit: it.base_unit || prod?.base_unit || 'Piece',
+          units_per_trading_unit: unitsPerPack,
+          units_per_box_carton: unitsPerPack,
+          rate: cartonRate,
+          carton_rate: cartonRate,
+          loose_rate: looseRate,
+          discount: disc,
+          taxable_value: taxable,
+          gst_percent: prodGst,
+          cgst,
+          sgst,
+          igst,
+          total_amount: lineTotal,
+          batch_number: it.batch_number || it.batch_allocations?.[0]?.batch_number || 'LOT-2026',
+          mrp: it.selected_mrp || it.mrp || prod?.mrp || 0
+        });
+      }
+    };
+
+    const primaryInvoice = matchingInvoices[0];
+    const defaultInvId = primaryInvoice?.id || `inv-unified-${retailer.id}`;
+
+    // 1. Gather all line items across all target orders
+    targetOrders.forEach(ord => {
+      (ord.items || []).forEach((it, idx) => {
+        processOrderItem(it, idx, defaultInvId);
       });
-    }
+    });
+
+    // 2. Also ensure any items in matchingInvoices are captured if not in orders
+    matchingInvoices.forEach(inv => {
+      (inv.items || []).forEach((it, idx) => {
+        const itemKey = `${it.product_id}_${it.carton_rate ?? it.rate ?? 0}`;
+        if (!aggregatedItemsMap.has(itemKey)) {
+          processOrderItem(it, idx, defaultInvId);
+        }
+      });
+    });
+
+    const finalItems = Array.from(aggregatedItemsMap.values());
+    finalItems.forEach(it => {
+      calcTaxable += (it.taxable_value || 0);
+      calcCgst += (it.cgst || 0);
+      calcSgst += (it.sgst || 0);
+      calcIgst += (it.igst || 0);
+    });
+    calcTaxable = Math.round(calcTaxable * 100) / 100;
+    calcCgst = Math.round(calcCgst * 100) / 100;
+    calcSgst = Math.round(calcSgst * 100) / 100;
+    calcIgst = Math.round(calcIgst * 100) / 100;
+    calcSubtotal = calcTaxable;
+
+    const unroundedGrand = calcTaxable + calcCgst + calcSgst + calcIgst;
+    const grandTotal = Math.round(unroundedGrand);
+    const roundOff = Math.round((grandTotal - unroundedGrand) * 100) / 100;
+
+    const totalPaid = matchingInvoices.reduce((sum, inv) => sum + (inv.paid_amount || 0), 0);
+    const outstanding = Math.max(0, grandTotal - totalPaid);
+
+    const consolidatedInvoice: Invoice = {
+      id: primaryInvoice?.id || `inv-unified-${retailer.id}-${Date.now()}`,
+      invoice_number: primaryInvoice?.invoice_number || `INV/2026-27/${String(invoices.length + 1).padStart(5, '0')}`,
+      retailer_id: retailer.id,
+      order_ref_id: targetOrders[0]?.id || '',
+      source_order_ids: targetOrders.map(o => o.id),
+      source_order_numbers: targetOrders.map(o => o.order_number),
+      order_numbers: targetOrders.map(o => o.order_number),
+      date: primaryInvoice?.date || targetOrders[0]?.dispatched_at || targetOrders[0]?.order_date || new Date().toISOString(),
+      place_of_supply: retailer.state_code === '27' || !retailer.state_code ? 'Maharashtra (27)' : `Out of State (${retailer.state_code})`,
+      subtotal: calcSubtotal,
+      discount_amount: 0,
+      taxable_value: calcTaxable,
+      cgst: calcCgst,
+      sgst: calcSgst,
+      igst: calcIgst,
+      round_off: roundOff,
+      grand_total: grandTotal,
+      paid_amount: totalPaid,
+      outstanding_amount: outstanding,
+      payment_status: outstanding <= 0 ? 'Paid' : (totalPaid > 0 ? 'Partial' : 'Unpaid'),
+      payment_mode: primaryInvoice?.payment_mode || 'Credit',
+      payment_reference: primaryInvoice?.payment_reference || '',
+      notes: primaryInvoice?.notes || `Consolidated Tax Invoice for ${targetOrders.length} order(s): ${targetOrders.map(o => o.order_number).join(', ')}`,
+      business_id: activeCompany?.id || '',
+      company_id: activeCompany?.id || '',
+      items: finalItems
+    };
+
+    setSelectedInvoiceForPreview(consolidatedInvoice);
+    setSelectedChallanForPreview(primaryChallan);
+    setSelectedRetailerForPreview(retailer);
+    setIsInvoicePreviewOpen(true);
+  };
+
+  const handleOpenBackorderResolution = (retailer: Retailer, backorders: Order[]) => {
+    setBackorderRetailer(retailer);
+    setBackorderList(backorders);
+    setIsBackorderModalOpen(true);
+  };
+
+  const handleViewInvoice = (invoice: Invoice, challan?: DeliveryChallan | null, retailer?: Retailer | null) => {
+    setSelectedInvoiceForPreview(invoice);
+    setSelectedChallanForPreview(challan || null);
+    setSelectedRetailerForPreview(retailer || null);
+    setIsInvoicePreviewOpen(true);
+  };
+
+  const handleOpenWorkflowModal = (orderId: string, stage: 'review' | 'confirm' | 'pack' | 'dispatch' | 'invoice' | 'payment' | 'challan') => {
+    setProcessingOrderId(orderId);
+    setProcessingStage(stage);
+    setIsProcessingModalOpen(true);
   };
 
   if (!mounted) {
@@ -1260,1739 +1073,844 @@ function AdminOrdersContent() {
       <div className="py-24 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-xs font-bold text-slate-500 font-mono tracking-wider">LOADING PACKING TERMINAL...</p>
+          <p className="text-xs font-bold text-slate-500 font-mono tracking-wider">LOADING ADMIN ORDER REGISTER...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto font-sans pb-12">
+    <div className="space-y-5 max-w-7xl mx-auto font-sans pb-16 px-2 sm:px-4">
       
       {/* ========================================================================= */}
-      {/* 1. TOP TERMINAL CONTROL HEADER (CLEAN LIGHT THEME & NATURAL SCROLL) */}
+      {/* 1. TOP HEADER & INSTANT SPOT ORDER CTA */}
       {/* ========================================================================= */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-5 space-y-4">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-800 flex items-center justify-center text-white shadow-sm shrink-0">
+            <Layers className="w-6 h-6 stroke-[2.2]" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">
+                ADMIN ORDER PROCESSING COCKPIT
+              </h1>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 border border-indigo-200 uppercase tracking-wider">
+                Internal Operations
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              5-Stage lifecycle control: Ingestion &bull; Packing Floor &bull; Pricing Review &bull; Backorder Split &bull; Tax Invoicing
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {orders.length > 0 && (
+            <button
+              onClick={() => {
+                if (confirm('Are you sure you want to delete all orders? This will delete all dummy and active orders. Your products and purchase stock will remain completely safe.')) {
+                  clearAllOrders();
+                }
+              }}
+              className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+              title="Delete All Orders"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+              <span>Delete All Orders</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => setIsSpotOrderModalOpen(true)}
+            className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-xs font-black shadow-md transition-all flex items-center gap-1.5 cursor-pointer hover:scale-102 active:scale-98"
+          >
+            <Plus className="w-4 h-4 text-white stroke-[3]" />
+            <span>New Counter Spot Order</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 2. TOP METRIC CARDS & 5-STAGE NAVIGATION SWITCHER */}
+      {/* ========================================================================= */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Card 1: All Orders */}
+        <button
+          type="button"
+          onClick={() => setActiveStageTab('ALL_ORDERS')}
+          className={`p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between ${
+            activeStageTab === 'ALL_ORDERS'
+              ? 'bg-gradient-to-br from-slate-900 to-indigo-950 text-white border-slate-900 shadow-md ring-2 ring-indigo-500/50 scale-102'
+              : 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 hover:border-slate-300 shadow-2xs'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className={`text-[11px] font-black uppercase tracking-wider ${activeStageTab === 'ALL_ORDERS' ? 'text-indigo-300' : 'text-slate-500'}`}>
+              Stage 1
+            </span>
+            <FileText className={`w-4 h-4 ${activeStageTab === 'ALL_ORDERS' ? 'text-indigo-300' : 'text-slate-400'}`} />
+          </div>
+          <div className="mt-2">
+            <span className="text-2xl sm:text-3xl font-black block tracking-tight">
+              {stageCounters.all}
+            </span>
+            <span className={`text-xs font-bold block mt-0.5 ${activeStageTab === 'ALL_ORDERS' ? 'text-white' : 'text-slate-800'}`}>
+              📑 All Orders
+            </span>
+          </div>
+          <span className={`text-[10px] mt-2 block ${activeStageTab === 'ALL_ORDERS' ? 'text-slate-300' : 'text-slate-400'}`}>
+            All ingestion channels
+          </span>
+        </button>
+
+        {/* Card 2: Orders to be Packed */}
+        <button
+          type="button"
+          onClick={() => setActiveStageTab('TO_PACK')}
+          className={`p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between ${
+            activeStageTab === 'TO_PACK'
+              ? 'bg-gradient-to-br from-amber-600 to-orange-700 text-white border-amber-600 shadow-md ring-2 ring-amber-400/50 scale-102'
+              : 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 hover:border-slate-300 shadow-2xs'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className={`text-[11px] font-black uppercase tracking-wider ${activeStageTab === 'TO_PACK' ? 'text-amber-100' : 'text-amber-700'}`}>
+              Stage 2
+            </span>
+            <Package className={`w-4 h-4 ${activeStageTab === 'TO_PACK' ? 'text-amber-100' : 'text-amber-600'}`} />
+          </div>
+          <div className="mt-2">
+            <span className="text-2xl sm:text-3xl font-black block tracking-tight">
+              {stageCounters.toPack}
+            </span>
+            <span className={`text-xs font-bold block mt-0.5 ${activeStageTab === 'TO_PACK' ? 'text-white' : 'text-slate-800'}`}>
+              📦 Orders to be Packed
+            </span>
+          </div>
+          <span className={`text-[10px] mt-2 block ${activeStageTab === 'TO_PACK' ? 'text-amber-100' : 'text-slate-400'}`}>
+            Awaiting floor packing
+          </span>
+        </button>
+
+        {/* Card 3: Packed Orders */}
+        <button
+          type="button"
+          onClick={() => setActiveStageTab('PACKED')}
+          className={`p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between ${
+            activeStageTab === 'PACKED'
+              ? 'bg-gradient-to-br from-teal-600 to-emerald-700 text-white border-teal-600 shadow-md ring-2 ring-emerald-400/50 scale-102'
+              : 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 hover:border-slate-300 shadow-2xs'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className={`text-[11px] font-black uppercase tracking-wider ${activeStageTab === 'PACKED' ? 'text-teal-100' : 'text-teal-700'}`}>
+              Stage 3
+            </span>
+            <CheckCircle2 className={`w-4 h-4 ${activeStageTab === 'PACKED' ? 'text-teal-100' : 'text-teal-600'}`} />
+          </div>
+          <div className="mt-2">
+            <span className="text-2xl sm:text-3xl font-black block tracking-tight">
+              {stageCounters.packed}
+            </span>
+            <span className={`text-xs font-bold block mt-0.5 ${activeStageTab === 'PACKED' ? 'text-white' : 'text-slate-800'}`}>
+              ✅ Packed Orders
+            </span>
+          </div>
+          <span className={`text-[10px] mt-2 block ${activeStageTab === 'PACKED' ? 'text-teal-100' : 'text-slate-400'}`}>
+            Ready for billing review
+          </span>
+        </button>
+
+        {/* Card 4: Partial Pending Orders */}
+        <button
+          type="button"
+          onClick={() => setActiveStageTab('PARTIAL_PENDING')}
+          className={`p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between ${
+            activeStageTab === 'PARTIAL_PENDING'
+              ? 'bg-gradient-to-br from-purple-700 to-indigo-900 text-white border-purple-700 shadow-md ring-2 ring-purple-400/50 scale-102'
+              : 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 hover:border-slate-300 shadow-2xs'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className={`text-[11px] font-black uppercase tracking-wider ${activeStageTab === 'PARTIAL_PENDING' ? 'text-purple-200' : 'text-purple-700'}`}>
+              Stage 4
+            </span>
+            <Clock className={`w-4 h-4 ${activeStageTab === 'PARTIAL_PENDING' ? 'text-purple-200' : 'text-purple-600'}`} />
+          </div>
+          <div className="mt-2">
+            <span className="text-2xl sm:text-3xl font-black block tracking-tight">
+              {stageCounters.partialPending}
+            </span>
+            <span className={`text-xs font-bold block mt-0.5 ${activeStageTab === 'PARTIAL_PENDING' ? 'text-white' : 'text-slate-800'}`}>
+              ⏳ Partial Backorders
+            </span>
+          </div>
+          <span className={`text-[10px] mt-2 block ${activeStageTab === 'PARTIAL_PENDING' ? 'text-purple-200' : 'text-slate-400'}`}>
+            Shortage queue by retailer
+          </span>
+        </button>
+
+        {/* Card 5: Generate Invoice / Completed */}
+        <button
+          type="button"
+          onClick={() => setActiveStageTab('INVOICED')}
+          className={`col-span-2 sm:col-span-1 p-4 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between ${
+            activeStageTab === 'INVOICED'
+              ? 'bg-gradient-to-br from-indigo-700 to-blue-900 text-white border-indigo-700 shadow-md ring-2 ring-indigo-400/50 scale-102'
+              : 'bg-white hover:bg-slate-50 text-slate-900 border-slate-200 hover:border-slate-300 shadow-2xs'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className={`text-[11px] font-black uppercase tracking-wider ${activeStageTab === 'INVOICED' ? 'text-indigo-200' : 'text-indigo-700'}`}>
+              Stage 5
+            </span>
+            <Receipt className={`w-4 h-4 ${activeStageTab === 'INVOICED' ? 'text-indigo-200' : 'text-indigo-600'}`} />
+          </div>
+          <div className="mt-2">
+            <span className="text-2xl sm:text-3xl font-black block tracking-tight">
+              {stageCounters.invoiced}
+            </span>
+            <span className={`text-xs font-bold block mt-0.5 ${activeStageTab === 'INVOICED' ? 'text-white' : 'text-slate-800'}`}>
+              🧾 Tax Invoiced
+            </span>
+          </div>
+          <span className={`text-[10px] mt-2 block ${activeStageTab === 'INVOICED' ? 'text-indigo-200' : 'text-slate-400'}`}>
+            Billed & GST Invoiced
+          </span>
+        </button>
+
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 3. ADVANCED GLOBAL FILTERS BAR */}
+      {/* ========================================================================= */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3.5 space-y-3 max-w-full">
+        
+        {/* Row 1: Search, City/Beat Filter, Line Item Sort, Date Range Presets */}
+        <div className="flex flex-wrap items-center gap-2.5">
           
-          {/* Terminal Title & Subtitle */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white shadow-sm shrink-0">
-              <Package className="w-5 h-5 stroke-[2.3]" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
-                  FMCG Warehouse Floor Terminal
-                </h1>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
-                  LIVE
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Consolidated Retailer Packing Lots &bull; Hero MRP Multi-Variant Engine
-              </p>
-            </div>
+          {/* Global Search Bar */}
+          <div className="flex-1 min-w-[220px] sm:min-w-[280px] relative">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search Shop, Owner, Order #, Phone, SKU..."
+              className="w-full pl-9 pr-8 py-2 bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-hidden transition-all"
+            />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
-          {/* Role Switcher & Header Quick Actions */}
-          <div className="flex items-center gap-2.5 flex-wrap">
-            
-            {/* Role Permission Switcher */}
-            <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-xs">
-              <UserCheck className="w-4 h-4 text-indigo-600 shrink-0" />
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider hidden sm:inline">Role:</span>
+          {/* 4 Dropdowns with proper min-widths to prevent text truncation */}
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap flex-1 sm:flex-initial">
+            {/* City / Beat Filter */}
+            <div className="min-w-[150px] flex-1 sm:flex-initial">
               <select
-                value={userRole}
-                onChange={(e) => setUserRole(e.target.value as UserRole)}
-                className="bg-transparent font-extrabold text-indigo-900 focus:outline-none cursor-pointer"
+                value={selectedCity}
+                onChange={(e) => setSelectedCity(e.target.value)}
+                className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden cursor-pointer"
               >
-                <option value="ROLE_ADMIN">Admin (Full Overrides)</option>
-                <option value="ROLE_PACKER">Packer (Floor Count Only)</option>
-                <option value="ROLE_BILLER">Biller (Rates &amp; Invoices)</option>
-                <option value="ROLE_DISPATCHER">Dispatcher (Challans)</option>
+                <option value="ALL">📍 All Cities / Beats</option>
+                {availableCities.map(city => (
+                  <option key={city} value={city}>{city}</option>
+                ))}
               </select>
             </div>
 
-            {/* Recycle Bin Drawer Trigger (Tier 2 Safety Net) */}
-            <button
-              type="button"
-              onClick={() => setIsRecycleBinOpen(true)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-2xs ${
-                deletedRecords.length > 0
-                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
-              }`}
-              title="View recently deleted lines and lots"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-slate-500" />
-              <span>Recently Deleted</span>
-              {deletedRecords.length > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-amber-400 text-slate-900">
-                  {deletedRecords.length}
-                </span>
-              )}
-            </button>
+            {/* Line Item Count Sort */}
+            <div className="min-w-[175px] flex-1 sm:flex-initial">
+              <select
+                value={lineItemsSort}
+                onChange={(e) => setLineItemsSort(e.target.value as LineItemsSortOption)}
+                className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden cursor-pointer"
+              >
+                <option value="NONE">🔢 Line Items: Default</option>
+                <option value="HIGH_TO_LOW">🔢 Line Items: High → Low</option>
+                <option value="LOW_TO_HIGH">🔢 Line Items: Low → High</option>
+              </select>
+            </div>
 
-            {/* Quick Counter Sale Shortcut */}
-            <button
-              type="button"
-              onClick={() => setIsSpotOrderModalOpen(true)}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white rounded-xl text-xs font-extrabold transition-all shadow-sm inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5 stroke-[3]" />
-              <span>+ Spot Sale</span>
-            </button>
+            {/* Date Range Preset Selector */}
+            <div className="min-w-[155px] flex-1 sm:flex-initial">
+              <select
+                value={dateFilterPreset}
+                onChange={(e) => setDateFilterPreset(e.target.value as DateFilterPreset)}
+                className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden cursor-pointer"
+              >
+                <option value="ALL">📅 Date: All Time</option>
+                <option value="TODAY">📅 Today</option>
+                <option value="YESTERDAY">📅 Yesterday</option>
+                <option value="THIS_WEEK">📅 This Week</option>
+                <option value="THIS_MONTH">📅 This Month</option>
+                <option value="CUSTOM">📅 Custom (From-To)</option>
+              </select>
+            </div>
+
+            {/* Main Sort */}
+            <div className="min-w-[165px] flex-1 sm:flex-initial">
+              <select
+                value={mainSort}
+                onChange={(e) => setMainSort(e.target.value as MainSortOption)}
+                className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden cursor-pointer"
+              >
+                <option value="LATEST">⚡ Sort: Latest First</option>
+                <option value="OLDEST">⚡ Sort: Oldest First</option>
+                <option value="VALUE_DESC">💰 Value: High → Low (₹)</option>
+                <option value="VALUE_ASC">💰 Value: Low → High (₹)</option>
+              </select>
+            </div>
           </div>
 
         </div>
 
-        {/* ========================================================================= */}
-        {/* COMPREHENSIVE ORDER REGISTER FILTER & SORT ENGINE (STICKY CONTROL BAR) */}
-        {/* ========================================================================= */}
-        <div className="space-y-3 pt-1">
+        {/* Row 2: Ingestion Channel Pills, Order Value Range Inputs, Expand/Collapse & Reset */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-slate-100 text-xs">
           
-          {/* Filter Row 1: Search, Location / Beat, Channel, Value Slab, Sort By */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5">
-            
-            {/* A. Universal Omnibar Search */}
-            <div className="sm:col-span-2 lg:col-span-3 relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          {/* Left: Channel Filter Pills with smooth horizontal scrolling */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full no-scrollbar shrink-0">
+            <span className="text-slate-400 font-bold text-[11px] mr-1 shrink-0">Source:</span>
+            {[
+              { code: 'ALL', label: 'All Channels' },
+              { code: 'DISTRIBUTOR_SALESPERSON', label: 'Dist Sales' },
+              { code: 'COMPANY_SALESPERSON', label: 'Co Sales' },
+              { code: 'COUNTER_SPOT', label: 'Spot Counter' },
+              { code: 'RETAILER_PORTAL', label: 'Retailer App' }
+            ].map(ch => (
+              <button
+                key={ch.code}
+                type="button"
+                onClick={() => setSelectedChannel(ch.code)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer shrink-0 ${
+                  selectedChannel === ch.code
+                    ? 'bg-slate-900 text-white shadow-2xs'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                }`}
+              >
+                {ch.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Right Controls: Value Range + Expand/Collapse/Reset in responsive flex container */}
+          <div className="flex items-center gap-2.5 flex-wrap ml-auto">
+            {/* Middle: Order Value Range Threshold Inputs */}
+            <div className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-xl border border-slate-200 shrink-0">
+              <span className="text-slate-500 font-bold text-[11px] shrink-0">Value:</span>
               <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search Retailer, Order #, SKU, Phone..."
-                className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none transition-all"
+                type="number"
+                placeholder="Min ₹"
+                value={minValueInput}
+                onChange={(e) => setMinValueInput(e.target.value)}
+                className="w-18 px-1.5 py-0.5 bg-white border border-slate-200 rounded-md text-xs font-semibold text-center focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:outline-none"
               />
-              {searchTerm && (
+              <span className="text-slate-300">-</span>
+              <input
+                type="number"
+                placeholder="Max ₹"
+                value={maxValueInput}
+                onChange={(e) => setMaxValueInput(e.target.value)}
+                className="w-18 px-1.5 py-0.5 bg-white border border-slate-200 rounded-md text-xs font-semibold text-center focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+              />
+            </div>
+
+            {/* Right: Expand/Collapse & Reset Filter */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={handleExpandAll}
+                type="button"
+                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-bold cursor-pointer transition-colors"
+              >
+                Expand All
+              </button>
+              <button
+                onClick={handleCollapseAll}
+                type="button"
+                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-bold cursor-pointer transition-colors"
+              >
+                Collapse
+              </button>
+              {hasActiveFilters && (
                 <button
+                  onClick={handleClearFilters}
                   type="button"
-                  onClick={() => setSearchTerm('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-0.5"
-                  title="Clear search"
+                  className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-[11px] font-bold cursor-pointer transition-colors flex items-center gap-1"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Reset</span>
                 </button>
               )}
             </div>
-
-            {/* B. Retailer City / Area / Beat Filter */}
-            <div className="sm:col-span-1 lg:col-span-2 relative">
-              <MapPin className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <select
-                value={selectedLocation}
-                onChange={(e) => setSelectedLocation(e.target.value)}
-                className="w-full pl-8 pr-6 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:border-indigo-500 focus:outline-none transition-all cursor-pointer appearance-none truncate"
-                title="Filter by Retailer City / Area / Beat"
-              >
-                <option value="ALL">📍 All Locations (Default)</option>
-                {availableLocations.map(loc => (
-                  <option key={loc} value={loc}>{loc}</option>
-                ))}
-              </select>
-              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-[10px]">▼</div>
-            </div>
-
-            {/* C. Order Ingestion Channel Filter */}
-            <div className="sm:col-span-1 lg:col-span-2 relative">
-              <Layers className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <select
-                value={selectedChannel}
-                onChange={(e) => setSelectedChannel(e.target.value)}
-                className="w-full pl-8 pr-6 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:border-indigo-500 focus:outline-none transition-all cursor-pointer appearance-none truncate"
-                title="Filter by Order Ingestion Channel"
-              >
-                <option value="ALL">🌐 All Channels (Default)</option>
-                <option value="CH_DIST_SALES">Distributor Salesman App</option>
-                <option value="CH_RETAILER_PWA">Retailer Self-Ordering PWA</option>
-                <option value="CH_COUNTER">Counter Direct / Spot Orders</option>
-                <option value="CH_CO_SALES">Company / Direct Sales</option>
-              </select>
-              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-[10px]">▼</div>
-            </div>
-
-            {/* D. Order Value Slab Filter */}
-            <div className="sm:col-span-1 lg:col-span-2 relative">
-              <IndianRupee className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <select
-                value={selectedValueSlab}
-                onChange={(e) => setSelectedValueSlab(e.target.value as 'ALL' | 'PETTY' | 'STANDARD' | 'BULK')}
-                className="w-full pl-8 pr-6 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:border-indigo-500 focus:outline-none transition-all cursor-pointer appearance-none truncate"
-                title="Filter by Total Order Value Slab"
-              >
-                <option value="ALL">💰 All Values (Default)</option>
-                <option value="PETTY">Petty Orders (&lt; ₹2,000)</option>
-                <option value="STANDARD">Standard Orders (₹2k - ₹10k)</option>
-                <option value="BULK">Bulk / Wholesale (&gt; ₹10,000)</option>
-              </select>
-              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-[10px]">▼</div>
-            </div>
-
-            {/* E. Sort Criteria Dropdown */}
-            <div className="sm:col-span-1 lg:col-span-3 relative">
-              <ArrowUpDown className="w-3.5 h-3.5 text-indigo-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as SortOption)}
-                className="w-full pl-8 pr-6 py-2 bg-indigo-50/50 border border-indigo-200 rounded-xl text-xs font-extrabold text-indigo-950 focus:bg-white focus:border-indigo-500 focus:outline-none transition-all cursor-pointer appearance-none truncate"
-                title="Sort Orders & Lots"
-              >
-                <option value="DATE_ASC">⏱️ Oldest First (FIFO Priority)</option>
-                <option value="DATE_DESC">⏱️ Newest First</option>
-                <option value="ITEMS_DESC">📦 Line Items: High to Low</option>
-                <option value="ITEMS_ASC">📦 Line Items: Low to High</option>
-                <option value="PIECES_DESC">🔢 Total Pieces: High to Low</option>
-                <option value="PIECES_ASC">🔢 Total Pieces: Low to High</option>
-                <option value="VALUE_DESC">💵 Value: High to Low (₹)</option>
-                <option value="VALUE_ASC">💵 Value: Low to High (₹)</option>
-              </select>
-              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-indigo-400 text-[10px]">▼</div>
-            </div>
-
-          </div>
-
-          {/* Filter Row 2: Date Filter Presets + Inline Custom Date Range & Packing Status Lifecycle Filter */}
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-2 border-t border-slate-100">
-            
-            {/* Date Window Presets & Inline Custom Picker */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex items-center gap-1 text-[11px] font-bold text-slate-500 mr-1">
-                <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                <span>Date:</span>
-              </div>
-              <div className="inline-flex rounded-xl bg-slate-100 p-0.5 border border-slate-200">
-                {(['ALL', 'TODAY', 'YESTERDAY', 'CUSTOM'] as const).map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => {
-                      setDateFilterPreset(preset);
-                      if (preset !== 'CUSTOM') {
-                        setCustomFromDate('');
-                        setCustomToDate('');
-                      }
-                    }}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                      dateFilterPreset === preset
-                        ? 'bg-white text-indigo-900 shadow-xs ring-1 ring-slate-200/80 font-black'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    {preset === 'ALL' && 'All Dates'}
-                    {preset === 'TODAY' && 'Today'}
-                    {preset === 'YESTERDAY' && 'Yesterday'}
-                    {preset === 'CUSTOM' && 'Custom Range'}
-                  </button>
-                ))}
-              </div>
-
-              {/* Inline Custom Date Inputs when Custom Range is active */}
-              {dateFilterPreset === 'CUSTOM' && (
-                <div className="flex items-center gap-1.5 animate-in fade-in slide-in-from-left-2 duration-200">
-                  <input
-                    type="date"
-                    value={customFromDate}
-                    onChange={(e) => setCustomFromDate(e.target.value)}
-                    className="px-2.5 py-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-slate-800 focus:border-indigo-500 focus:outline-none"
-                    placeholder="From Date"
-                    title="From Date"
-                  />
-                  <span className="text-slate-400 text-xs font-bold">to</span>
-                  <input
-                    type="date"
-                    value={customToDate}
-                    onChange={(e) => setCustomToDate(e.target.value)}
-                    className="px-2.5 py-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-slate-800 focus:border-indigo-500 focus:outline-none"
-                    placeholder="To Date"
-                    title="To Date"
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Packing Status Lifecycle Segmented Toggle */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex items-center gap-1 text-[11px] font-bold text-slate-500 mr-1">
-                <Filter className="w-3.5 h-3.5 text-slate-400" />
-                <span>Lifecycle:</span>
-              </div>
-              <div className="inline-flex rounded-xl bg-slate-100 p-0.5 border border-slate-200">
-                {[
-                  { id: 'ALL', label: 'All Statuses' },
-                  { id: 'READY_TO_PACK', label: 'Ready to Pack' },
-                  { id: 'PARTIAL_PACKED', label: 'Partially Packed' },
-                  { id: 'COMPLETED', label: 'Dispatched / Invoiced' }
-                ].map((st) => (
-                  <button
-                    key={st.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedPackingStatus(st.id as 'ALL' | 'READY_TO_PACK' | 'PARTIAL_PACKED' | 'COMPLETED');
-                      if (st.id === 'READY_TO_PACK') handleTabClick('ready_to_pack');
-                      else if (st.id === 'PARTIAL_PACKED') handleTabClick('partial_pending');
-                      else if (st.id === 'COMPLETED') handleTabClick('completed_history');
-                    }}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                      selectedPackingStatus === st.id
-                        ? 'bg-white text-indigo-900 shadow-xs ring-1 ring-slate-200/80 font-black'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    {st.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-          </div>
-
-          {/* Filter Row 3: Live Active Counter Badge + Active Filter Chips + Reset All Button */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-2 border-t border-slate-100 text-xs">
-            
-            {/* Dynamic Counter Badges */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 font-extrabold text-indigo-950 font-mono">
-                {activeTab === 'ready_to_pack' && `Showing ${filteredAndSortedPackingLots.length} of ${retailerPackingLots.length} Lots (${totalFilteredOrdersCount} of ${masterTotalOrdersCount} Orders)`}
-                {activeTab === 'partial_pending' && `Showing ${filteredAndSortedBackorders.length} of ${backorderQueueItems.length} Backorders`}
-                {activeTab === 'completed_history' && `Showing ${filteredAndSortedInvoices.length} of ${completedInvoicesList.length} Dispatched Invoices`}
-              </span>
-
-              {/* Active Filter Chips */}
-              {selectedLocation !== 'ALL' && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-bold border border-slate-200">
-                  <span>Loc: {selectedLocation}</span>
-                  <button type="button" onClick={() => setSelectedLocation('ALL')} className="text-slate-400 hover:text-slate-700">×</button>
-                </span>
-              )}
-
-              {selectedChannel !== 'ALL' && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-bold border border-slate-200">
-                  <span>Channel: {selectedChannel.replace('CH_', '')}</span>
-                  <button type="button" onClick={() => setSelectedChannel('ALL')} className="text-slate-400 hover:text-slate-700">×</button>
-                </span>
-              )}
-
-              {selectedValueSlab !== 'ALL' && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-bold border border-slate-200">
-                  <span>Slab: {selectedValueSlab}</span>
-                  <button type="button" onClick={() => setSelectedValueSlab('ALL')} className="text-slate-400 hover:text-slate-700">×</button>
-                </span>
-              )}
-
-              {dateFilterPreset !== 'ALL' && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-bold border border-slate-200">
-                  <span>Date: {dateFilterPreset}{dateFilterPreset === 'CUSTOM' && customFromDate ? ` (${customFromDate})` : ''}</span>
-                  <button type="button" onClick={() => { setDateFilterPreset('ALL'); setCustomFromDate(''); setCustomToDate(''); }} className="text-slate-400 hover:text-slate-700">×</button>
-                </span>
-              )}
-
-              {selectedPackingStatus !== 'ALL' && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-bold border border-slate-200">
-                  <span>Status: {selectedPackingStatus}</span>
-                  <button type="button" onClick={() => setSelectedPackingStatus('ALL')} className="text-slate-400 hover:text-slate-700">×</button>
-                </span>
-              )}
-            </div>
-
-            {/* Prominent Reset All Filters Button */}
-            {hasActiveFilters && (
-              <button
-                type="button"
-                onClick={handleResetAllFilters}
-                className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 rounded-xl text-xs font-extrabold transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-2xs self-start sm:self-auto shrink-0"
-                title="Clear all active filters and search terms"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>✕ Reset All Filters</span>
-              </button>
-            )}
-
           </div>
 
         </div>
 
+        {/* Custom Date Pickers Drawer (if selected) */}
+        {dateFilterPreset === 'CUSTOM' && (
+          <div className="pt-2 border-t border-slate-100 flex items-center gap-3 text-xs">
+            <span className="font-bold text-slate-600">Custom Date Range:</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={customFromDate}
+                onChange={(e) => setCustomFromDate(e.target.value)}
+                className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800"
+              />
+              <span className="text-slate-400">to</span>
+              <input
+                type="date"
+                value={customToDate}
+                onChange={(e) => setCustomToDate(e.target.value)}
+                className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800"
+              />
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* ========================================================================= */}
-      {/* 2. 3-TAB NAVIGATION BAR (LIGHT THEME) */}
+      {/* 4. ACTIVE SECTION WORKFLOW HEADER & SUMMARY */}
       {/* ========================================================================= */}
-      <div className="flex items-center justify-between overflow-x-auto gap-2 py-1">
-        
+      <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+        <div>
+          Showing <strong className="text-slate-900 font-bold">{filteredAndGroupedRetailers.length}</strong> Retailer Accounts ({totalFilteredOrdersCount} orders) &bull; Total Filtered Value: <strong className="text-indigo-700 font-extrabold">{formatINR(totalFilteredValueSum)}</strong>
+        </div>
         <div className="flex items-center gap-2">
-          {/* Tab 1: Ready to Pack */}
-          <button
-            onClick={() => handleTabClick('ready_to_pack')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-              activeTab === 'ready_to_pack'
-                ? 'bg-indigo-600 text-white shadow-sm ring-1 ring-indigo-500'
-                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <Package className="w-4 h-4" />
-            <span>📦 Ready to Pack (Active Lots)</span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-              activeTab === 'ready_to_pack' ? 'bg-white text-indigo-900' : 'bg-slate-100 text-slate-700'
-            }`}>
-              {filteredAndSortedPackingLots.length}
-            </span>
-          </button>
-
-          {/* Tab 2: Partial Pending Queue */}
-          <button
-            onClick={() => handleTabClick('partial_pending')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-              activeTab === 'partial_pending'
-                ? 'bg-amber-600 text-white shadow-sm ring-1 ring-amber-500'
-                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <Clock className="w-4 h-4" />
-            <span>⏳ Partial Pending Hub</span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-              activeTab === 'partial_pending' ? 'bg-white text-amber-950' : 'bg-amber-100 text-amber-900'
-            }`}>
-              {filteredAndSortedBackorders.length}
-            </span>
-          </button>
-
-          {/* Tab 3: Completed & Dispatched History */}
-          <button
-            onClick={() => handleTabClick('completed_history')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-              activeTab === 'completed_history'
-                ? 'bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-500'
-                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <Receipt className="w-4 h-4" />
-            <span>✅ Completed &amp; Dispatched Log</span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-              activeTab === 'completed_history' ? 'bg-white text-emerald-950' : 'bg-slate-100 text-slate-700'
-            }`}>
-              {filteredAndSortedInvoices.length}
-            </span>
-          </button>
+          <span>Page {validCurrentPage} of {totalRetailerPages}</span>
         </div>
-
-        <div className="hidden lg:flex items-center gap-2 text-xs text-slate-500">
-          <span>Operating Mode: <strong className="text-slate-900 font-bold">{userRole}</strong></span>
-        </div>
-
       </div>
 
       {/* ========================================================================= */}
-      {/* 3. MAIN TERMINAL WORKSPACE */}
+      {/* 5. RETAILER CONSOLIDATED CARDS & SECTION ACCORDIONS */}
       {/* ========================================================================= */}
-      <div>
-        
-        {/* ======================================================================= */}
-        {/* TAB 1: 📦 READY TO PACK (ACTIVE RETAILER PACKING LOTS) */}
-        {/* ======================================================================= */}
-        {activeTab === 'ready_to_pack' && (
-          <div className="space-y-6">
-            
-            {filteredAndSortedPackingLots.length === 0 ? (
-              <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center space-y-4 shadow-xs">
-                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto ${
-                  hasActiveFilters 
-                    ? 'bg-amber-50 border border-amber-100 text-amber-600' 
-                    : 'bg-indigo-50 border border-indigo-100 text-indigo-600'
-                }`}>
-                  {hasActiveFilters ? <Filter className="w-8 h-8" /> : <CheckCircle2 className="w-8 h-8" />}
-                </div>
-                <h3 className="text-base font-extrabold text-slate-900">
-                  {hasActiveFilters ? 'No Packing Lots Match Active Filters' : 'All Retailer Packing Lots Are Clear!'}
-                </h3>
-                <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  {hasActiveFilters 
-                    ? 'Try adjusting your location, ingestion channel, value slab, date range, or search keywords to view matching packing queues.' 
-                    : 'There are no pending unfulfilled orders in the packing queue. New orders booked by field reps, company salesmen, counter, or retailer PWA will appear here automatically.'}
-                </p>
-                <div className="pt-2 flex items-center justify-center gap-2">
-                  {hasActiveFilters ? (
-                    <button
-                      type="button"
-                      onClick={handleResetAllFilters}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-2 shadow-xs cursor-pointer hover:scale-102 active:scale-98 transition-all"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                      <span>Reset All Filters</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setIsSpotOrderModalOpen(true)}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-2 shadow-xs cursor-pointer hover:scale-102 active:scale-98 transition-all"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>Create Counter Spot Order</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            ) : (
-              pagedPackingLots.map(lot => {
-                const isExpanded = expandedLots[lot.retailer.id] !== false;
-                const isProcessing = isPackingLot[lot.retailer.id];
+      {pagedRetailerGroups.length === 0 ? (
+        <div className="py-20 bg-white rounded-2xl border border-slate-200 text-center p-6 space-y-3">
+          <div className="w-14 h-14 bg-slate-100 text-slate-400 rounded-2xl flex items-center justify-center mx-auto">
+            <Package className="w-7 h-7" />
+          </div>
+          <h3 className="text-base font-black text-slate-800">No Orders Matching Active Filters</h3>
+          <p className="text-xs text-slate-500 max-w-md mx-auto">
+            No orders found under {activeStageTab === 'ALL_ORDERS' ? 'All Orders' : activeStageTab === 'TO_PACK' ? 'Orders to be Packed' : activeStageTab === 'PACKED' ? 'Packed Orders' : activeStageTab === 'PARTIAL_PENDING' ? 'Partial Pending Orders' : 'Tax Invoiced'}. Try adjusting your city, date, or search filters.
+          </p>
+          {hasActiveFilters && (
+            <button
+              onClick={handleClearFilters}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-xs hover:bg-indigo-700 transition-colors cursor-pointer"
+            >
+              Clear All Filters
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {pagedRetailerGroups.map((group) => {
+            const isExpanded = expandedRetailers[group.retailerId] !== false; // expanded by default
+            const channelsList = Array.from(group.channelSet);
 
-                return (
-                  <div 
-                    key={lot.retailer.id}
-                    className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden transition-all hover:border-slate-300"
-                  >
+            return (
+              <div 
+                key={group.retailerId}
+                className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden transition-all hover:border-slate-300"
+              >
+                
+                {/* Retailer Card Master Header - Compact Single-Strip ERP Layout (Max height ~72-80px) */}
+                <div 
+                  onClick={() => toggleRetailerExpand(group.retailerId)}
+                  className={`px-4 py-3 bg-white hover:bg-slate-50/80 ${isExpanded ? 'border-b border-slate-100' : ''} flex items-center justify-between gap-4 cursor-pointer select-none w-full transition-colors`}
+                >
+                  
+                  {/* LEFT COLUMN: Identity & Inline Details (Horizontal) */}
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    {/* Avatar Badge: Compact 36x36px */}
+                    <div className="w-9 h-9 min-w-[36px] min-h-[36px] rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-sm shrink-0 shadow-2xs">
+                      {group.retailerName.charAt(0)}
+                    </div>
                     
-                    {/* Retailer Lot Header & Commercial Health Summary */}
-                    <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-50/90 via-white to-indigo-50/30 border-b border-slate-200">
-                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                        
-                        {/* Retailer Info & Route */}
-                        <div className="flex items-start gap-3">
-                          <button
-                            type="button"
-                            onClick={() => setExpandedLots(prev => ({ ...prev, [lot.retailer.id]: !isExpanded }))}
-                            className="mt-1 p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:text-slate-900 hover:bg-slate-200 transition-colors cursor-pointer"
-                          >
-                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                          </button>
+                    {/* Details Block (Horizontal 2-row layout) */}
+                    <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                      {/* TOP ROW: Shop Name, Beat Badge, Ingestion Badges, Backorders */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h2 className="text-sm md:text-base font-bold text-slate-900 whitespace-nowrap">
+                          {group.retailerName}
+                        </h2>
+                        <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-medium whitespace-nowrap shrink-0">
+                          {group.city} &bull; {group.route}
+                        </span>
+                        {channelsList.map(ch => (
+                          <span key={ch} className="text-[11px] font-semibold px-2 py-0.5 rounded border border-indigo-200 bg-indigo-50 text-indigo-700 whitespace-nowrap shrink-0">
+                            {ch}
+                          </span>
+                        ))}
+                        {group.hasPendingBackorders && (
+                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 shrink-0 flex items-center gap-1 whitespace-nowrap">
+                            <Clock className="w-3 h-3 text-amber-600" />
+                            <span>Backorders ({group.backorderPiecesTotal} pcs)</span>
+                          </span>
+                        )}
+                      </div>
 
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h2 className="text-base sm:text-lg font-black text-slate-900">
-                                {lot.retailer.shop_name}
-                              </h2>
-                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-indigo-50 text-indigo-800 border border-indigo-200">
-                                {lot.items.length} {lot.items.length === 1 ? 'Line Item' : 'Line Items'}
-                              </span>
-                              {lot.sourceOrders.some(o => o.status === 'PACKING_IN_PROGRESS' || o.status === 'Packing') && (
-                                <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-blue-50 text-blue-800 border border-blue-200 flex items-center gap-1">
-                                  <BookmarkCheck className="w-3 h-3 text-blue-600" />
-                                  <span>Draft / Packing In Progress</span>
-                                </span>
-                              )}
-                              {isLotDirty(lot) && (
-                                <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-50 text-amber-900 border border-amber-300 flex items-center gap-1 animate-pulse">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                                  <span>Unsaved Edits</span>
-                                </span>
-                              )}
-                              {lot.hasBackordersInjected && (
-                                <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
-                                  <Clock className="w-3 h-3" />
-                                  <span>Backorder Injected</span>
-                                </span>
-                              )}
-                            </div>
-
-                            <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap font-medium">
-                              <span>Owner: <strong className="text-slate-800">{lot.retailer.owner_name || 'N/A'}</strong></span>
-                              <span>&bull;</span>
-                              <span>Ph: <strong className="text-slate-800 font-mono">{lot.retailer.mobile || lot.retailer.phone || 'N/A'}</strong></span>
-                              <span>&bull;</span>
-                              <span className="flex items-center gap-1 text-slate-700">
-                                <MapPin className="w-3.5 h-3.5 text-indigo-600" />
-                                <span>Route: {lot.retailer.beat_name || lot.retailer.route || lot.retailer.city || 'Nagpur'}</span>
-                              </span>
-                            </div>
-
-                            {/* Origin Badges of Ingested Orders */}
-                            <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
-                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Merged Orders:</span>
-                              {lot.originBadges.map(b => (
-                                <span
-                                  key={b.orderNumber}
-                                  className={`px-2 py-0.5 rounded-md text-[10px] font-black border ${b.badgeClass}`}
-                                >
-                                  {b.channelLabel} &bull; <strong className="font-mono">{b.orderNumber}</strong>
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Commercial Context Strip: Ledger Balance & Credit Health */}
-                        <div className="flex items-center gap-3 flex-wrap lg:justify-end">
-                          
-                          {/* Outstanding Ledger Card */}
-                          <div className="bg-slate-50 px-3.5 py-2 rounded-xl border border-slate-200 text-right">
-                            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">
-                              Ledger Outstanding
-                            </span>
-                            <span className="text-sm font-black text-rose-600 font-mono">
-                              {formatINR(lot.currentOutstanding)}
-                            </span>
-                          </div>
-
-                          {/* Credit Limit & Post-Bill Health */}
-                          <div className={`px-3.5 py-2 rounded-xl border text-right ${
-                            lot.creditLimitExceeded 
-                              ? 'bg-rose-50 border-rose-200' 
-                              : 'bg-slate-50 border-slate-200'
-                          }`}>
-                            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">
-                              Credit Limit (₹{lot.creditLimit.toLocaleString('en-IN')})
-                            </span>
-                            <span className={`text-xs font-black font-mono ${
-                              lot.creditLimitExceeded ? 'text-rose-700' : 'text-emerald-700'
-                            }`}>
-                              {lot.creditLimitExceeded 
-                                ? `⚠️ Exceeded by ${formatINR(lot.exceededAmount)}` 
-                                : `🟢 Post-Bill: ${formatINR(lot.postBillOutstanding)}`}
-                            </span>
-                          </div>
-
-                          {/* Quick Add Item Trigger */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAddItemModal({
-                                isOpen: true,
-                                orderId: lot.sourceOrders[0]?.id || '',
-                                orderNumber: lot.sourceOrders[0]?.order_number || '',
-                                retailerName: lot.retailer.shop_name
-                              });
-                            }}
-                            className="px-3 py-2 bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white border border-indigo-200 hover:border-indigo-600 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                            title="Add phone booking or spot item to this lot"
-                          >
-                            <Plus className="w-3.5 h-3.5 stroke-[3]" />
-                            <span>+ Add Item</span>
-                          </button>
-
-                          {/* Delete Entire Lot */}
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteEntireLot(lot)}
-                            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer border border-transparent hover:border-rose-200"
-                            title="Cancel and remove entire lot"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-
-                        </div>
-
+                      {/* BOTTOM ROW: Clean inline metadata line with bullet separators */}
+                      <div className="text-xs text-slate-500 font-normal truncate flex items-center gap-1.5 flex-wrap">
+                        <span>Prop: <span className="font-medium text-slate-700">{group.ownerName}</span></span>
+                        <span>&bull;</span>
+                        <span>Mob: <span className="font-medium text-slate-700">{group.phone}</span></span>
+                        <span>&bull;</span>
+                        <span>
+                          Outstanding: <span className={`font-semibold ${group.currentOutstanding > 0 ? 'text-amber-700 font-medium' : 'text-slate-700'}`}>{formatINR(group.currentOutstanding)}</span>
+                        </span>
                       </div>
                     </div>
+                  </div>
 
-                    {/* Packing Lot Table - Full Inline Operational Freedom */}
-                    {isExpanded && (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left text-xs min-w-[900px]">
-                          <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-extrabold uppercase text-[10px] tracking-wider">
-                            <tr>
-                              <th className="p-3 w-10 text-center">#</th>
-                              <th className="p-3">Product Name &amp; SKU</th>
-                              <th className="p-3 text-center">Printed MRP</th>
-                              <th className="p-3 text-center">Stock (Pcs)</th>
-                              <th className="p-3 text-center">ORDERED (PCS)</th>
-                              <th className="p-3 text-center min-w-[140px]">PACKED QTY (PCS)</th>
-                              <th className="p-3 text-right w-28">Purchase Rate (₹/Pc)</th>
-                              <th className="p-3 text-right w-32">RATE / PIECE (₹)</th>
-                              <th className="p-3 text-center w-28">Dist Margin %</th>
-                              <th className="p-3 text-right">Taxable (₹)</th>
-                              <th className="p-3 text-right">Line Total (₹)</th>
-                              <th className="p-3 text-center w-12">Action</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {lot.items.map((item, idx) => {
-                              const prod = products.find(p => p.id === item.productId);
-                              const itemEditKey = `${item.compositeKey}__${item.originOrderId}__${item.originItemId}`;
-                              const isBackorderRow = item.isBackorder;
-                              const availStock = item.availStockPieces ?? item.availStockCartons ?? 0;
-                              const packedVal = item.packedPieces ?? item.packedCartons ?? 0;
-                              const orderedVal = item.orderedPieces ?? item.orderedCartons ?? 0;
-                              const autoBox = formatAutoBoxQuantity(orderedVal, prod);
+                  {/* MIDDLE COLUMN: Orders & Financial Summary */}
+                  <div className="shrink-0 text-right pr-3 border-r border-slate-100 hidden sm:flex flex-col items-end justify-center">
+                    <span className="text-xs text-slate-500 font-medium whitespace-nowrap">
+                      {group.totalOrdersCount} Orders &bull; {group.totalLineItemsCount} SKUs
+                    </span>
+                    <span className="text-base md:text-lg font-extrabold text-slate-900 tracking-tight whitespace-nowrap">
+                      {formatINR(group.totalOrderValueSum)}
+                    </span>
+                  </div>
 
-                              return (
-                                <tr 
-                                  key={itemEditKey}
-                                  className={`transition-colors ${
-                                    isBackorderRow 
-                                      ? 'bg-amber-50/60 hover:bg-amber-50/90' 
-                                      : 'hover:bg-slate-50/80'
-                                  }`}
-                                >
-                                  {/* Row Index */}
-                                  <td className="p-3 text-center text-slate-400 font-mono">
-                                    {idx + 1}
-                                  </td>
+                  {/* RIGHT COLUMN: Action Buttons & Accordion Trigger */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    
+                    {/* Primary Consolidated Packing Floor CTA */}
+                    {(group.pendingOrders.length > 0 || (activeStageTab === 'TO_PACK' && group.orders.length > 0) || (activeStageTab === 'ALL_ORDERS' && group.pendingOrders.length > 0)) && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const targetOrds = group.pendingOrders.length > 0 ? group.pendingOrders.map(o => o.order) : group.orders.map(o => o.order);
+                          handleOpenPackingFloor(group.retailer, targetOrds, group.retailerBackorders);
+                        }}
+                        className="text-xs font-semibold px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 transition-all active:scale-95 shadow-xs cursor-pointer shrink-0"
+                      >
+                        <Package className="w-3.5 h-3.5 text-white" />
+                        <span>Open Packing Floor</span>
+                      </button>
+                    )}
 
-                                  {/* Product Name & Brand */}
-                                  <td className="p-3 space-y-0.5">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="font-extrabold text-slate-900 text-xs">
-                                        {item.productName}
-                                      </span>
-                                      {item.brand && (
-                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-100 text-slate-600">
-                                          {item.brand}
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                                      <span>SKU: <strong className="font-mono text-slate-700">{item.sku}</strong></span>
-                                      <span>&bull;</span>
-                                      <span className="text-indigo-600 font-mono">{item.originTag}</span>
-                                    </div>
-                                  </td>
+                    {/* Consolidated Actions for Packed Orders */}
+                    {group.packedOrders.length > 0 && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenBillingOverrideConsolidated(group.retailer, group.packedOrders.map(o => o.order));
+                          }}
+                          className="text-xs font-semibold px-2.5 py-2 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 flex items-center gap-1 transition-all cursor-pointer shrink-0"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-teal-700" />
+                          <span>Edit</span>
+                        </button>
 
-                                  {/* Master Commodity Principle: "MRP IS HERO" */}
-                                  <td className="p-3 text-center">
-                                    <span className="px-2 py-0.5 rounded-md text-[11px] font-black bg-emerald-50 text-emerald-800 border border-emerald-300 font-mono inline-block">
-                                      MRP ₹{item.mrp.toFixed(2)}
-                                    </span>
-                                  </td>
-
-                                  {/* Godown Stock Status */}
-                                  <td className="p-3 text-center">
-                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                      availStock >= packedVal 
-                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
-                                        : availStock > 0 
-                                          ? 'bg-amber-50 text-amber-700 border border-amber-200' 
-                                          : 'bg-rose-50 text-rose-700 border border-rose-200'
-                                    }`}>
-                                      {availStock > 0 ? `🟢 ${formatProductStockDisplay(availStock, prod, true)}` : '🔴 0 Pcs'}
-                                    </span>
-                                  </td>
-
-                                  {/* Ordered Qty (Pieces / Auto-Box) */}
-                                  <td className="p-3 text-center font-bold text-slate-700 font-mono">
-                                    <div className="flex flex-col items-center">
-                                      <span className="font-extrabold text-slate-900">{autoBox.displayOrdered}</span>
-                                      {!autoBox.isPieceOnly && autoBox.packSize > 1 && (
-                                        <span className="text-[9px] text-slate-400 font-normal font-sans">
-                                          ({autoBox.packSize} Pcs/Box)
-                                        </span>
-                                      )}
-                                    </div>
-                                  </td>
-
-                                  {/* Single Numeric Packed Qty Input (Pieces) */}
-                                  <td className="p-3 text-center">
-                                    <div className="flex items-center justify-center gap-1">
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        step="1"
-                                        disabled={!can(userRole, 'EDIT_PACKED_QTY')}
-                                        value={item.packedPieces ?? item.packedCartons}
-                                        onChange={(e) => handlePackedPiecesChange(itemEditKey, parseInt(e.target.value) || 0)}
-                                        className="w-20 px-2 py-1 bg-white border border-indigo-300 rounded-lg text-xs font-black text-center text-slate-900 focus:ring-2 focus:ring-indigo-400 focus:outline-none disabled:opacity-50 disabled:bg-slate-50"
-                                        title="Packed Quantity in Pieces"
-                                      />
-                                      <span className="text-[10px] font-bold text-slate-500 uppercase">Pcs</span>
-                                    </div>
-                                  </td>
-
-                                  {/* Purchase Rate (₹/Piece) */}
-                                  <td className="p-3 text-right">
-                                    <span className="font-mono font-bold text-slate-600 text-xs">
-                                      ₹{Number(item.purchaseCost || 0).toFixed(2)}
-                                    </span>
-                                  </td>
-
-                                  {/* RATE / PIECE (₹) with Rate Intelligence Trigger */}
-                                  <td className="p-3 text-right">
-                                    <div className="relative inline-flex items-center justify-end gap-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setRateIntelligenceModal({
-                                            isOpen: true,
-                                            retailerId: lot.retailer.id,
-                                            retailerName: lot.retailer.shop_name,
-                                            retailerCity: lot.retailer.city,
-                                            productId: item.productId,
-                                            productName: item.productName,
-                                            sku: item.sku,
-                                            mrp: item.mrp,
-                                            tradingUnit: 'Piece',
-                                            baseUnit: 'Piece',
-                                            unitsPerPack: 1,
-                                            purchaseCost: item.purchaseCost,
-                                            currentUnitRate: item.unitRate,
-                                            itemEditKey
-                                          });
-                                        }}
-                                        className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
-                                        title="Rate Intelligence: View last 5 billed rates for this retailer"
-                                      >
-                                        <Clock className="w-3.5 h-3.5" />
-                                      </button>
-                                      <span className="text-slate-400 text-[11px] font-bold">₹</span>
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        step="0.1"
-                                        disabled={!can(userRole, 'EDIT_RATES')}
-                                        value={item.unitRate}
-                                        onChange={(e) => handleUnitRateChange(itemEditKey, parseFloat(e.target.value) || 0)}
-                                        className="w-20 px-2 py-1 bg-white border border-slate-300 rounded-lg text-xs font-black text-right text-indigo-700 focus:border-indigo-500 focus:outline-none disabled:opacity-60 disabled:bg-slate-50"
-                                      />
-                                    </div>
-                                  </td>
-
-                                  {/* Live Margin Indicator: ((unitRate - purchaseCost) / unitRate) * 100 */}
-                                  <td className="p-3 text-center">
-                                    {item.marginPct !== null ? (
-                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-0.5 ${
-                                        item.marginPct >= 10 
-                                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
-                                          : item.marginPct > 0 
-                                            ? 'bg-blue-50 text-blue-800 border border-blue-200' 
-                                            : 'bg-rose-50 text-rose-800 border border-rose-200'
-                                      }`}>
-                                        <TrendingUp className="w-2.5 h-2.5" />
-                                        <span>{item.marginPct >= 0 ? `+${item.marginPct.toFixed(1)}%` : `${item.marginPct.toFixed(1)}%`}</span>
-                                      </span>
-                                    ) : (
-                                      <span className="text-[10px] text-slate-400">N/A</span>
-                                    )}
-                                  </td>
-
-                                  {/* Line Taxable Amount: packed_qty_in_pieces * unit_rate_per_piece */}
-                                  <td className="p-3 text-right font-mono font-bold text-slate-700">
-                                    {formatINR(item.lineTaxable)}
-                                  </td>
-
-                                  {/* Line Total (with GST) */}
-                                  <td className="p-3 text-right font-mono font-black text-slate-900">
-                                    {formatINR(item.lineTotal)}
-                                  </td>
-
-                                  {/* Remove Line Action */}
-                                  <td className="p-3 text-center">
-                                    <button
-                                      type="button"
-                                      disabled={!can(userRole, 'REMOVE_ITEM')}
-                                      onClick={() => handleRemoveLineItem(lot, item)}
-                                      className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                                      title="Remove line item from packing lot"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </td>
-
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleGenerateConsolidatedTaxInvoice(group.retailer, group.packedOrders.map(o => o.order));
+                          }}
+                          className="text-xs font-semibold px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 transition-all active:scale-95 shadow-xs cursor-pointer shrink-0"
+                        >
+                          <Receipt className="w-3.5 h-3.5 text-white" />
+                          <span>Generate Invoice ({formatINR(group.totalPackedValueSum)})</span>
+                        </button>
                       </div>
                     )}
 
-                    {/* Lot Financial Summary Strip & 1-Click Invoice CTA */}
-                    <div className="p-4 bg-slate-50/90 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-                      
-                      {/* Left Side: Summary Metrics */}
-                      <div className="flex items-center gap-4 sm:gap-6 flex-wrap text-xs">
-                        <div>
-                          <span className="text-[10px] text-slate-500 font-bold uppercase block">Packed Volume:</span>
-                          <span className="font-extrabold text-slate-900 font-mono">
-                            {lot.totalPackedPieces ?? lot.totalPackedCartons} Pcs
-                          </span>
-                        </div>
+                    {/* Primary Consolidated Action for Completed / Invoiced Orders */}
+                    {(group.completedOrders.length > 0 || (activeStageTab === 'INVOICED' && group.orders.length > 0) || group.invoicesList.length > 0) && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const targetOrds = group.completedOrders.length > 0 ? group.completedOrders.map(o => o.order) : group.orders.map(o => o.order);
+                          handlePrintConsolidatedTaxInvoice(group.retailer, targetOrds);
+                        }}
+                        className="text-xs font-semibold px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 transition-all active:scale-95 shadow-xs cursor-pointer shrink-0"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-white" />
+                        <span>Print Consolidated Tax Invoice</span>
+                      </button>
+                    )}
 
-                        <div>
-                          <span className="text-[10px] text-slate-500 font-bold uppercase block">Taxable Subtotal:</span>
-                          <span className="font-bold text-slate-700 font-mono">
-                            {formatINR(lot.taxableSubtotal)}
-                          </span>
-                        </div>
+                    {/* Section Specific Batch Actions */}
+                    {activeStageTab === 'PARTIAL_PENDING' && group.retailer && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenBackorderResolution(group.retailer!, group.orders.map(o => o.order));
+                        }}
+                        className="text-xs font-semibold px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white flex items-center gap-1 transition-all active:scale-95 shadow-xs cursor-pointer shrink-0"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Manage Backorders</span>
+                      </button>
+                    )}
 
-                        <div>
-                          <span className="text-[10px] text-slate-500 font-bold uppercase block">Total GST:</span>
-                          <span className="font-bold text-slate-700 font-mono">
-                            +{formatINR(lot.gstTotal)}
-                          </span>
-                        </div>
+                    {/* Accordion toggle arrow button */}
+                    <div className="p-1.5 hover:bg-slate-100 rounded-md text-slate-400 hover:text-slate-700 transition-colors ml-0.5 shrink-0">
+                      {isExpanded ? <ChevronUp className="w-4.5 h-4.5" /> : <ChevronDown className="w-4.5 h-4.5" />}
+                    </div>
 
-                        {lot.averageMarginPct !== null && (
-                          <div>
-                            <span className="text-[10px] text-slate-500 font-bold uppercase block">Avg Margin:</span>
-                            <span className="font-extrabold text-emerald-700 font-mono">
-                              +{lot.averageMarginPct.toFixed(2)}%
-                            </span>
-                          </div>
-                        )}
+                  </div>
 
-                        <div className="pl-2 border-l border-slate-300">
-                          <span className="text-[10px] text-slate-500 font-bold uppercase block">Net Lot Total:</span>
-                          <span className="text-base font-black text-indigo-900 font-mono">
-                            {formatINR(lot.netGrandTotal)}
-                          </span>
-                        </div>
-                      </div>
+                </div>
 
-                      {/* Right Side: DUAL ACTION BUTTON BAR */}
-                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto justify-end">
-                        {/* Button 1: [ 💾 Save Packing Progress ] (Secondary / Outline Button) */}
-                        <button
-                          type="button"
-                          disabled={isSavingLot[lot.retailer.id] || isProcessing}
-                          onClick={() => handleSavePackingProgress(lot)}
-                          className={`px-4 py-2.5 rounded-xl text-xs font-extrabold border transition-all inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-2xs ${
-                            isLotDirty(lot)
-                              ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300 ring-2 ring-amber-200/60'
-                              : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300'
-                          }`}
-                          title="Save modified quantities and notes as a draft without generating tax bill"
+                {/* Expanded Individual Orders List */}
+                {isExpanded && (
+                  <div className="divide-y divide-slate-100 bg-white">
+                    {group.orders.map(ordRec => {
+                      const ord = ordRec.order;
+                      const inv = ordRec.invoice;
+                      const isPacked = ord.status === 'Packed' || ord.status === 'PACKED_AND_SEALED';
+                      const isPendingToPack = ord.status === 'Draft' || ord.status === 'Submitted' || ord.status === 'Under Review' || ord.status === 'Confirmed' || ord.status === 'Partially Confirmed' || (ord.status as string) === 'PENDING';
+                      const isBackorder = ord.status === 'Partially Fulfilled' || (ord.status as string) === 'PARTIAL_PENDING' || ord.order_number?.includes('-BO') || ordRec.isPartial;
+
+                      return (
+                        <div 
+                          key={ord.id}
+                          className="p-4 sm:p-5 hover:bg-slate-50/70 transition-colors flex flex-col lg:flex-row lg:items-center justify-between gap-4"
                         >
-                          {isSavingLot[lot.retailer.id] ? (
-                            <>
-                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
-                              <span>Saving Progress...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Save className={`w-3.5 h-3.5 ${isLotDirty(lot) ? 'text-amber-600' : 'text-slate-600'}`} />
-                              <span>💾 Save Packing Progress</span>
-                              {isLotDirty(lot) && (
-                                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Unsaved edits in this lot" />
+                          
+                          {/* Order Identifier & Channel */}
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-sm font-black text-indigo-700">
+                                {ord.order_number}
+                              </span>
+
+                              {/* Backorder Tag */}
+                              {isBackorder && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-600 text-white shadow-2xs flex items-center gap-1">
+                                  <Clock className="w-3 h-3 text-purple-200" />
+                                  <span>BACKORDER</span>
+                                </span>
                               )}
-                            </>
-                          )}
-                        </button>
 
-                        {/* Button 2: [ 🧾 Complete & Generate Invoice ] (Primary Action Button) */}
-                        <button
-                          type="button"
-                          disabled={isProcessing || isSavingLot[lot.retailer.id] || (lot.totalPackedPieces ?? lot.totalPackedCartons ?? 0) <= 0 || !can(userRole, 'GENERATE_INVOICE')}
-                          onClick={() => handleMarkPackedAndGenerateInvoice(lot)}
-                          className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:from-emerald-500 hover:to-teal-500 active:scale-98 text-white rounded-xl text-xs font-black shadow-md transition-all inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="Finalize packing, create GST invoice, deduct stock, and update ledger"
-                        >
-                          {isProcessing ? (
-                            <>
-                              <RefreshCw className="w-4 h-4 animate-spin" />
-                              <span>Finalizing 1 GST Invoice...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Receipt className="w-4 h-4 stroke-[2.5]" />
-                              <span>🧾 Complete &amp; Generate Invoice</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-
-                    </div>
-
-                  </div>
-                );
-              })
-            )}
-            {totalPackingPages > 1 && (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 text-xs shadow-2xs">
-                <div className="flex items-center gap-2 text-slate-500 font-medium">
-                  <span>
-                    Showing <strong className="text-slate-900 font-bold font-mono">{(validPackingPage - 1) * (pageSize === -1 ? totalPackingLotsCount : pageSize) + 1}</strong> to <strong className="text-slate-900 font-bold font-mono">{Math.min(validPackingPage * (pageSize === -1 ? totalPackingLotsCount : pageSize), totalPackingLotsCount)}</strong> of <strong className="text-slate-900 font-bold font-mono">{totalPackingLotsCount}</strong> Lots
-                  </span>
-                  <span className="hidden sm:inline">&bull;</span>
-                  <div className="hidden sm:flex items-center gap-1.5">
-                    <span>Lots per page:</span>
-                    <select
-                      value={pageSize}
-                      onChange={(e) => {
-                        setPageSize(parseInt(e.target.value));
-                        setCurrentPage(1);
-                      }}
-                      className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 cursor-pointer focus:outline-none"
-                    >
-                      <option value={10}>10</option>
-                      <option value={25}>25</option>
-                      <option value={50}>50</option>
-                      <option value={-1}>All</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    disabled={validPackingPage <= 1}
-                    className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed font-bold text-slate-700 transition-colors cursor-pointer inline-flex items-center gap-1"
-                  >
-                    <ChevronLeft className="w-3.5 h-3.5" />
-                    <span>Prev</span>
-                  </button>
-
-                  <span className="px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-100 font-black text-indigo-900 font-mono">
-                    Page {validPackingPage} of {totalPackingPages}
-                  </span>
-
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(p => Math.min(totalPackingPages, p + 1))}
-                    disabled={validPackingPage >= totalPackingPages}
-                    className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed font-bold text-slate-700 transition-colors cursor-pointer inline-flex items-center gap-1"
-                  >
-                    <span>Next</span>
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            )}
-
-          </div>
-        )}
-
-        {/* ======================================================================= */}
-        {/* TAB 2: ⏳ PARTIAL PENDING QUEUE (BACKORDER HUB) */}
-        {/* ======================================================================= */}
-        {activeTab === 'partial_pending' && (
-          <div className="space-y-4">
-            
-            {/* Zero Phantom Ledger Guarantee Banner */}
-            <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 flex items-start gap-3 text-xs">
-              <ShieldAlert className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <h4 className="font-extrabold text-amber-900">
-                  Zero Phantom Ledger Balance &bull; Strict Dispatched-Only Billing
-                </h4>
-                <p className="text-amber-800 leading-relaxed">
-                  Retailers are <strong>ONLY billed for physically packed and dispatched crates</strong>. All unresolved balance quantities below carry <strong>₹0.00 ledger debit</strong> until confirmed stock arrives and an invoice is generated.
-                </p>
-              </div>
-            </div>
-
-            {filteredAndSortedBackorders.length === 0 ? (
-              <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center space-y-3 shadow-xs">
-                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto ${
-                  hasActiveFilters 
-                    ? 'bg-amber-50 border border-amber-100 text-amber-600' 
-                    : 'bg-emerald-50 border border-emerald-100 text-emerald-600'
-                }`}>
-                  {hasActiveFilters ? <Filter className="w-8 h-8" /> : <CheckCircle2 className="w-8 h-8" />}
-                </div>
-                <h3 className="text-base font-extrabold text-slate-900">
-                  {hasActiveFilters ? 'No Backorders Match Active Filters' : 'Zero Pending Backorders!'}
-                </h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                  {hasActiveFilters
-                    ? 'Try clearing active location, channel, value, or search filters to find backorders.'
-                    : 'All customer orders have either been 100% fulfilled or short-closed with an audit trail.'}
-                </p>
-                {hasActiveFilters && (
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={handleResetAllFilters}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-2 shadow-xs cursor-pointer hover:scale-102 active:scale-98 transition-all"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                      <span>Reset All Filters</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs min-w-[950px]">
-                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-extrabold uppercase text-[10px] tracking-wider">
-                        <tr>
-                          <th className="p-3.5">Product &amp; SKU</th>
-                          <th className="p-3.5 text-center">Printed MRP</th>
-                          <th className="p-3.5">Retailer Customer</th>
-                          <th className="p-3.5 text-center">ORDERED (PCS)</th>
-                          <th className="p-3.5 text-center">FULFILLED (PCS)</th>
-                          <th 
-                            onClick={() => toggleSort('PIECES')}
-                            className="p-3.5 text-center cursor-pointer hover:bg-slate-100 transition-colors select-none group"
-                            title="Click to sort by Pending Pieces"
-                          >
-                            <div className="inline-flex items-center gap-1">
-                              <span>PENDING (PCS)</span>
-                              <ArrowUpDown className={`w-3 h-3 ${sortBy === 'PIECES_DESC' || sortBy === 'PIECES_ASC' ? 'text-indigo-600 font-black' : 'text-slate-400 group-hover:text-slate-600'}`} />
-                            </div>
-                          </th>
-                          <th 
-                            onClick={() => toggleSort('VALUE')}
-                            className="p-3.5 text-right cursor-pointer hover:bg-slate-100 transition-colors select-none group"
-                            title="Click to sort by Locked Unit Rate"
-                          >
-                            <div className="inline-flex items-center justify-end gap-1">
-                              <span>LOCKED RATE (₹/Pc)</span>
-                              <ArrowUpDown className={`w-3 h-3 ${sortBy === 'VALUE_DESC' || sortBy === 'VALUE_ASC' ? 'text-indigo-600 font-black' : 'text-slate-400 group-hover:text-slate-600'}`} />
-                            </div>
-                          </th>
-                          <th 
-                            onClick={() => toggleSort('DATE')}
-                            className="p-3.5 text-center cursor-pointer hover:bg-slate-100 transition-colors select-none group"
-                            title="Click to sort by FIFO Pendency / Age"
-                          >
-                            <div className="inline-flex items-center gap-1">
-                              <span>Pendency</span>
-                              <ArrowUpDown className={`w-3 h-3 ${sortBy === 'DATE_ASC' || sortBy === 'DATE_DESC' ? 'text-indigo-600 font-black' : 'text-slate-400 group-hover:text-slate-600'}`} />
-                            </div>
-                          </th>
-                          <th className="p-3.5 text-center">Godown Stock</th>
-                          <th className="p-3.5 text-center">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {pagedBackorders.map(bo => {
-                          const boProd = products.find(p => p.id === bo.productId);
-                          const boOrdered = bo.orderedPieces ?? bo.orderedCartons ?? 0;
-                          const boFulfilled = bo.fulfilledPieces ?? bo.fulfilledCartons ?? 0;
-                          const boPending = bo.pendingPieces ?? bo.pendingCartons ?? 0;
-                          const boAvail = bo.availStockPieces ?? bo.availStockCartons ?? 0;
-
-                          return (
-                          <tr key={`${bo.orderId}-${bo.itemId}`} className="hover:bg-slate-50/80 transition-colors">
-                            
-                            {/* Product & SKU */}
-                            <td className="p-3.5 space-y-0.5">
-                              <span className="font-extrabold text-slate-900 text-xs block">{bo.productName}</span>
-                              <div className="text-[10px] text-slate-500">
-                                <span>SKU: <strong className="font-mono text-slate-700">{bo.sku}</strong></span>
-                              </div>
-                            </td>
-
-                            {/* MRP */}
-                            <td className="p-3.5 text-center">
-                              <span className="px-2 py-0.5 rounded text-[11px] font-black bg-emerald-50 text-emerald-800 border border-emerald-300 font-mono">
-                                MRP ₹{bo.mrp}
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${ordRec.channel.badgeClass}`}>
+                                {ordRec.channel.label}
                               </span>
-                            </td>
-
-                            {/* Retailer */}
-                            <td className="p-3.5 space-y-0.5">
-                              <span className="font-bold text-slate-800 block">{bo.retailerName}</span>
-                              <div className="text-[10px] text-slate-500 flex items-center gap-1">
-                                <span>{bo.retailerBeat || bo.retailerCity}</span>
-                                <span>&bull;</span>
-                                <span className="font-mono text-indigo-700">{bo.orderNumber}</span>
-                              </div>
-                            </td>
-
-                            {/* Ordered Qty (Pieces / Auto-Box) */}
-                            <td className="p-3.5 text-center font-bold text-slate-600 font-mono">
-                              {formatAutoBoxQuantity(boOrdered, boProd).displayOrdered}
-                            </td>
-
-                            {/* Fulfilled So Far (Pieces / Auto-Box) */}
-                            <td className="p-3.5 text-center">
-                              <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700 font-mono">
-                                {formatAutoBoxQuantity(boFulfilled, boProd).displayOrdered}
-                              </span>
-                            </td>
-
-                            {/* Still Pending Qty (Pieces / Auto-Box) */}
-                            <td className="p-3.5 text-center">
-                              <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-amber-100 text-amber-900 border border-amber-300 font-mono">
-                                {formatAutoBoxQuantity(boPending, boProd).displayOrdered}
-                              </span>
-                            </td>
-
-                            {/* Locked Rate (₹/Pc) */}
-                            <td className="p-3.5 text-right font-mono font-bold text-indigo-700">
-                              ₹{bo.lockedUnitRate.toFixed(2)}/Pc
-                            </td>
-
-                            {/* Pendency Days */}
-                            <td className="p-3.5 text-center font-mono text-[11px]">
-                              <span className={`px-2 py-0.5 rounded font-black ${
-                                bo.daysPending > 3 ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-700'
-                              }`}>
-                                {bo.daysPending} {bo.daysPending === 1 ? 'day' : 'days'}
-                              </span>
-                            </td>
-
-                            {/* Godown Stock Status */}
-                            <td className="p-3.5 text-center">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                boAvail >= boPending 
-                                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
-                                  : 'bg-rose-50 text-rose-800 border border-rose-200'
-                              }`}>
-                                {boAvail > 0 ? `🟢 ${formatProductStockDisplay(boAvail, boProd, true)} Stock` : '🔴 0 Pcs Stock'}
-                              </span>
-                            </td>
-
-                            {/* Action Buttons */}
-                            <td className="p-3.5 text-center">
-                              <div className="flex items-center justify-center gap-1.5">
-                                {/* Fulfill Remaining Now */}
-                                <button
-                                  type="button"
-                                  disabled={!can(userRole, 'GENERATE_INVOICE')}
-                                  onClick={() => handleFulfillBackorderNow(bo)}
-                                  className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[11px] font-bold transition-all inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                                  title="Fulfill remaining quantity now & generate standalone tax invoice"
-                                >
-                                  <Package className="w-3 h-3" />
-                                  <span>Fulfill &amp; Bill</span>
-                                </button>
-
-                                {/* Short-Close */}
-                                <button
-                                  type="button"
-                                  disabled={!can(userRole, 'SHORT_CLOSE_BACKORDER')}
-                                  onClick={() => setShortCloseModal({ isOpen: true, item: bo })}
-                                  className="px-2 py-1 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 hover:border-rose-600 rounded-lg text-[11px] font-bold transition-all inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                                  title="Cancel remaining balance with audit reason"
-                                >
-                                  <Ban className="w-3 h-3" />
-                                  <span>Short-Close</span>
-                                </button>
-                              </div>
-                            </td>
-
-                          </tr>
-                        );
-                      })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Pagination Controls for Tab 2 */}
-                {totalBackorderPages > 1 && (
-                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 text-xs shadow-2xs">
-                    <div className="flex items-center gap-2 text-slate-500 font-medium">
-                      <span>
-                        Showing <strong className="text-slate-900 font-bold font-mono">{(validBackorderPage - 1) * (pageSize === -1 ? totalBackordersCount : pageSize) + 1}</strong> to <strong className="text-slate-900 font-bold font-mono">{Math.min(validBackorderPage * (pageSize === -1 ? totalBackordersCount : pageSize), totalBackordersCount)}</strong> of <strong className="text-slate-900 font-bold font-mono">{totalBackordersCount}</strong> Backorders
-                      </span>
-                      <span className="hidden sm:inline">&bull;</span>
-                      <div className="hidden sm:flex items-center gap-1.5">
-                        <span>Rows per page:</span>
-                        <select
-                          value={pageSize}
-                          onChange={(e) => {
-                            setPageSize(parseInt(e.target.value));
-                            setCurrentPage(1);
-                          }}
-                          className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 cursor-pointer focus:outline-none"
-                        >
-                          <option value={10}>10</option>
-                          <option value={25}>25</option>
-                          <option value={50}>50</option>
-                          <option value={-1}>All</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                        disabled={validBackorderPage <= 1}
-                        className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed font-bold text-slate-700 transition-colors cursor-pointer inline-flex items-center gap-1"
-                      >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                        <span>Prev</span>
-                      </button>
-
-                      <span className="px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-100 font-black text-indigo-900 font-mono">
-                        Page {validBackorderPage} of {totalBackorderPages}
-                      </span>
-
-                      <button
-                        type="button"
-                        onClick={() => setCurrentPage(p => Math.min(totalBackorderPages, p + 1))}
-                        disabled={validBackorderPage >= totalBackorderPages}
-                        className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed font-bold text-slate-700 transition-colors cursor-pointer inline-flex items-center gap-1"
-                      >
-                        <span>Next</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-          </div>
-        )}
-
-        {/* ======================================================================= */}
-        {/* TAB 3: ✅ COMPLETED & DISPATCHED HISTORY LOG */}
-        {/* ======================================================================= */}
-        {activeTab === 'completed_history' && (
-          <div className="space-y-4">
-            
-            {filteredAndSortedInvoices.length === 0 ? (
-              <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center space-y-3 shadow-xs">
-                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto ${
-                  hasActiveFilters 
-                    ? 'bg-amber-50 border border-amber-100 text-amber-600' 
-                    : 'bg-slate-100 text-slate-400'
-                }`}>
-                  {hasActiveFilters ? <Filter className="w-8 h-8" /> : <Receipt className="w-8 h-8" />}
-                </div>
-                <h3 className="text-base font-extrabold text-slate-900">
-                  {hasActiveFilters ? 'No Completed Invoices Match Active Filters' : 'No Completed Invoices Found'}
-                </h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                  {hasActiveFilters
-                    ? 'Try clearing active location, channel, value, or date filters to view invoices.'
-                    : 'Once packing lots are packed and dispatched, tax invoices will be permanently recorded here for reprint.'}
-                </p>
-                {hasActiveFilters && (
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={handleResetAllFilters}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-2 shadow-xs cursor-pointer hover:scale-102 active:scale-98 transition-all"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                      <span>Reset All Filters</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs min-w-[900px]">
-                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-extrabold uppercase text-[10px] tracking-wider">
-                        <tr>
-                          <th className="p-3.5">Invoice #</th>
-                          <th 
-                            onClick={() => toggleSort('DATE')}
-                            className="p-3.5 cursor-pointer hover:bg-slate-100 transition-colors select-none group"
-                            title="Click to sort by Date"
-                          >
-                            <div className="inline-flex items-center gap-1">
-                              <span>Date</span>
-                              <ArrowUpDown className={`w-3 h-3 ${sortBy === 'DATE_DESC' || sortBy === 'DATE_ASC' ? 'text-indigo-600 font-black' : 'text-slate-400 group-hover:text-slate-600'}`} />
-                            </div>
-                          </th>
-                          <th className="p-3.5">Retailer Customer</th>
-                          <th className="p-3.5">Merged Orders</th>
-                          <th 
-                            onClick={() => toggleSort('ITEMS')}
-                            className="p-3.5 text-center cursor-pointer hover:bg-slate-100 transition-colors select-none group"
-                            title="Click to sort by Item Count"
-                          >
-                            <div className="inline-flex items-center gap-1">
-                              <span>Items</span>
-                              <ArrowUpDown className={`w-3 h-3 ${sortBy === 'ITEMS_DESC' || sortBy === 'ITEMS_ASC' ? 'text-indigo-600 font-black' : 'text-slate-400 group-hover:text-slate-600'}`} />
-                            </div>
-                          </th>
-                          <th className="p-3.5 text-right">Taxable</th>
-                          <th className="p-3.5 text-right">GST</th>
-                          <th 
-                            onClick={() => toggleSort('VALUE')}
-                            className="p-3.5 text-right cursor-pointer hover:bg-slate-100 transition-colors select-none group"
-                            title="Click to sort by Invoice Total"
-                          >
-                            <div className="inline-flex items-center justify-end gap-1">
-                              <span>Invoice Total</span>
-                              <ArrowUpDown className={`w-3 h-3 ${sortBy === 'VALUE_DESC' || sortBy === 'VALUE_ASC' ? 'text-indigo-600 font-black' : 'text-slate-400 group-hover:text-slate-600'}`} />
-                            </div>
-                          </th>
-                          <th className="p-3.5 text-center">Payment</th>
-                          <th className="p-3.5 text-center">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {pagedInvoices.map(inv => {
-                          const ret = retailers.find(r => r.id === inv.retailer_id);
-                          return (
-                            <tr key={inv.id} className="hover:bg-slate-50/80 transition-colors">
                               
-                              {/* Invoice # */}
-                              <td className="p-3.5">
-                                <span className="font-mono font-black text-indigo-900 text-xs block">
+                              {/* Status Pill */}
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                                ord.status === 'Completed' || ord.status === 'Fully Fulfilled'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : ord.status === 'Packed' || ord.status === 'PACKED_AND_SEALED'
+                                  ? 'bg-teal-100 text-teal-800 border border-teal-200'
+                                  : ord.status === 'Partially Fulfilled' || (ord.status as string) === 'PARTIAL_PENDING' || ord.order_number?.includes('-BO')
+                                  ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                  : 'bg-amber-100 text-amber-800 border border-amber-200'
+                              }`}>
+                                {ord.status}
+                              </span>
+
+                              {/* Payment Pill */}
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                ordRec.paymentStatus === 'Paid'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : ordRec.paymentStatus === 'Credit'
+                                  ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                  : ordRec.paymentStatus === 'Partial'
+                                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                  : 'bg-slate-100 text-slate-600 border border-slate-200'
+                              }`}>
+                                {ordRec.paymentStatus}
+                              </span>
+                            </div>
+
+                            <p className="text-xs text-slate-500 font-medium">
+                              Ordered: {ordRec.formattedDate} at {ordRec.formattedTime} &bull; Created By: {ordRec.salesperson?.name || 'Self-Booked'}
+                            </p>
+                          </div>
+
+                          {/* Quantities & Items Breakdown */}
+                          <div className="flex items-center gap-6 text-xs text-slate-600">
+                            <div>
+                              <span className="text-[10px] font-bold text-slate-400 block uppercase">Booked Items</span>
+                              <span className="font-extrabold text-slate-900 text-sm">
+                                {ordRec.lineItemsCount} SKUs
+                              </span>
+                              <span className="text-slate-500 text-[11px] block">
+                                ({ordRec.totalOrdered} Total Pcs)
+                              </span>
+                            </div>
+
+                            <div>
+                              <span className="text-[10px] font-bold text-slate-400 block uppercase">Order Value</span>
+                              <span className="font-black text-slate-900 text-sm">
+                                {formatINR(ord.total_amount)}
+                              </span>
+                              {inv && (
+                                <span className="text-[10px] font-mono font-bold text-indigo-600 block">
                                   {inv.invoice_number}
                                 </span>
-                                <span className="text-[10px] text-slate-400">GST Tax Invoice</span>
-                              </td>
+                              )}
+                            </div>
 
-                              {/* Date */}
-                              <td className="p-3.5 text-slate-600 font-mono text-[11px]">
-                                {new Date(inv.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                              </td>
-
-                              {/* Retailer */}
-                              <td className="p-3.5 space-y-0.5">
-                                <span className="font-extrabold text-slate-900 text-xs block">{inv.retailerName}</span>
-                                <span className="text-[10px] text-slate-500">{inv.retailerBeat}</span>
-                              </td>
-
-                              {/* Merged Source Orders */}
-                              <td className="p-3.5 font-mono text-[11px] text-indigo-600">
-                                {inv.source_order_numbers?.join(', ') || inv.order_ref_id || 'Direct'}
-                              </td>
-
-                              {/* Items count */}
-                              <td className="p-3.5 text-center font-bold text-slate-700 font-mono">
-                                {inv.items?.length || 0}
-                              </td>
-
-                              {/* Taxable */}
-                              <td className="p-3.5 text-right font-mono text-slate-700">
-                                {formatINR(inv.taxable_value)}
-                              </td>
-
-                              {/* GST */}
-                              <td className="p-3.5 text-right font-mono text-slate-500">
-                                +{formatINR((inv.cgst || 0) + (inv.sgst || 0) + (inv.igst || 0))}
-                              </td>
-
-                              {/* Grand Total */}
-                              <td className="p-3.5 text-right font-mono font-black text-slate-900 text-sm">
-                                {formatINR(inv.grand_total)}
-                              </td>
-
-                              {/* Payment Status */}
-                              <td className="p-3.5 text-center">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                                  inv.payment_status === 'Paid' 
-                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' 
-                                    : inv.payment_status === 'Partial' 
-                                      ? 'bg-amber-100 text-amber-800 border border-amber-200' 
-                                      : 'bg-rose-100 text-rose-800 border border-rose-200'
-                                }`}>
-                                  {inv.payment_status || 'Unpaid'}
+                            {ordRec.totalPending > 0 && (
+                              <div>
+                                <span className="text-[10px] font-bold text-amber-700 block uppercase">Shortage Pending</span>
+                                <span className="font-black text-amber-800 text-sm">
+                                  {ordRec.totalPending} Pcs
                                 </span>
-                              </td>
+                                <span className="text-amber-700 text-[10px] font-bold block">
+                                  ₹{Math.round(ordRec.pendingValue)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
 
-                              {/* Print / View Modal Trigger */}
-                              <td className="p-3.5 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setInvoicePreviewModal({
-                                     isOpen: true,
-                                     invoice: inv,
-                                     retailer: ret
-                                    });
-                                  }}
-                                  className="px-3 py-1.5 bg-slate-100 hover:bg-indigo-600 text-slate-700 hover:text-white border border-slate-200 hover:border-indigo-600 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                                >
-                                  <Printer className="w-3.5 h-3.5" />
-                                  <span>Print / View</span>
-                                </button>
-                              </td>
+                          {/* Stage-Specific Action CTAs: Child row only keeps Details */}
+                          <div className="flex items-center gap-2 flex-wrap justify-end">
 
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+                            {/* Order Details Drawer Trigger */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedOrderDetailId(ord.id);
+                                setIsOrderDetailDrawerOpen(true);
+                              }}
+                              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-slate-500" />
+                              <span>Details</span>
+                            </button>
 
-                {/* Pagination Controls for Tab 3 */}
-                {totalInvoicePages > 1 && (
-                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 text-xs shadow-2xs">
-                    <div className="flex items-center gap-2 text-slate-500 font-medium">
-                      <span>
-                        Showing <strong className="text-slate-900 font-bold font-mono">{(validInvoicePage - 1) * (pageSize === -1 ? totalInvoicesCount : pageSize) + 1}</strong> to <strong className="text-slate-900 font-bold font-mono">{Math.min(validInvoicePage * (pageSize === -1 ? totalInvoicesCount : pageSize), totalInvoicesCount)}</strong> of <strong className="text-slate-900 font-bold font-mono">{totalInvoicesCount}</strong> Invoices
-                      </span>
-                      <span className="hidden sm:inline">&bull;</span>
-                      <div className="hidden sm:flex items-center gap-1.5">
-                        <span>Rows per page:</span>
-                        <select
-                          value={pageSize}
-                          onChange={(e) => {
-                            setPageSize(parseInt(e.target.value));
-                            setCurrentPage(1);
-                          }}
-                          className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 cursor-pointer focus:outline-none"
-                        >
-                          <option value={10}>10</option>
-                          <option value={25}>25</option>
-                          <option value={50}>50</option>
-                          <option value={-1}>All</option>
-                        </select>
-                      </div>
-                    </div>
+                          </div>
 
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                        disabled={validInvoicePage <= 1}
-                        className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed font-bold text-slate-700 transition-colors cursor-pointer inline-flex items-center gap-1"
-                      >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                        <span>Prev</span>
-                      </button>
-
-                      <span className="px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-100 font-black text-indigo-900 font-mono">
-                        Page {validInvoicePage} of {totalInvoicePages}
-                      </span>
-
-                      <button
-                        type="button"
-                        onClick={() => setCurrentPage(p => Math.min(totalInvoicePages, p + 1))}
-                        disabled={validInvoicePage >= totalInvoicePages}
-                        className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed font-bold text-slate-700 transition-colors cursor-pointer inline-flex items-center gap-1"
-                      >
-                        <span>Next</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
+
               </div>
-            )}
-
-          </div>
-        )}
-
-      </div>
-
-      {/* ========================================================================= */}
-      {/* 4. TIER 1 MISTAKE RECOVERY FLOATING UNDO TOAST (8-SECOND WINDOW) */}
-      {/* ========================================================================= */}
-      {undoToast && (
-        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-5 duration-300">
-          <div className="bg-slate-900 text-white px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-4 max-w-md border border-slate-700">
-            <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
-              <Trash2 className="w-4 h-4" />
-            </div>
-
-            <div className="text-xs space-y-0.5">
-              <div className="font-extrabold text-amber-300">
-                Removed: {undoToast.record.productName}
-              </div>
-              <div className="text-[11px] text-slate-300">
-                {undoToast.record.cartonQty} Cartons &bull; {undoToast.record.retailerName}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => handleRestoreDeleted(undoToast.record)}
-              className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black rounded-xl text-xs shadow-md transition-all inline-flex items-center gap-1 cursor-pointer shrink-0 hover:scale-105 active:scale-95"
-            >
-              <RotateCcw className="w-3.5 h-3.5 stroke-[3]" />
-              <span>UNDO</span>
-            </button>
-          </div>
+            );
+          })}
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* 5. TIER 2 RECYCLE BIN DRAWER */}
+      {/* 6. MODALS & DRAWERS */}
       {/* ========================================================================= */}
-      <RecycleBinDrawer
-        isOpen={isRecycleBinOpen}
-        onClose={() => setIsRecycleBinOpen(false)}
-        deletedItems={deletedRecords}
-        onRestore={handleRestoreDeleted}
-        onClearAll={() => setDeletedRecords([])}
+      
+      {/* 1. Admin Packing Floor Modal (Section B) */}
+      {isPackingFloorOpen && (packingFloorOrders.length > 0 || packingFloorBackorders.length > 0) ? (
+        <AdminPackingFloorModal
+          retailer={packingFloorRetailer}
+          orders={packingFloorOrders}
+          backorders={packingFloorBackorders}
+          isOpen={isPackingFloorOpen}
+          onClose={() => {
+            setIsPackingFloorOpen(false);
+            setPackingFloorRetailer(null);
+            setPackingFloorOrders([]);
+            setPackingFloorBackorders([]);
+          }}
+          onPackingComplete={(packedOrders, backorder) => {
+            if (backorder) {
+              alert(`Consolidated Packing Verified!\n• ${packedOrders.length} order(s) moved to Packed Orders.\n• Shortage rolled into Backorder ${backorder.order_number} in Partial Pending Orders.`);
+            } else {
+              alert(`Consolidated Packing Complete! All ${packedOrders.length} order(s) fully packed and moved to Packed Orders.`);
+            }
+          }}
+        />
+      ) : null}
+
+      {/* 2. Admin Billing & Financial Overrides Modal (Section C) */}
+      {isBillingOverrideOpen && (billingOverrideOrders.length > 0 || billingOverrideOrder) ? (
+        <AdminBillingOverrideModal
+          order={billingOverrideOrder}
+          orders={billingOverrideOrders}
+          retailer={billingOverrideRetailer}
+          isOpen={isBillingOverrideOpen}
+          onClose={() => {
+            setIsBillingOverrideOpen(false);
+            setBillingOverrideOrder(null);
+            setBillingOverrideOrders([]);
+            setBillingOverrideRetailer(null);
+          }}
+          onProceedToInvoice={(updatedOrder) => {
+            handleOpenWorkflowModal(updatedOrder.id, 'invoice');
+          }}
+          onProceedToConsolidatedInvoice={(targetOrds, ret) => {
+            handleGenerateConsolidatedTaxInvoice(ret, targetOrds);
+          }}
+        />
+      ) : null}
+
+      {/* 3. Backorder Resolution Modal (Section D) */}
+      {isBackorderModalOpen && backorderRetailer && backorderList.length > 0 ? (
+        <BackorderResolutionModal
+          retailer={backorderRetailer}
+          backorders={backorderList}
+          isOpen={isBackorderModalOpen}
+          onClose={() => {
+            setIsBackorderModalOpen(false);
+            setBackorderRetailer(null);
+            setBackorderList([]);
+          }}
+        />
+      ) : null}
+
+      {/* 4. Full Order Processing Workflow Modal (Dispatch, DC, Invoicing, Ledger, Settlement) */}
+      {processingOrderId && (
+        <OrderProcessingWorkflowModal
+          orderId={processingOrderId}
+          isOpen={isProcessingModalOpen}
+          initialStage={processingStage}
+          onClose={() => {
+            setIsProcessingModalOpen(false);
+            setProcessingOrderId(null);
+          }}
+        />
+      )}
+
+      {/* 5. A4 Tax Invoice Print & Preview Modal (Section E) */}
+      {selectedInvoiceForPreview && (
+        <InvoicePreviewModal
+          isOpen={isInvoicePreviewOpen}
+          onClose={() => {
+            setIsInvoicePreviewOpen(false);
+            setSelectedInvoiceForPreview(null);
+            setSelectedChallanForPreview(null);
+            setSelectedRetailerForPreview(null);
+          }}
+          invoice={selectedInvoiceForPreview}
+          challan={selectedChallanForPreview}
+          retailer={selectedRetailerForPreview}
+        />
+      )}
+
+      {/* 6. Order Detail Drawer */}
+      <OrderDetailDrawer
+        orderId={selectedOrderDetailId}
+        isOpen={isOrderDetailDrawerOpen}
+        onClose={() => {
+          setIsOrderDetailDrawerOpen(false);
+          setSelectedOrderDetailId(null);
+        }}
       />
 
-      {/* ========================================================================= */}
-      {/* 6. ADD LAST-MINUTE ITEM MODAL */}
-      {/* ========================================================================= */}
-      {addItemModal && (
-        <AddItemToLotModal
-          isOpen={addItemModal.isOpen}
-          onClose={() => setAddItemModal(null)}
-          orderId={addItemModal.orderId}
-          orderNumber={addItemModal.orderNumber}
-          retailerName={addItemModal.retailerName}
-        />
-      )}
-
-      {/* ========================================================================= */}
-      {/* 7. SHORT-CLOSE BACKORDER MODAL WITH MANDATORY REASON */}
-      {/* ========================================================================= */}
-      {shortCloseModal && (
-        <ShortCloseBackorderModal
-          isOpen={shortCloseModal.isOpen}
-          onClose={() => setShortCloseModal(null)}
-          item={shortCloseModal.item}
-        />
-      )}
-
-      {/* ========================================================================= */}
-      {/* 8. TAX INVOICE & DELIVERY CHALLAN PRINT PREVIEW MODAL */}
-      {/* ========================================================================= */}
-      {invoicePreviewModal && (
-        <InvoicePreviewModal
-          isOpen={invoicePreviewModal.isOpen}
-          onClose={() => setInvoicePreviewModal(null)}
-          invoice={invoicePreviewModal.invoice}
-          challan={invoicePreviewModal.challan}
-          retailer={invoicePreviewModal.retailer}
-          company={activeCompany}
-        />
-      )}
-
-      {/* ========================================================================= */}
-      {/* 9. DUAL-SCOPE RATE AUDIT & PRICING INTELLIGENCE POPOVER MODAL */}
-      {/* ========================================================================= */}
-      {rateIntelligenceModal && (
-        <RateIntelligenceModal
-          isOpen={rateIntelligenceModal.isOpen}
-          onClose={() => setRateIntelligenceModal(null)}
-          retailerId={rateIntelligenceModal.retailerId}
-          retailerName={rateIntelligenceModal.retailerName}
-          retailerCity={rateIntelligenceModal.retailerCity}
-          productId={rateIntelligenceModal.productId}
-          productName={rateIntelligenceModal.productName}
-          sku={rateIntelligenceModal.sku}
-          mrp={rateIntelligenceModal.mrp}
-          tradingUnit={rateIntelligenceModal.tradingUnit}
-          baseUnit={rateIntelligenceModal.baseUnit}
-          unitsPerPack={rateIntelligenceModal.unitsPerPack}
-          purchaseCost={rateIntelligenceModal.purchaseCost}
-          currentUnitRate={rateIntelligenceModal.currentUnitRate}
-          onApplyRate={(newRate) => {
-            if (rateIntelligenceModal) {
-              handleUnitRateChange(rateIntelligenceModal.itemEditKey, newRate);
-            }
-          }}
-        />
-      )}
-
-      {/* ========================================================================= */}
-      {/* 10. COUNTER SPOT SALE & QUICK ORDER MODAL */}
-      {/* ========================================================================= */}
-      {isSpotOrderModalOpen && (
-        <SpotOrderModal
-          isOpen={isSpotOrderModalOpen}
-          onClose={() => {
-            setIsSpotOrderModalOpen(false);
-            if (searchParams.get('action') === 'counter' || searchParams.get('new_counter') === 'true') {
-              router.replace('/admin/orders');
-            }
-          }}
-          onOrderCreated={(order, invoice, challan) => {
-            setIsSpotOrderModalOpen(false);
-            if (searchParams.get('action') === 'counter' || searchParams.get('new_counter') === 'true') {
-              router.replace('/admin/orders');
-            }
-            if (invoice) {
-              const ret = retailers.find(r => r.id === order.retailer_id);
-              setInvoicePreviewModal({
-                isOpen: true,
-                invoice,
-                challan: challan || null,
-                retailer: ret
-              });
-            }
-          }}
-        />
-      )}
-
-      {/* ========================================================================= */}
-      {/* 11. DRAFT PACKING PROGRESS SAVE SUCCESS TOAST */}
-      {/* ========================================================================= */}
-      {saveSuccessToast && (
-        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-4 fade-in duration-200">
-          <div className="bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700/80 flex items-start gap-3 max-w-md">
-            <div className="p-1 bg-emerald-500/20 text-emerald-400 rounded-lg shrink-0 mt-0.5">
-              <CheckCircle2 className="w-4 h-4" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-extrabold text-xs text-white">Draft Saved</span>
-                {saveSuccessToast.timestamp && (
-                  <span className="text-[10px] text-slate-400 font-mono">{saveSuccessToast.timestamp}</span>
-                )}
-              </div>
-              <p className="text-xs text-slate-300 mt-0.5 leading-snug font-medium">
-                {saveSuccessToast.message}
-              </p>
-              {saveSuccessToast.retailerName && (
-                <p className="text-[10px] text-indigo-300 font-bold mt-1">
-                  Retailer: {saveSuccessToast.retailerName}
-                </p>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => setSaveSuccessToast(null)}
-              className="text-slate-400 hover:text-white p-1 rounded-md transition-colors cursor-pointer shrink-0"
-              title="Close notification"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 12. UNSAVED PACKING CHANGES GUARD CONFIRMATION MODAL */}
-      {/* ========================================================================= */}
-      {unsavedChangesModal?.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-150 p-6 space-y-5">
-            
-            <div className="flex items-start gap-3.5">
-              <div className="w-11 h-11 rounded-2xl bg-amber-100 border border-amber-200 text-amber-700 flex items-center justify-center shrink-0">
-                <AlertTriangle className="w-6 h-6 stroke-[2.2]" />
-              </div>
-              <div>
-                <h3 className="text-base font-black text-slate-900 leading-tight">
-                  Unsaved Packing Changes
-                </h3>
-                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                  You have unsaved packing changes. Would you like to Save Progress before leaving?
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-amber-50/70 border border-amber-200/80 rounded-2xl p-3 text-xs text-amber-900 font-medium">
-              <div className="flex items-center gap-1.5 font-bold mb-1">
-                <Save className="w-3.5 h-3.5 text-amber-700" />
-                <span>Saving Progress preserves:</span>
-              </div>
-              <p className="text-[11px] text-amber-800/90 leading-snug">
-                All modified packed pieces, box counts, rates, and line notes directly to the database without generating invoices or locking the order.
-              </p>
-            </div>
-
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setUnsavedChangesModal(null)}
-                className="px-3.5 py-2.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-bold transition-all cursor-pointer text-center"
-              >
-                Stay &amp; Keep Editing
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setInlineEdits({});
-                  const targetTab = unsavedChangesModal.targetTab;
-                  const targetAction = unsavedChangesModal.targetAction;
-                  setUnsavedChangesModal(null);
-                  if (targetTab) setActiveTab(targetTab);
-                  if (targetAction) targetAction();
-                }}
-                className="px-3.5 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition-all cursor-pointer text-center"
-              >
-                Discard &amp; Leave
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  handleSaveAllDirtyLots();
-                  const targetTab = unsavedChangesModal.targetTab;
-                  const targetAction = unsavedChangesModal.targetAction;
-                  setUnsavedChangesModal(null);
-                  if (targetTab) setActiveTab(targetTab);
-                  if (targetAction) targetAction();
-                }}
-                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold shadow-md transition-all inline-flex items-center justify-center gap-1.5 cursor-pointer text-center"
-              >
-                <Save className="w-3.5 h-3.5" />
-                <span>Save Progress &amp; Leave</span>
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
+      {/* 7. Spot Order Modal */}
+      <SpotOrderModal
+        isOpen={isSpotOrderModalOpen}
+        onClose={() => setIsSpotOrderModalOpen(false)}
+      />
 
     </div>
   );
@@ -3001,8 +1919,11 @@ function AdminOrdersContent() {
 export default function AdminOrdersPage() {
   return (
     <Suspense fallback={
-      <div className="py-24 flex items-center justify-center text-slate-400 font-mono text-xs">
-        LOADING FMCG FLOOR TERMINAL...
+      <div className="py-24 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-xs font-bold text-slate-500 font-mono tracking-wider">LOADING ADMIN ORDER PROCESSING COCKPIT...</p>
+        </div>
       </div>
     }>
       <AdminOrdersContent />

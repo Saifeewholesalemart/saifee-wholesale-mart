@@ -3,11 +3,11 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { 
   db, Profile, Retailer, Product, Inventory, InventoryBatch, StockLedgerEntry, 
-  Order, OrderChannel, Fulfilment, Invoice, InvoiceItem, Purchase, Payment, SalesReturn, Company, Supplier,
+  Order, OrderItem, OrderChannel, Fulfilment, Invoice, InvoiceItem, Purchase, Payment, SalesReturn, Company, Supplier,
   BillingRateAuditLog, BillingRateRecord, DeliveryChallan, FifoBatchSuggestion, BatchAllocation,
   Category, ProductCategory, ItemActivityLog, VyaparImportBatch, InvoiceAuditLog, CustomerCreditProfile, CustomerLedgerEntry,
   BusinessCompany, CompanyMember, Godown, StockTransfer, StockTransferItem,
-  calculateBaseQuantity, splitBaseQuantity, formatQuantityDisplay, formatItemQuantityDisplay, formatUnitName, calculateItemAmounts,
+  calculateBaseQuantity, splitBaseQuantity, formatQuantityDisplay, formatItemQuantityDisplay, formatTradingQuantity, formatUnitName, calculateItemAmounts,
   calculateItemQuantities, calculateOrderQuantities, deriveOrderChannel,
   OrderItemQuantities, OrderQuantities, OrderComputedStatus,
   getPendingItemsForRetailer, checkSingleItemPendingWarning, PendingOrderItemWarning, PendingOrderRef, CartItemToCheck,
@@ -100,7 +100,8 @@ interface DbContextType {
   setSalespersonCart: React.Dispatch<React.SetStateAction<{ [cartKey: string]: any }>>;
 
   // Rate History & Manual Overrides
-  getLastBillingRates: (retailerId: string, productId: string, tradingUnit?: string, limit?: number) => BillingRateRecord[];
+  getLastBillingRates: (retailerId: string, productId: string, tradingUnit?: string, limit?: number, companyId?: string) => BillingRateRecord[];
+  getAllRetailersLastBillingRates: (productId: string, tradingUnit?: string, limit?: number, companyId?: string) => BillingRateRecord[];
   getFifoBatchSuggestions: (productId: string, requiredQty: number, selectedGodown?: string, targetMrp?: number) => FifoBatchSuggestion[];
   getCustomerCreditProfile: (retailerId: string, companyId?: string) => CustomerCreditProfile;
   postSalesInvoiceAtomic: (payload: Parameters<typeof db.postSalesInvoiceAtomic>[0]) => ReturnType<typeof db.postSalesInvoiceAtomic>;
@@ -122,11 +123,14 @@ interface DbContextType {
 
   // Single Order Direct Workflow
   updateOrderStatus: (orderId: string, status: Order['status'], notes?: string) => Order | null;
+  cancelOrder: (orderId: string, reason?: string, user?: { id: string; name: string }) => Order | null;
+  updateOrder: (orderId: string, updates: { notes?: string; items?: OrderItem[] }, user?: { id: string; name: string }) => Order | null;
   confirmOrderQuantities: (orderId: string, itemConfirms: { itemId: string; confirmedQty: number }[]) => Order | null;
   updateOrderItemRate: (orderId: string, itemId: string, newRate: number, flatDiscount?: number, reason?: string, adminUser?: { id: string; name: string }) => Order | null;
   fullyConfirmOrder: (orderId: string, adminUser?: { id: string; name: string }) => Order | null;
   confirmOrder: (orderId: string, itemConfirms: { itemId: string; confirmedCartons?: number; confirmedQty?: number; pendingReason?: string }[], adminUser?: { id: string; name: string }) => Order | null;
   clearAllOrders: () => void;
+  clearDummyOrders: () => { clearedCount: number };
   updateOrderItemFulfillment: (
     orderId: string,
     itemId: string,
@@ -162,6 +166,51 @@ interface DbContextType {
   shortCloseBackorderItem: (
     orderId: string,
     itemId: string,
+    reason: string,
+    adminUser?: { id: string; name: string }
+  ) => Order | null;
+  splitOrderAndCreateBackorder: (
+    orderId: string,
+    packedItems: {
+      itemId: string;
+      packedQty: number;
+      reason?: string;
+    }[],
+    adminUser?: { id: string; name: string }
+  ) => { packedOrder: Order; backorder: Order | null } | null;
+  saveConsolidatedRetailerPacking: (
+    retailerId: string,
+    orderIds: string[],
+    backorderIds: string[],
+    packedAllocationsBySku: {
+      productId: string;
+      totalPackedQty: number;
+      reason?: string;
+    }[],
+    adminUser?: { id: string; name: string }
+  ) => {
+    packedOrders: Order[];
+    fulfilledBackorders: Order[];
+    rolledBackorder: Order | null;
+  } | null;
+  updateOrderFinancialOverrides: (
+    orderId: string,
+    itemOverrides: {
+      itemId: string;
+      billedQty?: number;
+      rate?: number;
+      discount?: number;
+      reason?: string;
+    }[],
+    adminUser?: { id: string; name: string }
+  ) => Order | null;
+  mergeBackorderIntoNewOrder: (
+    retailerId: string,
+    sourceOrderIds: string[],
+    adminUser?: { id: string; name: string }
+  ) => Order | null;
+  cancelBackorder: (
+    orderId: string,
     reason: string,
     adminUser?: { id: string; name: string }
   ) => Order | null;
@@ -215,6 +264,10 @@ interface DbContextType {
       notes?: string;
       dispatchDate?: string;
       generateChallan?: boolean;
+      paymentMode?: string;
+      amountReceived?: number;
+      paymentReference?: string;
+      bankName?: string;
     },
     adminUser?: { id: string; name: string }
   ) => { invoice: Invoice; challan?: DeliveryChallan; updatedOrders: Order[] } | null;
@@ -232,9 +285,60 @@ interface DbContextType {
         unitRate?: number;
         notes?: string;
       }[];
+      markAsSealed?: boolean;
     },
     adminUser?: { id: string; name: string }
   ) => { updatedOrders: Order[] } | null;
+  continuePackingPendingItems: (
+    lotData: {
+      retailerId: string;
+      items: {
+        originOrderId: string;
+        originItemId: string;
+        productId: string;
+        newlyPackedPieces: number;
+        newlyPackedCartons?: number;
+        newlyPackedLoose?: number;
+        unitRate?: number;
+        notes?: string;
+      }[];
+    },
+    packerUser?: { id: string; name: string }
+  ) => { updatedOrders: Order[] } | null;
+  generateInvoiceForPackedLot: (
+    lotData: {
+      retailerId: string;
+      sourceOrderIds: string[];
+      items: {
+        originOrderId: string;
+        originItemId: string;
+        productId: string;
+        productName?: string;
+        sku?: string;
+        mrp?: number;
+        unitsPerPack?: number;
+        tradingUnit?: string;
+        baseUnit?: string;
+        packedCartons: number;
+        packedLoose?: number;
+        packedPieces?: number;
+        unitRate: number;
+        flatDiscount?: number;
+        purchaseCost?: number;
+        hsn?: string;
+      }[];
+    },
+    billingInfo?: {
+      date?: string;
+      notes?: string;
+      paymentMode?: string;
+      amountReceived?: number;
+      paymentReference?: string;
+      bankName?: string;
+      generateChallan?: boolean;
+    },
+    billerUser?: { id: string; name: string }
+  ) => { invoice: Invoice; challan?: DeliveryChallan; updatedOrders: Order[] } | null;
   completeOrder: (orderId: string, adminUser?: { id: string; name: string }) => Order | null;
   recordOrderPayment: (
     orderId: string,
@@ -254,6 +358,7 @@ interface DbContextType {
   splitBaseQuantity: (totalBaseQty?: number, unitsPerTradingUnit?: number) => { cartonQty: number; looseQty: number };
   formatQuantityDisplay: (totalBaseQty?: number, unitsPerTradingUnit?: number, tradingUnit?: string, baseUnit?: string, includeTotalBadge?: boolean) => string;
   formatItemQuantityDisplay: typeof formatItemQuantityDisplay;
+  formatTradingQuantity: typeof formatTradingQuantity;
   formatUnitName: typeof formatUnitName;
   calculateItemAmounts: (cartonQty?: number, looseQty?: number, cartonRate?: number, looseRate?: number, cartonDiscount?: number, looseDiscount?: number, gstPercent?: number) => {
     grossAmount: number;
@@ -269,8 +374,8 @@ interface DbContextType {
   deriveOrderChannel: typeof deriveOrderChannel;
 
   // Pending Item / Duplicate Order Warning System
-  getPendingItemsForRetailer: (retailerId: string, cartItems: CartItemToCheck[], companyId?: string) => PendingOrderItemWarning[];
-  checkSingleItemPendingWarning: (retailerId: string, productId: string, cartonQty?: number, looseQty?: number, packSize?: string, selectedMrp?: number, companyId?: string) => PendingOrderItemWarning | null;
+  getPendingItemsForRetailer: (retailerId: string, cartItems: CartItemToCheck[], companyId?: string, excludeOrderId?: string) => PendingOrderItemWarning[];
+  checkSingleItemPendingWarning: (retailerId: string, productId: string, cartonQty?: number, looseQty?: number, packSize?: string, selectedMrp?: number, companyId?: string, excludeOrderId?: string) => PendingOrderItemWarning | null;
   logPendingOrderProceedActivity: (retailerId: string, warnings: PendingOrderItemWarning[], newOrderNumber?: string) => void;
 
   // Consolidated Transactions
@@ -330,6 +435,8 @@ interface DbContextType {
     paymentMethod: 'Cash' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Credit' | 'Other'
   ) => Invoice;
   makePurchase: (purchase: Omit<Purchase, 'id' | 'status' | 'created_at'>) => Purchase;
+  deletePurchase: (purchaseId: string) => boolean;
+  updatePurchase: (purchaseId: string, updatedData: Partial<Purchase>) => Purchase | null;
   payInvoice: (retailerId: string, amount: number, method: Payment['method'], refNum?: string, notes?: string) => Payment;
   createDirectSalesReturn: (data: Parameters<typeof db.createDirectSalesReturn>[0]) => SalesReturn;
   returnSales: (
@@ -421,6 +528,8 @@ interface DbContextType {
   getAssignedCategoriesForRetailer: (retailerId: string) => Category[];
   isProductVisibleToSalesperson: (productId: string, salespersonId: string) => boolean;
   isProductVisibleToRetailer: (productId: string, retailerId: string) => boolean;
+  getScopedOrdersForSalesperson: (salespersonId: string, options?: { retailerId?: string; orderId?: string }) => Order[];
+  getScopedOrderByIdForSalesperson: (orderId: string, salespersonId: string) => Order | null;
 
   // Vyapar Product & Stock Import
   getVyaparImports: () => VyaparImportBatch[];
@@ -542,8 +651,39 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     setCurrentUserState(db.getCurrentUser());
   }, []);
 
+  // Cross-tab / Cross-portal Real-time Synchronization Engine
   useEffect(() => {
     loadData();
+
+    // 1. Storage Event Listener (triggers across browser tabs when localStorage changes)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key && e.key.startsWith('fmcg_')) {
+        loadData();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    // 2. BroadcastChannel Listener (instant cross-window / cross-component sync)
+    let syncChannel: BroadcastChannel | null = null;
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        syncChannel = new BroadcastChannel('saifee_erp_sync');
+        syncChannel.onmessage = (event) => {
+          if (event.data?.type === 'DB_STATE_CHANGED') {
+            loadData();
+          }
+        };
+      }
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      if (syncChannel) {
+        syncChannel.close();
+      }
+    };
   }, [loadData]);
 
   const switchCompany = useCallback(async (companyId: string) => {
@@ -563,17 +703,28 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   const createBusinessCompany = (data: Parameters<typeof db.createBusinessCompany>[0]) => {
     const res = db.createBusinessCompany(data);
     loadData();
+    refreshState();
     return res;
   };
 
   const updateBusinessCompany = (id: string, updates: Parameters<typeof db.updateBusinessCompany>[1]) => {
     const res = db.updateBusinessCompany(id, updates);
     loadData();
+    refreshState();
     return res;
   };
 
   const refreshState = () => {
     loadData();
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const channel = new BroadcastChannel('saifee_erp_sync');
+        channel.postMessage({ type: 'DB_STATE_CHANGED', timestamp: Date.now() });
+        channel.close();
+      }
+    } catch {
+      // ignore
+    }
   };
 
   const setCurrentUser = (id: string) => {
@@ -584,8 +735,12 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     setSalespersonCart({});
   };
 
-  const getLastBillingRates = (retailerId: string, productId: string, tradingUnit?: string, limit: number = 5) => {
-    return db.getLastBillingRates(retailerId, productId, tradingUnit, limit);
+  const getLastBillingRates = (retailerId: string, productId: string, tradingUnit?: string, limit: number = 5, companyId?: string) => {
+    return db.getLastBillingRates(retailerId, productId, tradingUnit, limit, companyId || activeCompany?.id);
+  };
+
+  const getAllRetailersLastBillingRates = (productId: string, tradingUnit?: string, limit: number = 5, companyId?: string) => {
+    return db.getAllRetailersLastBillingRates(productId, tradingUnit, limit, companyId || activeCompany?.id);
   };
 
   const getFifoBatchSuggestions = (productId: string, requiredQty: number, selectedGodown?: string, targetMrp?: number) => {
@@ -640,6 +795,20 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     return res;
   };
 
+  const cancelOrder = (orderId: string, reason?: string, userPayload?: { id: string; name: string }) => {
+    const user = userPayload || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
+    const res = db.cancelOrder(orderId, reason, user);
+    refreshState();
+    return res;
+  };
+
+  const updateOrder = (orderId: string, updates: { notes?: string; items?: OrderItem[] }, userPayload?: { id: string; name: string }) => {
+    const user = userPayload || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
+    const res = db.updateOrder(orderId, updates, user);
+    refreshState();
+    return res;
+  };
+
   const addOrderItemToOrder = (
     orderId: string,
     itemData: {
@@ -667,6 +836,77 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   ) => {
     const user = adminUser || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
     const res = db.shortCloseBackorderItem(orderId, itemId, reason, user);
+    refreshState();
+    return res;
+  };
+
+  const splitOrderAndCreateBackorder = (
+    orderId: string,
+    packedItems: {
+      itemId: string;
+      packedQty: number;
+      reason?: string;
+    }[],
+    adminUser?: { id: string; name: string }
+  ) => {
+    const user = adminUser || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
+    const res = db.splitOrderAndCreateBackorder(orderId, packedItems, user);
+    refreshState();
+    return res;
+  };
+
+  const saveConsolidatedRetailerPacking = (
+    retailerId: string,
+    orderIds: string[],
+    backorderIds: string[],
+    packedAllocationsBySku: {
+      productId: string;
+      totalPackedQty: number;
+      reason?: string;
+    }[],
+    adminUser?: { id: string; name: string }
+  ) => {
+    const user = adminUser || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
+    const res = db.saveConsolidatedRetailerPacking(retailerId, orderIds, backorderIds, packedAllocationsBySku, user);
+    refreshState();
+    return res;
+  };
+
+  const updateOrderFinancialOverrides = (
+    orderId: string,
+    itemOverrides: {
+      itemId: string;
+      billedQty?: number;
+      rate?: number;
+      discount?: number;
+      reason?: string;
+    }[],
+    adminUser?: { id: string; name: string }
+  ) => {
+    const user = adminUser || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
+    const res = db.updateOrderFinancialOverrides(orderId, itemOverrides, user);
+    refreshState();
+    return res;
+  };
+
+  const mergeBackorderIntoNewOrder = (
+    retailerId: string,
+    sourceOrderIds: string[],
+    adminUser?: { id: string; name: string }
+  ) => {
+    const user = adminUser || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
+    const res = db.mergeBackorderIntoNewOrder(retailerId, sourceOrderIds, user);
+    refreshState();
+    return res;
+  };
+
+  const cancelBackorder = (
+    orderId: string,
+    reason: string,
+    adminUser?: { id: string; name: string }
+  ) => {
+    const user = adminUser || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
+    const res = db.cancelBackorder(orderId, reason, user);
     refreshState();
     return res;
   };
@@ -761,11 +1001,74 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         unitRate?: number;
         notes?: string;
       }[];
+      markAsSealed?: boolean;
     },
     adminUser?: { id: string; name: string }
   ) => {
     const user = adminUser || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
     const res = db.saveLotPackingProgress(lotData, user);
+    refreshState();
+    return res;
+  };
+
+  const continuePackingPendingItems = (
+    lotData: {
+      retailerId: string;
+      items: {
+        originOrderId: string;
+        originItemId: string;
+        productId: string;
+        newlyPackedPieces: number;
+        newlyPackedCartons?: number;
+        newlyPackedLoose?: number;
+        unitRate?: number;
+        notes?: string;
+      }[];
+    },
+    packerUser?: { id: string; name: string }
+  ) => {
+    const user = packerUser || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
+    const res = db.continuePackingPendingItems(lotData, user);
+    refreshState();
+    return res;
+  };
+
+  const generateInvoiceForPackedLot = (
+    lotData: {
+      retailerId: string;
+      sourceOrderIds: string[];
+      items: {
+        originOrderId: string;
+        originItemId: string;
+        productId: string;
+        productName?: string;
+        sku?: string;
+        mrp?: number;
+        unitsPerPack?: number;
+        tradingUnit?: string;
+        baseUnit?: string;
+        packedCartons: number;
+        packedLoose?: number;
+        packedPieces?: number;
+        unitRate: number;
+        flatDiscount?: number;
+        purchaseCost?: number;
+        hsn?: string;
+      }[];
+    },
+    billingInfo: {
+      date?: string;
+      notes?: string;
+      paymentMode?: string;
+      amountReceived?: number;
+      paymentReference?: string;
+      bankName?: string;
+      generateChallan?: boolean;
+    } = {},
+    billerUser?: { id: string; name: string }
+  ) => {
+    const user = billerUser || (currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
+    const res = db.generateInvoiceForPackedLot(lotData, billingInfo, user);
     refreshState();
     return res;
   };
@@ -935,6 +1238,12 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     refreshState();
   }, [refreshState]);
 
+  const clearDummyOrders = useCallback(() => {
+    const res = db.clearDummyOrders();
+    refreshState();
+    return res;
+  }, [refreshState]);
+
   const updateOrderItemFulfillment = (
     orderId: string,
     itemId: string,
@@ -998,6 +1307,18 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
 
   const makePurchase = (purchaseData: Omit<Purchase, 'id' | 'status' | 'created_at'>) => {
     const res = db.confirmPurchase(purchaseData);
+    refreshState();
+    return res;
+  };
+
+  const deletePurchase = (purchaseId: string) => {
+    const res = db.deletePurchase(purchaseId);
+    refreshState();
+    return res;
+  };
+
+  const updatePurchase = (purchaseId: string, updatedData: Partial<Purchase>) => {
+    const res = db.updatePurchase(purchaseId, updatedData);
     refreshState();
     return res;
   };
@@ -1256,6 +1577,14 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     return db.isProductVisibleToRetailer(productId, retailerId);
   };
 
+  const getScopedOrdersForSalesperson = (salespersonId: string, options?: { retailerId?: string; orderId?: string }) => {
+    return db.getScopedOrdersForSalesperson(salespersonId, options);
+  };
+
+  const getScopedOrderByIdForSalesperson = (orderId: string, salespersonId: string) => {
+    return db.getScopedOrderByIdForSalesperson(orderId, salespersonId);
+  };
+
   const deleteCompany = (id: string, options?: { handleLinkedProducts?: 'unlink' | 'cascade' | 'error' }) => {
     const res = db.deleteCompany(id, options);
     if (res.success) {
@@ -1346,10 +1675,11 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   const getPendingItemsForRetailerHelper = (
     retailerId: string,
     cartItems: CartItemToCheck[],
-    companyId?: string
+    companyId?: string,
+    excludeOrderId?: string
   ): PendingOrderItemWarning[] => {
     const effectiveCompId = companyId || activeCompanyId;
-    return getPendingItemsForRetailer(retailerId, orders, products, cartItems, effectiveCompId);
+    return getPendingItemsForRetailer(retailerId, orders, products, cartItems, effectiveCompId, excludeOrderId);
   };
 
   const checkSingleItemPendingWarningHelper = (
@@ -1359,7 +1689,8 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     looseQty: number = 0,
     packSize?: string,
     selectedMrp?: number,
-    companyId?: string
+    companyId?: string,
+    excludeOrderId?: string
   ): PendingOrderItemWarning | null => {
     const effectiveCompId = companyId || activeCompanyId;
     return checkSingleItemPendingWarning(
@@ -1371,7 +1702,8 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
       looseQty,
       packSize,
       selectedMrp,
-      effectiveCompId
+      effectiveCompId,
+      excludeOrderId
     );
   };
 
@@ -1491,6 +1823,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         splitBaseQuantity,
         formatQuantityDisplay,
         formatItemQuantityDisplay,
+        formatTradingQuantity,
         formatUnitName,
         calculateItemAmounts,
         calculateItemQuantities,
@@ -1503,21 +1836,32 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         fullyConfirmOrder,
         confirmOrder,
         clearAllOrders,
+        clearDummyOrders,
         updateOrderItemFulfillment,
         cancelOrderItemQuantity,
         addOrderItemToOrder,
         shortCloseBackorderItem,
+        splitOrderAndCreateBackorder,
+        saveConsolidatedRetailerPacking,
+        updateOrderFinancialOverrides,
+        mergeBackorderIntoNewOrder,
+        cancelBackorder,
         getLastBillingRates,
+        getAllRetailersLastBillingRates,
         getFifoBatchSuggestions,
         saveBillingRateAuditLog,
         getBillingRateAuditLogs,
         updateFulfilmentItemManualRate,
         updateOrderStatus,
+        cancelOrder,
+        updateOrder,
         confirmOrderQuantities,
         allocateAndPackOrder,
         dispatchOrder,
         dispatchRetailerPackingLot,
         saveLotPackingProgress,
+        continuePackingPendingItems,
+        generateInvoiceForPackedLot,
         completeOrder,
         recordOrderPayment,
         getDeliveryChallans,
@@ -1538,6 +1882,8 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         cancelPendingItem,
         makeCounterSale,
         makePurchase,
+        deletePurchase,
+        updatePurchase,
         payInvoice,
         createDirectSalesReturn,
         returnSales,
@@ -1602,6 +1948,8 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         getAssignedCategoriesForRetailer,
         isProductVisibleToSalesperson,
         isProductVisibleToRetailer,
+        getScopedOrdersForSalesperson,
+        getScopedOrderByIdForSalesperson,
         vyaparImports,
         getVyaparImports: () => db.getVyaparImports(),
         executeVyaparBatchImport: (rowsToImport, meta) => {

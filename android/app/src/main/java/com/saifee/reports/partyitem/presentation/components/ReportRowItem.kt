@@ -2,17 +2,16 @@ package com.saifee.reports.partyitem.presentation.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -22,7 +21,7 @@ import com.saifee.reports.partyitem.domain.model.PartyReportItem
 import com.saifee.reports.partyitem.util.ReportFormatters
 
 /**
- * Single data row composable for the Party Report By Item grid.
+ * Single data row composable for the Item Report By Party grid.
  */
 @Composable
 fun ReportRowItem(
@@ -53,31 +52,45 @@ fun ReportRowItem(
             )
         }
 
-        // 2. Party Name Column
+        // 2. Item / Product Column
         Box(
             modifier = Modifier
-                .width(220.dp)
+                .width(200.dp)
                 .padding(horizontal = 6.dp),
             contentAlignment = Alignment.CenterStart
         ) {
-            Text(
-                text = item.partyName,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF0F172A),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+            Column {
+                Text(
+                    text = item.productName,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF0F172A),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (item.packSize.isNotBlank()) {
+                    Text(
+                        text = item.packSize,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Normal,
+                        color = Color(0xFF64748B)
+                    )
+                }
+            }
         }
 
-        // 3. Sale Quantity Column (dual format: e.g. "1628 + 16" or "2450")
+        // 3. Sale Quantity Column
         Box(
             modifier = Modifier
-                .width(125.dp)
+                .width(115.dp)
                 .padding(horizontal = 6.dp),
             contentAlignment = Alignment.CenterEnd
         ) {
-            val saleQtyStr = ReportFormatters.formatQuantity(item.saleQtyBase, item.saleQtyLoose)
+            val saleQtyStr = if (item.saleQtyBase > 0 || item.saleQtyLoose > 0) {
+                ReportFormatters.formatQuantity(item.saleQtyBase, item.saleQtyLoose) + " ${item.tradingUnit}"
+            } else {
+                "0"
+            }
             Text(
                 text = saleQtyStr,
                 fontSize = 13.sp,
@@ -90,7 +103,7 @@ fun ReportRowItem(
         // 4. Sale Amount Column (currency INR: ₹ #,##,##0.00)
         Box(
             modifier = Modifier
-                .width(135.dp)
+                .width(125.dp)
                 .padding(horizontal = 6.dp),
             contentAlignment = Alignment.CenterEnd
         ) {
@@ -98,20 +111,24 @@ fun ReportRowItem(
             Text(
                 text = saleAmtStr,
                 fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (item.saleAmount > 0) Color(0xFF047857) else Color(0xFF94A3B8), // Green for revenue
+                fontWeight = FontWeight.SemiBold,
+                color = if (item.saleAmount > 0) Color(0xFF15803D) else Color(0xFF94A3B8),
                 textAlign = TextAlign.End
             )
         }
 
-        // 5. Purchase Quantity Column (dual format: e.g. "10554 + 272")
+        // 5. Purchase Quantity Column
         Box(
             modifier = Modifier
-                .width(135.dp)
+                .width(115.dp)
                 .padding(horizontal = 6.dp),
             contentAlignment = Alignment.CenterEnd
         ) {
-            val purchaseQtyStr = ReportFormatters.formatQuantity(item.purchaseQtyBase, item.purchaseQtyLoose)
+            val purchaseQtyStr = if (item.purchaseQtyBase > 0 || item.purchaseQtyLoose > 0) {
+                ReportFormatters.formatQuantity(item.purchaseQtyBase, item.purchaseQtyLoose) + " ${item.tradingUnit}"
+            } else {
+                "0"
+            }
             Text(
                 text = purchaseQtyStr,
                 fontSize = 13.sp,
@@ -121,10 +138,10 @@ fun ReportRowItem(
             )
         }
 
-        // 6. Purchase Amount Column (currency INR: ₹ #,##,##0.00)
+        // 6. Purchase Amount Column
         Box(
             modifier = Modifier
-                .width(145.dp)
+                .width(130.dp)
                 .padding(horizontal = 6.dp),
             contentAlignment = Alignment.CenterEnd
         ) {
@@ -132,8 +149,31 @@ fun ReportRowItem(
             Text(
                 text = purchaseAmtStr,
                 fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (item.purchaseAmount > 0) Color(0xFF1D4ED8) else Color(0xFF94A3B8), // Blue for purchase
+                fontWeight = FontWeight.SemiBold,
+                color = if (item.purchaseAmount > 0) Color(0xFFB45309) else Color(0xFF94A3B8),
+                textAlign = TextAlign.End
+            )
+        }
+
+        // 7. Closing Inventory Column
+        Box(
+            modifier = Modifier
+                .width(140.dp)
+                .padding(horizontal = 6.dp),
+            contentAlignment = Alignment.CenterEnd
+        ) {
+            val closingStr = if (item.closingInventoryDisplay.isNotBlank()) {
+                item.closingInventoryDisplay
+            } else if (item.closingInventoryBase > 0) {
+                "${item.closingInventoryBase} ${item.tradingUnit}"
+            } else {
+                "0 ${item.tradingUnit}"
+            }
+            Text(
+                text = closingStr,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Black,
+                color = if (item.totalClosingPieces > 0) Color(0xFF1E3A8A) else Color(0xFF94A3B8),
                 textAlign = TextAlign.End
             )
         }

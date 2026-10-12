@@ -5,13 +5,16 @@ export type UserRole = 'ROLE_ADMIN' | 'ROLE_PACKER' | 'ROLE_BILLER' | 'ROLE_DISP
 export type TerminalAction = 
   | 'EDIT_PACKED_QTY'
   | 'EDIT_RATES'
+  | 'EDIT_DISCOUNT'
   | 'ADD_ITEM'
   | 'REMOVE_ITEM'
   | 'DELETE_LOT'
   | 'GENERATE_INVOICE'
   | 'DISPATCH_CHALLAN'
   | 'SHORT_CLOSE_BACKORDER'
-  | 'RESTORE_TRASH';
+  | 'RESTORE_TRASH'
+  | 'CONTINUE_PACKING_PENDING'
+  | 'OVERRIDE_CONFIRMED_QTY';
 
 /**
  * Role-Ready Permission Matrix
@@ -21,9 +24,9 @@ export function can(role: UserRole, action: TerminalAction): boolean {
     case 'ROLE_ADMIN':
       return true;
     case 'ROLE_PACKER':
-      return action === 'EDIT_PACKED_QTY';
+      return action === 'EDIT_PACKED_QTY' || action === 'CONTINUE_PACKING_PENDING';
     case 'ROLE_BILLER':
-      return action === 'EDIT_RATES' || action === 'GENERATE_INVOICE' || action === 'ADD_ITEM' || action === 'REMOVE_ITEM';
+      return action === 'EDIT_RATES' || action === 'EDIT_DISCOUNT' || action === 'GENERATE_INVOICE';
     case 'ROLE_DISPATCHER':
       return action === 'DISPATCH_CHALLAN';
     default:
@@ -65,8 +68,10 @@ export interface PackingLotItem {
   
   // Single piece unit metrics
   orderedPieces: number;
+  confirmedPieces?: number;
   packedPieces: number;
   unitRate: number; // Rate per piece (₹)
+  flatDiscount?: number; // Flat ₹ discount per box/carton
   purchaseCost: number; // Purchase cost per piece (₹)
   marginPct: number | null; // ((unitRate - purchaseCost) / unitRate) * 100
   gstPercent: number;
@@ -115,6 +120,99 @@ export interface RetailerPackingLot {
   totalPackedCartons?: number;
 }
 
+export interface RetailerPendingProductBreakdown {
+  orderId: string;
+  orderNumber: string;
+  orderDate: string;
+  itemId: string;
+  orderedPieces: number;
+  confirmedPieces: number;
+  previouslyPackedPieces: number;
+  pendingPieces: number;
+  pendingCartons: number;
+  pendingLoose: number;
+  lockedUnitRate: number;
+  flatDiscount?: number;
+  channel?: string;
+  salesperson?: string;
+}
+
+export interface RetailerPendingProductItem {
+  productId: string;
+  productName: string;
+  brand?: string;
+  sku: string;
+  mrp: number;
+  tradingUnit: string;
+  baseUnit: string;
+  unitsPerPack: number;
+  totalPendingPieces: number;
+  totalPendingCartons: number;
+  totalPendingLoose: number;
+  availStockPieces: number;
+  availStockCartons: number;
+  ordersBreakdown: RetailerPendingProductBreakdown[];
+}
+
+export interface RetailerPendingOrderGroup {
+  orderId: string;
+  orderNumber: string;
+  orderDate: string;
+  orderStatus: string;
+  source: string;
+  channelBadge: OriginBadgeInfo;
+  notes?: string;
+  items: BackorderQueueItem[];
+  totalOrderedPieces: number;
+  totalFulfilledPieces: number;
+  totalPendingPieces: number;
+  totalPendingValue: number;
+  daysPending: number;
+  hasStockForOrder: boolean;
+}
+
+export interface RetailerPendingGroup {
+  retailerId: string;
+  retailer: Retailer;
+  retailerName: string;
+  retailerCity: string;
+  retailerBeat?: string;
+  retailerPhone?: string;
+  retailerAddress?: string;
+  currentOutstanding: number;
+  creditLimit: number;
+  creditLimitExceeded: boolean;
+  orders: RetailerPendingOrderGroup[];
+  totalPendingOrders: number;
+  totalPendingItems: number;
+  totalPendingPieces: number;
+  totalPendingValue: number;
+  maxDaysPending: number;
+  earliestOrderDate: string;
+  latestOrderDate: string;
+  allStockAvailable: boolean;
+  hasSomeStockAvailable: boolean;
+}
+
+export interface RetailerPendingOrderCard {
+  retailerId: string;
+  retailer: Retailer;
+  shopName: string;
+  ownerName: string;
+  city: string;
+  phone: string;
+  route?: string;
+  pendingOrdersCount: number;
+  pendingItemsCount: number;
+  totalPendingCartons: number;
+  totalPendingPieces: number;
+  pendingProducts: RetailerPendingProductItem[];
+  sourceOrderIds: string[];
+  sourceOrderNumbers: string[];
+  earliestOrderDate: string;
+  latestOrderDate: string;
+}
+
 export interface BackorderQueueItem {
   orderId: string;
   orderNumber: string;
@@ -135,9 +233,11 @@ export interface BackorderQueueItem {
   
   // Single piece unit metrics
   orderedPieces: number;
+  confirmedPieces?: number;
   fulfilledPieces: number;
   pendingPieces: number;
   lockedUnitRate: number; // Rate per piece (₹)
+  flatDiscount?: number;
   daysPending: number;
   availStockPieces: number;
   lastInvoiceNumber?: string;

@@ -2,13 +2,12 @@
 
 import React from 'react';
 import { useDb } from '@/context/DbContext';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Package, Boxes, LogOut, Shield, ArrowLeft, User } from 'lucide-react';
+import { Boxes, LogOut, ArrowLeft } from 'lucide-react';
 import RoleSwitcher from '@/components/RoleSwitcher';
 
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
-  const { currentUser, setCurrentUser, activeCompany } = useDb();
+  const { currentUser, setCurrentUser } = useDb();
   const router = useRouter();
 
   const handleExit = () => {
@@ -16,55 +15,48 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     router.push('/');
   };
 
+  const workerName = currentUser?.name?.split(' ')[0] || 'Ramesh';
+  const workerRole = currentUser?.custom_role || (currentUser?.role === 'staff' ? 'Packer' : 'Staff');
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
-      {/* Staff Top Navigation Bar */}
-      <header className="bg-slate-900 text-white sticky top-0 z-30 shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-amber-500 flex items-center justify-center text-slate-950 font-black shadow-xs">
-              <Boxes className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-black tracking-wide text-white">
-                  SAIFEE WAREHOUSE OPS
-                </span>
-                <span className="px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[10px] font-black uppercase">
-                  {currentUser?.custom_role || currentUser?.role?.toUpperCase() || 'STAFF'}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 font-medium">
-                {activeCompany?.name || 'Saifee FMCG Distribution'}
-              </p>
-            </div>
+      {/* 1. ISOLATED MOBILE APP BAR (TOP STICKY HEADER - HEIGHT ~54px) */}
+      <header className="sticky top-0 z-40 bg-slate-900 text-white px-4 py-2.5 flex items-center justify-between shadow-md border-b border-slate-800">
+        {/* Left: Store mini-avatar + "Saifee Ops" */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="w-7 h-7 rounded-lg bg-amber-500 flex items-center justify-center text-slate-950 font-black shadow-xs">
+            <Boxes className="w-4 h-4" />
+          </div>
+          <span className="font-bold text-sm text-white tracking-tight">Saifee Ops</span>
+        </div>
+
+        {/* Center: Worker Chip: "Ramesh (Packer)" in a subtle pill */}
+        <div className="flex items-center gap-1.5 bg-slate-800 text-slate-300 text-xs px-2.5 py-0.5 rounded-full border border-slate-700/60 font-medium shrink-0">
+          <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span className="truncate max-w-[120px] sm:max-w-none">{workerName} ({workerRole})</span>
+        </div>
+
+        {/* Right: Shift/Status indicator (green dot + "Active") and Logout/Back button */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="hidden xs:flex items-center gap-1.5 bg-emerald-950/80 border border-emerald-800/80 px-2 py-0.5 rounded-md text-[11px] font-semibold text-emerald-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>Active</span>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700/60">
-              <div className="w-6 h-6 rounded-full bg-amber-400/20 text-amber-300 flex items-center justify-center font-bold text-xs">
-                <User className="w-3.5 h-3.5" />
-              </div>
-              <div className="text-left text-xs">
-                <p className="font-bold text-slate-200 leading-tight">{currentUser?.name || 'Staff Worker'}</p>
-                <p className="text-[10px] text-slate-400">{currentUser?.contact_no || currentUser?.mobile || 'Warehouse Floor'}</p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleExit}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span className="hidden xs:inline">Exit</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={handleExit}
+            className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 hover:text-white rounded-lg text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
+            title="Exit / Logout"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Logout</span>
+          </button>
         </div>
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+      <main className="flex-1 w-full">
         {children}
       </main>
 

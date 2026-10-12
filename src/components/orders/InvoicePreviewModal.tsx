@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import {
   Invoice, DeliveryChallan, Retailer, Company, BusinessCompany,
-  formatQuantityDisplay
+  formatQuantityDisplay, splitBaseQuantity, calculateItemAmounts
 } from '@/lib/db';
 import {
   X, Printer, Receipt, FileText, Store, PackageOpen,
@@ -189,14 +189,153 @@ export default function InvoicePreviewModal({
   const isPaid = (invoice.outstanding_amount ?? (invoice.grand_total - (invoice.paid_amount || 0))) <= 0;
   const isPartiallyPaid = (invoice.paid_amount || 0) > 0 && (invoice.outstanding_amount ?? 0) > 0;
 
-  // Filtered invoice items based on itemSearchQuery
-  const rawInvoiceItems = invoice.items || [];
+  // Filtered invoice items based on itemSearchQuery with dynamic fallback and SKU consolidation across all linked orders
+  const rawInvoiceItems = React.useMemo(() => {
+    const isLocal = (ret?.state_code || '27') === '27';
+    const aggregatedItemsMap = new Map<string, any>();
+
+    // 1. Determine all matching/linked orders across references
+    const linkedOrderIds = new Set<string>();
+    const linkedOrderNumbers = new Set<string>();
+
+    if (invoice.order_ref_id) {
+      linkedOrderIds.add(invoice.order_ref_id);
+      linkedOrderNumbers.add(invoice.order_ref_id);
+    }
+    if (invoice.source_order_ids) {
+      invoice.source_order_ids.forEach(id => linkedOrderIds.add(id));
+    }
+    if (invoice.source_order_numbers) {
+      invoice.source_order_numbers.forEach(num => linkedOrderNumbers.add(num));
+    }
+    if (invoice.order_numbers) {
+      invoice.order_numbers.forEach(num => linkedOrderNumbers.add(num));
+    }
+    orderInfos.forEach(oi => {
+      if (oi.orderId) linkedOrderIds.add(oi.orderId);
+      if (oi.orderNumber) linkedOrderNumbers.add(oi.orderNumber);
+    });
+
+    const matchingOrders = orders.filter(o => 
+      linkedOrderIds.has(o.id) || 
+      linkedOrderNumbers.has(o.order_number) ||
+      o.invoice_id === invoice.id ||
+      (invoice.order_ref_id && (o.id === invoice.order_ref_id || o.order_number === invoice.order_ref_id))
+    );
+
+    const processItem = (it: any, idx: number, originOrderId?: string) => {
+      const prod = products.find(p => p.id === it.product_id);
+      const unitsPerPack = it.units_per_trading_unit || it.units_per_box_carton || prod?.units_per_box_carton || 1;
+      const baseQty = it.fulfilled_qty || it.confirmed_qty || it.packed_qty || it.ordered_qty || it.base_qty || it.quantity || 0;
+      if (baseQty <= 0) return;
+
+      const cartonRate = it.manual_billing_rate || it.carton_rate || it.rate || it.order_time_rate || it.base_price || prod?.selling_price || 0;
+      const looseRate = it.loose_rate || prod?.loose_selling_price || (Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
+      
+      // Strict GST rate: item master active GST or item-level gst_percent
+      const prodGst = (prod?.gst_percent !== undefined && prod?.gst_percent !== null)
+        ? Number(prod.gst_percent)
+        : ((it.gst_percent !== undefined && it.gst_percent !== null) ? Number(it.gst_percent) : 0);
+
+      const { cartonQty, looseQty } = it.carton_qty !== undefined && it.loose_qty !== undefined && (it.carton_qty > 0 || it.loose_qty > 0)
+        ? { cartonQty: it.carton_qty, looseQty: it.loose_qty }
+        : splitBaseQuantity(baseQty, unitsPerPack);
+
+      const disc = it.discount || ((it.carton_discount || 0) * cartonQty + (it.loose_discount || 0) * looseQty) || 0;
+      const taxable = Math.max(0, Math.round(((baseQty * (cartonRate / Math.max(1, unitsPerPack))) - disc) * 100) / 100) ||
+                      (it.taxable_value !== undefined ? Number(it.taxable_value) : Math.round(cartonQty * cartonRate * 100) / 100);
+
+      // Strict Mathematical Logic for GST:
+      // If 0% GST -> tax is strictly 0, line total is exactly taxable
+      const lineGst = prodGst > 0 ? Math.round(taxable * (prodGst / 100) * 100) / 100 : 0;
+      const cgst = isLocal ? Math.round((lineGst / 2) * 100) / 100 : 0;
+      const sgst = isLocal ? Math.round((lineGst / 2) * 100) / 100 : 0;
+      const igst = !isLocal ? lineGst : 0;
+      const lineTotal = Math.round((taxable + lineGst) * 100) / 100;
+
+      const itemKey = `${it.product_id}_${cartonRate}`;
+      const existing = aggregatedItemsMap.get(itemKey);
+      if (existing) {
+        existing.quantity += baseQty;
+        existing.base_qty = (existing.base_qty || 0) + baseQty;
+        existing.carton_qty = (existing.carton_qty || 0) + cartonQty;
+        existing.loose_qty = (existing.loose_qty || 0) + looseQty;
+        existing.discount = Math.round(((existing.discount || 0) + disc) * 100) / 100;
+        existing.taxable_value = Math.round(((existing.taxable_value || 0) + taxable) * 100) / 100;
+        existing.gst_percent = prodGst;
+        const aggLineGst = prodGst > 0 ? Math.round(existing.taxable_value * (prodGst / 100) * 100) / 100 : 0;
+        existing.cgst = isLocal ? Math.round((aggLineGst / 2) * 100) / 100 : 0;
+        existing.sgst = isLocal ? Math.round((aggLineGst / 2) * 100) / 100 : 0;
+        existing.igst = !isLocal ? aggLineGst : 0;
+        existing.total_amount = Math.round((existing.taxable_value + aggLineGst) * 100) / 100;
+      } else {
+        aggregatedItemsMap.set(itemKey, {
+          id: it.id || `inv-item-${idx}`,
+          invoice_id: invoice.id,
+          product_id: it.product_id,
+          product_name: prod?.name || (it as any).product_name || (it as any).name || (it as any).description || 'Product Item',
+          variant_name: prod?.name || (it as any).variant_name || (it as any).name || 'Product Item',
+          description: prod?.name || (it as any).description || (it as any).name || 'Product Item',
+          hsn: (it as any).hsn || prod?.hsn || '1905',
+          packing: (it as any).pack_size || (it as any).packing || prod?.pack_size || `${unitsPerPack} ${it.base_unit || 'Piece'}/Ctn`,
+          quantity: baseQty,
+          base_qty: baseQty,
+          carton_qty: cartonQty,
+          loose_qty: looseQty,
+          trading_unit: it.trading_unit || prod?.trading_unit || 'Carton',
+          base_unit: it.base_unit || prod?.base_unit || 'Piece',
+          units_per_trading_unit: unitsPerPack,
+          units_per_box_carton: unitsPerPack,
+          rate: cartonRate,
+          carton_rate: cartonRate,
+          loose_rate: looseRate,
+          discount: disc,
+          taxable_value: taxable,
+          gst_percent: prodGst,
+          cgst,
+          sgst,
+          igst,
+          total_amount: lineTotal,
+          batch_number: it.batch_number || it.batch_allocations?.[0]?.batch_number || 'LOT-2026',
+          mrp: it.selected_mrp || it.mrp || prod?.mrp || 0
+        });
+      }
+    };
+
+    // Always gather from all linked orders first
+    if (matchingOrders.length > 0) {
+      matchingOrders.forEach(ord => {
+        (ord.items || []).forEach((it, idx) => {
+          processItem(it, idx, ord.id);
+        });
+      });
+    }
+
+    // Also include any items present directly on invoice.items if not already captured
+    if (invoice.items && invoice.items.length > 0) {
+      if (matchingOrders.length === 0) {
+        invoice.items.forEach((it, idx) => {
+          processItem(it, idx);
+        });
+      } else {
+        invoice.items.forEach((it, idx) => {
+          const itemKey = `${it.product_id}_${it.carton_rate ?? it.rate ?? 0}`;
+          if (!aggregatedItemsMap.has(itemKey)) {
+            processItem(it, idx);
+          }
+        });
+      }
+    }
+
+    return Array.from(aggregatedItemsMap.values());
+  }, [invoice, orders, products, ret, orderInfos]);
+
   const filteredInvoiceItems = React.useMemo(() => {
     if (!itemSearchQuery.trim()) return rawInvoiceItems;
     const q = itemSearchQuery.toLowerCase().trim();
     return rawInvoiceItems.filter(item => {
       const prod = products.find(p => p.id === item.product_id);
-      const prodName = (prod?.name || item.description || item.variant_name || item.product_name || '').toLowerCase();
+      const prodName = (prod?.name || (item as any).description || (item as any).variant_name || item.product_name || '').toLowerCase();
       const hsn = (item.hsn || prod?.hsn || '').toLowerCase();
       const batchNo = (item.batch_number || batches?.find(b => b.product_id === item.product_id)?.batch_number || '').toLowerCase();
       const packing = (item.packing || prod?.pack_size || '').toLowerCase();
@@ -204,6 +343,77 @@ export default function InvoicePreviewModal({
       return prodName.includes(q) || hsn.includes(q) || batchNo.includes(q) || packing.includes(q) || mrp.includes(q);
     });
   }, [rawInvoiceItems, itemSearchQuery, products, batches]);
+
+  // Dynamic Tax Slab Summary calculated strictly from active items
+  const taxSlabs = React.useMemo(() => {
+    const slabMap = new Map<number, { taxable: number; cgst: number; sgst: number; igst: number; totalTax: number }>();
+    const isLocal = (ret?.state_code || '27') === '27';
+    
+    rawInvoiceItems.forEach(item => {
+      const rate = Number(item.gst_percent ?? 0);
+      const taxable = Number(item.taxable_value || 0);
+      const lineGst = rate > 0 ? Math.round(taxable * (rate / 100) * 100) / 100 : 0;
+      const cgst = isLocal ? Math.round((lineGst / 2) * 100) / 100 : 0;
+      const sgst = isLocal ? Math.round((lineGst / 2) * 100) / 100 : 0;
+      const igst = !isLocal ? lineGst : 0;
+
+      const existing = slabMap.get(rate) || { taxable: 0, cgst: 0, sgst: 0, igst: 0, totalTax: 0 };
+      existing.taxable = Math.round((existing.taxable + taxable) * 100) / 100;
+      existing.cgst = Math.round((existing.cgst + cgst) * 100) / 100;
+      existing.sgst = Math.round((existing.sgst + sgst) * 100) / 100;
+      existing.igst = Math.round((existing.igst + igst) * 100) / 100;
+      existing.totalTax = Math.round((existing.totalTax + lineGst) * 100) / 100;
+      slabMap.set(rate, existing);
+    });
+
+    return Array.from(slabMap.entries()).sort(([a], [b]) => a - b);
+  }, [rawInvoiceItems, ret]);
+
+  // Computed Totals strictly following GST rules
+  const computedTotals = React.useMemo(() => {
+    let totalTaxable = 0;
+    let totalCgst = 0;
+    let totalSgst = 0;
+    let totalIgst = 0;
+    const isLocal = (ret?.state_code || '27') === '27';
+
+    rawInvoiceItems.forEach(item => {
+      const taxable = Number(item.taxable_value || 0);
+      const rate = Number(item.gst_percent ?? 0);
+      const taxAmount = rate > 0 ? Math.round(taxable * (rate / 100) * 100) / 100 : 0;
+
+      totalTaxable += taxable;
+      if (isLocal) {
+        totalCgst += Math.round((taxAmount / 2) * 100) / 100;
+        totalSgst += Math.round((taxAmount / 2) * 100) / 100;
+      } else {
+        totalIgst += taxAmount;
+      }
+    });
+
+    totalTaxable = Math.round(totalTaxable * 100) / 100;
+    totalCgst = Math.round(totalCgst * 100) / 100;
+    totalSgst = Math.round(totalSgst * 100) / 100;
+    totalIgst = Math.round(totalIgst * 100) / 100;
+
+    const unroundedGrandTotal = totalTaxable + totalCgst + totalSgst + totalIgst;
+    const grandTotal = Math.round(unroundedGrandTotal);
+    const roundOff = Math.round((grandTotal - unroundedGrandTotal) * 100) / 100;
+
+    const paidAmount = Number(invoice.paid_amount || 0);
+    const outstandingAmount = Math.max(0, grandTotal - paidAmount);
+
+    return {
+      taxableSubtotal: totalTaxable,
+      cgst: totalCgst,
+      sgst: totalSgst,
+      igst: totalIgst,
+      roundOff,
+      grandTotal,
+      paidAmount,
+      outstandingAmount
+    };
+  }, [rawInvoiceItems, ret, invoice.paid_amount]);
 
   const handlePrint = () => {
     printInvoiceDocument('printable-tax-invoice', `Tax_Invoice_${invoice.invoice_number}`);
@@ -404,7 +614,7 @@ export default function InvoicePreviewModal({
                     <p><span className="text-slate-500">Date:</span> <strong className="text-slate-900 font-bold">{formatDate(invoice.date)}</strong></p>
                     <p><span className="text-slate-500">Place of Supply:</span> <strong className="text-slate-900 font-semibold">{invoice.place_of_supply || 'Maharashtra (27)'}</strong></p>
                     {orderInfos.length > 0 && (
-                      <p><span className="text-slate-500">Orders:</span> <strong className="text-indigo-900 font-bold font-mono">{orderInfos.map(o => o.orderNumber).join(', ')}</strong></p>
+                      <p><span className="text-slate-500">Ref Orders:</span> <strong className="text-indigo-900 font-bold font-mono">{orderInfos.map(o => o.orderNumber).join(', ')}</strong></p>
                     )}
                   </div>
                 </div>
@@ -417,17 +627,17 @@ export default function InvoicePreviewModal({
                   <p className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] leading-snug tracking-tight uppercase">{ret?.shop_name || 'Retailer Store'}</p>
                   <p className="text-slate-700 leading-tight">{ret?.address || 'Local Market Area'}</p>
                   <p className="text-slate-800"><span className="text-slate-500">Prop:</span> {ret?.owner_name || 'N/A'} <span className="text-slate-500">| Ph:</span> {ret?.mobile || ret?.phone || 'N/A'}</p>
-                  <p className="font-bold text-slate-900"><span className="text-slate-500 font-normal">GSTIN:</span> {ret?.gstin || 'Unregistered'}</p>
+                  <p className="font-bold text-slate-900"><span className="text-slate-500 font-normal">GSTIN:</span> {ret?.gstin || 'Unregistered'} <span className="text-slate-500 font-normal">| State:</span> {ret?.state_code || '27'}</p>
                 </div>
                 <div className="space-y-0.5 pl-2">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">DESPATCH &amp; TERMS</span>
                   <p className="text-slate-700 flex justify-between"><span className="text-slate-500">Dispatch Mode:</span> <span className="font-semibold text-slate-800">{challan?.transport_mode || 'Delivery Van'}</span></p>
-                  <p className="text-slate-700 flex justify-between"><span className="text-slate-500">Payment Terms:</span> <span className="font-semibold text-slate-800">Credit Account</span></p>
+                  <p className="text-slate-700 flex justify-between"><span className="text-slate-500">Payment Mode:</span> <span className="font-bold text-slate-900">{invoice.payment_mode || 'Credit'}</span></p>
                   {invoice.fulfilment_number && (
                     <p className="text-slate-700 flex justify-between"><span className="text-slate-500">Fulfilment Ref:</span> <span className="font-mono font-bold text-indigo-700">{invoice.fulfilment_number}</span></p>
                   )}
                   {orderInfos.length > 0 && (
-                    <p className="text-slate-700 flex justify-between"><span className="text-slate-500">Order Source:</span> <span className="font-semibold text-slate-800">{orderInfos.map(o => o.source.replace('_', ' ')).join(', ')}</span></p>
+                    <p className="text-slate-700 flex justify-between"><span className="text-slate-500">Ref Orders:</span> <span className="font-mono font-bold text-indigo-800">{orderInfos.map(o => o.orderNumber).join(', ')}</span></p>
                   )}
                 </div>
               </div>
@@ -508,10 +718,13 @@ export default function InvoicePreviewModal({
                         const batchNo = item.batch_number || batches?.find(b => b.product_id === item.product_id)?.batch_number;
                         const batchObj = batches?.find(b => b.product_id === item.product_id && b.batch_number === batchNo);
                         const expiryDate = batchObj?.expiry_date ? formatDate(batchObj.expiry_date) : '';
-                        const gstRate = prod?.gst_percent ? `${prod.gst_percent}%` : '18%';
+                        const prodGst = (item.gst_percent !== undefined && item.gst_percent !== null)
+                          ? Number(item.gst_percent)
+                          : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+                        const gstRate = `${prodGst}%`;
 
                         // Billed Qty Formatter strictly in Pieces
-                        const totalPieces = item.base_qty ?? item.quantity ?? (item.loose_qty !== undefined ? item.loose_qty + ((item.carton_qty || 0) * (item.units_per_box_carton || 1)) : 0);
+                        const totalPieces = item.base_qty ?? item.quantity ?? (item.loose_qty !== undefined ? item.loose_qty + ((item.carton_qty || 0) * ((item as any).units_per_box_carton || (item as any).units_per_trading_unit || 1)) : 0);
                         const qtyDisplay = `${totalPieces} Pcs`;
 
                         // Rate strictly per Piece
@@ -526,7 +739,7 @@ export default function InvoicePreviewModal({
                             {/* 2. Description of Goods (Single line + micro meta) */}
                             <td className="py-1 px-2 dense-print-td">
                               <span className="font-bold text-slate-900 leading-tight block">
-                                {prod?.name || item.description || item.variant_name || item.product_name || 'FMCG Product'}
+                                {prod?.name || (item as any).description || (item as any).variant_name || item.product_name || 'FMCG Product'}
                               </span>
                               <span className="text-[9px] text-slate-500 font-normal inline-block print:text-[7pt]">
                                 {batchNo && batchNo !== 'N/A' ? `Batch: ${batchNo}` : ''}
@@ -586,14 +799,55 @@ export default function InvoicePreviewModal({
                 <div className="flex-1 space-y-2 max-w-md w-full">
                   <div className="p-2 bg-slate-50 border border-slate-200 rounded text-slate-600 text-[10px] leading-tight">
                     <strong className="text-slate-800 block uppercase mb-0.5">GST Declaration:</strong>
-                    We declare that this invoice shows the actual price of goods described and particulars are true. Taxes are charged under Maharashtra GST (CGST/SGST 9% each for local sales, IGST 18% for interstate).
+                    We declare that this invoice shows the actual price of goods described and particulars are true. Taxes are charged strictly as per item master GST slabs ({taxSlabs.map(([slab]) => `${slab}%`).join(', ') || '0%, 5%, 12%, 18%, 28%'}).
                   </div>
 
                   <div className="p-2 bg-slate-50 border border-slate-200 rounded text-xs space-y-0.5">
                     <span className="font-bold text-slate-500 uppercase text-[10px] block">AMOUNT IN WORDS</span>
                     <span className="font-extrabold text-slate-900 text-xs leading-tight block">
-                      {numberToWords(invoice.grand_total)}
+                      {numberToWords(computedTotals.grandTotal)}
                     </span>
+                  </div>
+
+                  {/* Payment Details & Settlement Summary */}
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-500 uppercase text-[10px]">Payment Summary</span>
+                      <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded border ${
+                        computedTotals.outstandingAmount <= 0 
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300' 
+                          : computedTotals.paidAmount > 0 
+                            ? 'bg-amber-100 text-amber-800 border-amber-300' 
+                            : 'bg-slate-100 text-slate-800 border-slate-300'
+                      }`}>
+                        {computedTotals.outstandingAmount <= 0 ? 'PAID' : computedTotals.paidAmount > 0 ? 'PARTIAL' : (invoice.payment_mode === 'Credit' ? 'CREDIT / UNPAID' : 'UNPAID')}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px]">
+                      <div><span className="text-slate-500">Mode:</span> <strong className="text-slate-900">{invoice.payment_mode || 'Credit'}</strong></div>
+                      <div><span className="text-slate-500">Paid:</span> <strong className="text-emerald-700 font-mono">₹{computedTotals.paidAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></div>
+                      <div><span className="text-slate-500">Outstanding:</span> <strong className={`font-mono ${computedTotals.outstandingAmount > 0 ? 'text-amber-800' : 'text-slate-900'}`}>₹{computedTotals.outstandingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></div>
+                      {invoice.payment_reference && (
+                        <div><span className="text-slate-500">Ref/UTR:</span> <strong className="text-indigo-900 font-mono">{invoice.payment_reference}</strong></div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Bank & Payment QR Details */}
+                  <div className="p-2 bg-slate-50 border border-slate-200 rounded text-xs flex items-center justify-between gap-3">
+                    <div className="space-y-0.5 text-[10px]">
+                      <span className="font-bold text-slate-700 uppercase block">BANK &amp; PAYMENT DETAILS</span>
+                      <p className="text-slate-700"><span className="text-slate-500">Bank:</span> <strong>HDFC Bank Ltd</strong> &bull; <span className="text-slate-500">A/C:</span> <strong className="font-mono">50200084920194</strong></p>
+                      <p className="text-slate-700"><span className="text-slate-500">IFSC:</span> <strong className="font-mono">HDFC0001234</strong> &bull; <span className="text-slate-500">Branch:</span> Navi Mumbai</p>
+                      <p className="text-slate-700"><span className="text-slate-500">UPI VPA:</span> <strong className="font-mono text-indigo-700">saifeestores@hdfcbank</strong></p>
+                    </div>
+                    <div className="text-center shrink-0 border border-slate-300 bg-white p-1 rounded">
+                      <div className="w-12 h-12 bg-slate-900 text-white flex flex-col items-center justify-center rounded font-mono text-[7px] font-black leading-tight">
+                        <span>UPI</span>
+                        <span>PAY QR</span>
+                      </div>
+                      <span className="text-[7.5px] text-slate-600 font-bold block mt-0.5">Scan to Pay</span>
+                    </div>
                   </div>
                 </div>
 
@@ -601,35 +855,45 @@ export default function InvoicePreviewModal({
                 <div className="w-full sm:w-72 space-y-1 text-slate-700 font-semibold bg-slate-50 p-2.5 border border-slate-300 rounded text-xs">
                   <div className="flex justify-between text-slate-600">
                     <span>Taxable Subtotal:</span>
-                    <span className="font-bold text-slate-900 font-mono">₹{(invoice.taxable_value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span className="font-bold text-slate-900 font-mono">₹{computedTotals.taxableSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                   </div>
-                  {(invoice.cgst || 0) > 0 && (
-                    <>
-                      <div className="flex justify-between text-slate-600">
-                        <span>CGST @ 9%:</span>
-                        <span className="font-bold text-slate-900 font-mono">₹{(invoice.cgst || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                      </div>
-                      <div className="flex justify-between text-slate-600">
-                        <span>SGST @ 9%:</span>
-                        <span className="font-bold text-slate-900 font-mono">₹{(invoice.sgst || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                      </div>
-                    </>
-                  )}
-                  {(invoice.igst || 0) > 0 && (
-                    <div className="flex justify-between text-slate-600">
-                      <span>IGST @ 18%:</span>
-                      <span className="font-bold text-slate-900 font-mono">₹{(invoice.igst || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                    </div>
-                  )}
-                  {invoice.round_off !== undefined && invoice.round_off !== 0 && (
+
+                  {/* Dynamic GST Tax Slabs Breakdown */}
+                  {taxSlabs.filter(([slabRate, data]) => slabRate > 0 && data.totalTax > 0).map(([slabRate, data]) => {
+                    const isLocal = (ret?.state_code || '27') === '27';
+                    if (isLocal) {
+                      const halfRate = slabRate / 2;
+                      return (
+                        <React.Fragment key={slabRate}>
+                          <div className="flex justify-between text-slate-600">
+                            <span>CGST @ {halfRate}%:</span>
+                            <span className="font-bold text-slate-900 font-mono">₹{data.cgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          </div>
+                          <div className="flex justify-between text-slate-600">
+                            <span>SGST @ {halfRate}%:</span>
+                            <span className="font-bold text-slate-900 font-mono">₹{data.sgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          </div>
+                        </React.Fragment>
+                      );
+                    } else {
+                      return (
+                        <div key={slabRate} className="flex justify-between text-slate-600">
+                          <span>IGST @ {slabRate}%:</span>
+                          <span className="font-bold text-slate-900 font-mono">₹{data.igst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      );
+                    }
+                  })}
+
+                  {computedTotals.roundOff !== 0 && (
                     <div className="flex justify-between text-slate-500 text-[10px]">
                       <span>Round Off:</span>
-                      <span className="font-mono">{invoice.round_off > 0 ? `+₹${invoice.round_off.toFixed(2)}` : `-₹${Math.abs(invoice.round_off).toFixed(2)}`}</span>
+                      <span className="font-mono">{computedTotals.roundOff > 0 ? `+₹${computedTotals.roundOff.toFixed(2)}` : `-₹${Math.abs(computedTotals.roundOff).toFixed(2)}`}</span>
                     </div>
                   )}
                   <div className="flex justify-between items-center text-slate-950 font-black text-sm border-t border-slate-300 pt-1">
                     <span>GRAND TOTAL:</span>
-                    <span className="text-indigo-900 font-mono text-base">₹{(invoice.grand_total || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span className="text-indigo-900 font-mono text-base">₹{computedTotals.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                   </div>
                 </div>
               </div>

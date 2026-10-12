@@ -187,7 +187,9 @@ export default function OneBillConsolidationModal({
         const purchaseCost = item.purchase_rate || prod?.purchase_price || (prod?.selling_price ? prod.selling_price * 0.9 : 0);
         // Preserve original locked billing rate (Specification 3)
         const currentRate = item.carton_rate ?? item.manual_billing_rate ?? item.final_applied_rate ?? (item.base_price !== undefined ? item.base_price - (item.discount || 0) : (prod?.selling_price || 0));
-        const gstPercent = item.gst_percent || prod?.gst_percent || 18;
+        const gstPercent = (item.gst_percent !== undefined && item.gst_percent !== null) 
+          ? Number(item.gst_percent) 
+          : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
 
         const originTag = isPriorOrder 
           ? `⏳ Prior Order: ${order.order_number} (Pending Balance)`
@@ -983,7 +985,10 @@ export default function OneBillConsolidationModal({
                       return filteredItems.map((item: InvoiceItem, idx: number) => {
                       const prod = products.find(p => p.id === item.product_id);
                       const unitAbbr = item.trading_unit ? (item.trading_unit.toLowerCase().includes('carton') ? 'CTN' : item.trading_unit.toUpperCase()) : 'CTN';
-                      const gstRate = prod?.gst_percent ? `${prod.gst_percent}%` : '18%';
+                      const prodGst = (item.gst_percent !== undefined && item.gst_percent !== null)
+                        ? Number(item.gst_percent)
+                        : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+                      const gstRate = `${prodGst}%`;
 
                       // Billed Qty Formatter
                       let qtyDisplay = '';
@@ -1082,7 +1087,7 @@ export default function OneBillConsolidationModal({
                 <div className="flex-1 space-y-2 max-w-md w-full">
                   <div className="p-2 bg-slate-50 border border-slate-200 rounded text-slate-600 text-[10px] leading-tight">
                     <strong className="text-slate-800 block uppercase mb-0.5">GST Declaration:</strong>
-                    We declare that this invoice shows the actual price of goods described and particulars are true. Taxes are charged under Maharashtra GST (CGST/SGST 9% each for local sales, IGST 18% for interstate).
+                    We declare that this invoice shows the actual price of goods described and particulars are true. Taxes are charged strictly as per item master GST slabs.
                   </div>
                 </div>
                 
@@ -1095,18 +1100,18 @@ export default function OneBillConsolidationModal({
                   {(generatedInvoice.cgst || 0) > 0 && (
                     <>
                       <div className="flex justify-between text-slate-600">
-                        <span>CGST @ 9%:</span>
+                        <span>CGST:</span>
                         <span className="font-bold text-slate-900 font-mono">₹{(generatedInvoice.cgst || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                       <div className="flex justify-between text-slate-600">
-                        <span>SGST @ 9%:</span>
+                        <span>SGST:</span>
                         <span className="font-bold text-slate-900 font-mono">₹{(generatedInvoice.sgst || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                     </>
                   )}
                   {(generatedInvoice.igst || 0) > 0 && (
                     <div className="flex justify-between text-slate-600">
-                      <span>IGST @ 18%:</span>
+                      <span>IGST:</span>
                       <span className="font-bold text-slate-900 font-mono">₹{(generatedInvoice.igst || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                     </div>
                   )}

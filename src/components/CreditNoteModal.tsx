@@ -49,7 +49,9 @@ export default function CreditNoteModal({
       const cRate = item.rate;
       const lRate = item.loose_rate ?? (cRate / unitsPerPack);
       const lineTaxable = (cQty * cRate) + (lQty * lRate);
-      const gstPct = item.gst_percent ?? prod?.gst_percent ?? 18;
+      const gstPct = (item.gst_percent !== undefined && item.gst_percent !== null)
+        ? Number(item.gst_percent)
+        : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
       const lineGst = (lineTaxable * gstPct) / 100;
       calcSub += lineTaxable;
       calcGst += lineGst;
@@ -204,7 +206,9 @@ export default function CreditNoteModal({
                   const cRate = item.rate;
                   const lRate = item.loose_rate ?? (cRate / unitsPerPack);
                   const lineTaxable = item.taxable_value ?? ((cQty * cRate) + (lQty * lRate));
-                  const gstPct = item.gst_percent ?? prod?.gst_percent ?? 18;
+                  const gstPct = (item.gst_percent !== undefined && item.gst_percent !== null)
+                    ? Number(item.gst_percent)
+                    : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
                   const lineGst = item.gst_amount ?? ((lineTaxable * gstPct) / 100);
                   const lineTotal = item.total_amount ?? (lineTaxable + lineGst);
 

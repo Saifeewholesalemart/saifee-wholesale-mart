@@ -13,13 +13,16 @@ import {
   getInvoiceWiseSales, getSalesSummary, getProductWiseProfit,
   getRetailerSalesSummary, getCompanyWiseSales, getSalespersonSales,
   getPurchaseSummary, getCurrentStock, getRetailerOutstandingAging,
-  getHSNWiseSales, getOrderSummary, getBatchExpiryReport
+  getHSNWiseSales, getOrderSummary, getBatchExpiryReport,
+  getItemReportByParty, getPartyItemReport, formatQuantity
 } from '@/lib/reportsEngine';
 import ReportFilterBar from '@/components/reports/ReportFilterBar';
 import FilterDiagnosticsBar from '@/components/reports/FilterDiagnosticsBar';
 
 // Category Views
 import SalesReportsView from '@/components/reports/categories/SalesReportsView';
+import ItemReportByPartyView from '@/components/reports/categories/ItemReportByPartyView';
+import PartyItemReportsView from '@/components/reports/categories/PartyItemReportsView';
 import ProfitLossReportsView from '@/components/reports/categories/ProfitLossReportsView';
 import RetailerReportsView from '@/components/reports/categories/RetailerReportsView';
 import CompanyBrandReportsView from '@/components/reports/categories/CompanyBrandReportsView';
@@ -31,10 +34,10 @@ import GSTReportsView from '@/components/reports/categories/GSTReportsView';
 import OrderReportsView from '@/components/reports/categories/OrderReportsView';
 import BatchExpiryReportsView from '@/components/reports/categories/BatchExpiryReportsView';
 import GodownReportsView from '@/components/reports/categories/GodownReportsView';
-import PartyItemReportsView from '@/components/reports/categories/PartyItemReportsView';
 
 export type ReportCategory = 
   | 'sales' 
+  | 'item_party'
   | 'party_item'
   | 'profit_loss' 
   | 'retailer' 
@@ -93,10 +96,11 @@ export default function AdminReports() {
     retailerId: currentUser?.retailer_id
   };
 
-  // 13 Report Categories Configuration
+  // 14 Report Categories Configuration
   const categories: { id: ReportCategory; name: string; shortName: string; icon: any; badge?: string }[] = [
     { id: 'sales', name: 'A. Sales Reports', shortName: 'Sales', icon: TrendingUp },
-    { id: 'party_item', name: 'B. Party Report By Item', shortName: 'Party Report', icon: Users, badge: 'New' },
+    { id: 'item_party', name: 'B1. Item Report by Party', shortName: 'Item by Party', icon: Package, badge: 'Stock' },
+    { id: 'party_item', name: 'B2. Party Report by Item', shortName: 'Party by Item', icon: Users, badge: 'ERP' },
     { id: 'profit_loss', name: 'C. Profit & Loss', shortName: 'P&L / Margin', icon: DollarSign, badge: 'Admin' },
     { id: 'retailer', name: 'D. Retailer Reports', shortName: 'Retailers', icon: Store },
     { id: 'company_brand', name: 'E. Company & Brand', shortName: 'Companies', icon: Building2 },
@@ -147,6 +151,63 @@ export default function AdminReports() {
           outstandingAmount: summary.totalOutstanding
         };
         return { columns, data, totals };
+      }
+      case 'item_party': {
+        const { rows, summary } = getItemReportByParty(filters, dbState, userContext);
+        const columns = [
+          { header: '#', key: 'srNo' },
+          { header: 'Product Name', key: 'productName' },
+          { header: 'Brand', key: 'brand' },
+          { header: 'Category', key: 'category' },
+          { header: 'SKU', key: 'sku' },
+          { header: 'Pack Size', key: 'variantPacking' },
+          { header: 'Sale Qty', key: 'saleQtyDisplay' },
+          { header: 'Net Sales Amount', key: 'saleAmount', format: 'currency' as const },
+          { header: 'Purchase Qty', key: 'purchaseQtyDisplay' },
+          { header: 'Purchase Amount', key: 'purchaseAmount', format: 'currency' as const },
+          { header: 'Closing Stock', key: 'closingInventoryDisplay' }
+        ];
+        const totals = {
+          srNo: 'TOTAL',
+          productName: `${summary.recordCount} Products`,
+          saleAmount: summary.totalSaleAmount,
+          purchaseAmount: summary.totalPurchaseAmount,
+          closingInventoryDisplay: summary.totalClosingDisplay
+        };
+        return { columns, data: rows, totals };
+      }
+      case 'party_item': {
+        const { rows, summary } = getPartyItemReport(filters, dbState, userContext);
+        const isItemFiltered = !!(filters.productId && filters.productId !== 'all');
+        const columns = isItemFiltered ? [
+          { header: '#', key: 'srNo' },
+          { header: 'Retailer / Party', key: 'partyName' },
+          { header: 'City', key: 'city' },
+          { header: 'Quantity Sold', key: 'saleQty', format: 'number' as const },
+          { header: 'Avg Billing Rate', key: 'avgBillingRate', format: 'currency' as const },
+          { header: 'Sale Amount', key: 'saleAmount', format: 'currency' as const },
+          { header: 'Quantity Purchased', key: 'purchaseQty', format: 'number' as const },
+          { header: 'Avg Purchase Rate', key: 'avgPurchaseRate', format: 'currency' as const },
+          { header: 'Purchase Amount', key: 'purchaseAmount', format: 'currency' as const }
+        ] : [
+          { header: '#', key: 'srNo' },
+          { header: 'Retailer / Party', key: 'partyName' },
+          { header: 'Retailer Code', key: 'retailerCode' },
+          { header: 'City', key: 'city' },
+          { header: 'Sale Quantity', key: 'saleQty', format: 'number' as const },
+          { header: 'Sale Amount', key: 'saleAmount', format: 'currency' as const },
+          { header: 'Purchase Quantity', key: 'purchaseQty', format: 'number' as const },
+          { header: 'Purchase Amount', key: 'purchaseAmount', format: 'currency' as const }
+        ];
+        const totals = {
+          srNo: 'TOTAL',
+          partyName: `${summary.recordCount} Parties`,
+          saleQty: summary.totalSaleQty,
+          saleAmount: summary.totalSaleAmount,
+          purchaseQty: summary.totalPurchaseQty,
+          purchaseAmount: summary.totalPurchaseAmount
+        };
+        return { columns, data: rows, totals };
       }
       case 'profit_loss': {
         const data = getProductWiseProfit(filters, dbState, userContext);
@@ -378,6 +439,15 @@ export default function AdminReports() {
             userContext={userContext}
             showCharts={showCharts}
             onSelectInvoice={(id) => setSelectedInvoiceId(id)}
+          />
+        )}
+
+        {activeCategory === 'item_party' && (
+          <ItemReportByPartyView
+            filters={filters}
+            dbState={dbState}
+            userContext={userContext}
+            showCharts={showCharts}
           />
         )}
 

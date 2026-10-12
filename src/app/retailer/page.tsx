@@ -3,11 +3,12 @@
 import React, { useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
-import { Search, ShoppingCart, Plus, Minus, CheckCircle, Store, Tag, MapPin, ArrowRight, UserCheck, X, LogIn, History, Package } from 'lucide-react';
+import { Search, ShoppingCart, Plus, Minus, CheckCircle, Store, Tag, MapPin, ArrowRight, UserCheck, X, LogIn, History, Package, Clock } from 'lucide-react';
 import { Product, Order, Retailer, formatQuantityDisplay, calculateItemAmounts, splitBaseQuantity, PendingOrderItemWarning, getProductTradeMode } from '@/lib/db';
 import LastBillingRatesModal from '@/components/LastBillingRatesModal';
 import SmartSearchBar from '@/components/SmartSearchBar';
 import PendingItemWarningCard, { CartPendingSummaryBanner } from '@/components/orders/PendingItemWarningCard';
+import PendingDeliveryWarningModal from '@/components/orders/PendingDeliveryWarningModal';
 
 export default function RetailerEcommerce() {
   const { 
@@ -31,6 +32,8 @@ export default function RetailerEcommerce() {
   const [latestOrderId, setLatestOrderId] = useState('');
   const [latestOrderNumber, setLatestOrderNumber] = useState('');
   const [rateHistoryProduct, setRateHistoryProduct] = useState<Product | null>(null);
+  const [showPendingWarningModal, setShowPendingWarningModal] = useState(false);
+  const [pendingWarningsForOrder, setPendingWarningsForOrder] = useState<PendingOrderItemWarning[]>([]);
 
   // Helper to extract carton & loose quantities from cart
   const getCartItem = (cartKey: string): { cartonQty: number; looseQty: number } => {
@@ -203,7 +206,19 @@ export default function RetailerEcommerce() {
     }
   };
 
-  const handleConfirmAndPlaceOrder = () => {
+  const handleConfirmAndPlaceOrderClick = () => {
+    if (!retailerProfile || cartItemKeys.length === 0) return;
+
+    const warnings = getPendingItemsForRetailer(retailerProfile.id, currentCartToCheck);
+    if (warnings.length > 0) {
+      setPendingWarningsForOrder(warnings);
+      setShowPendingWarningModal(true);
+    } else {
+      executeConfirmAndPlaceOrder();
+    }
+  };
+
+  const executeConfirmAndPlaceOrder = () => {
     if (!retailerProfile) return;
 
     const items = cartItemKeys.map(cartKey => {
@@ -270,13 +285,15 @@ export default function RetailerEcommerce() {
     });
 
     // Record decision audit trail if user proceeded with pending item warnings
-    if (cartPendingWarnings.length > 0) {
-      logPendingOrderProceedActivity(retailerProfile.id, cartPendingWarnings, ord.order_number);
+    const relevantWarnings = pendingWarningsForOrder.length > 0 ? pendingWarningsForOrder : cartPendingWarnings;
+    if (relevantWarnings.length > 0) {
+      logPendingOrderProceedActivity(retailerProfile.id, relevantWarnings, ord.order_number);
     }
 
     setLatestOrderId(ord.id);
     setLatestOrderNumber(ord.order_number);
     setRetailerCart({});
+    setShowPendingWarningModal(false);
     setActiveView('success');
   };
 
@@ -875,7 +892,7 @@ export default function RetailerEcommerce() {
               </button>
               
               <button
-                onClick={handleConfirmAndPlaceOrder}
+                onClick={handleConfirmAndPlaceOrderClick}
                 className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-900/10 active:scale-95 transition-all text-center cursor-pointer"
               >
                 CONFIRM &amp; PLACE ORDER
@@ -887,13 +904,16 @@ export default function RetailerEcommerce() {
         {/* VIEW 4: ORDER PLACED SUCCESS */}
         {activeView === 'success' && (
           <div className="erp-card bg-white p-8 text-center max-w-md mx-auto space-y-6 border-slate-100 shadow-lg mt-8">
-            <div className="inline-flex items-center justify-center p-3 bg-emerald-50 text-emerald-600 rounded-full">
-              <CheckCircle className="w-12 h-12" />
+            <div className="inline-flex items-center justify-center p-3 bg-amber-50 text-amber-600 rounded-full">
+              <Clock className="w-12 h-12" />
             </div>
             
             <div className="space-y-1">
-              <h3 className="text-lg font-black text-slate-800 uppercase tracking-wide">ORDER PLACED SUCCESSFULLY</h3>
-              <p className="text-xs text-slate-500">Your direct e-commerce booking has been received by the distributor admin.</p>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 inline-block mb-1">
+                Order Placed / Pending Confirmation
+              </span>
+              <h3 className="text-lg font-black text-slate-800 uppercase tracking-wide">ORDER REGISTERED</h3>
+              <p className="text-xs text-slate-500">Your direct booking is registered and awaiting your final line-item review &amp; confirmation.</p>
             </div>
 
             <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl font-mono text-xs">
@@ -985,6 +1005,17 @@ export default function RetailerEcommerce() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Pending Delivery Warning Confirmation Modal */}
+      {showPendingWarningModal && (
+        <PendingDeliveryWarningModal
+          warnings={pendingWarningsForOrder}
+          retailerName={retailerProfile?.shop_name}
+          retailerCode={retailerProfile?.retailer_code}
+          onReviewOrder={() => setShowPendingWarningModal(false)}
+          onProceedWithOrder={executeConfirmAndPlaceOrder}
+        />
       )}
 
       {/* Last 5 Billing Rates History Modal */}

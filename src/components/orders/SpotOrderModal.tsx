@@ -319,7 +319,7 @@ export default function SpotOrderModal({
       const grossAmount = packedPieces * unitRate;
       const discountAmount = packedPieces * discountPerUnit;
       const taxable = Math.max(0, grossAmount - discountAmount);
-      const gstPercent = prod?.gst_percent || 18;
+      const gstPercent = (prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0;
       const gstAmount = Math.round(taxable * (gstPercent / 100) * 100) / 100;
       const totalAmount = Math.round((taxable + gstAmount) * 100) / 100;
 
@@ -410,7 +410,7 @@ export default function SpotOrderModal({
         carton_discount: c.discount,
         loose_discount: 0,
         final_price: c.amounts.taxableAmount,
-        gst_percent: c.prod?.gst_percent || 18,
+        gst_percent: (c.prod?.gst_percent !== undefined && c.prod?.gst_percent !== null) ? Number(c.prod.gst_percent) : 0,
         gst_amount: c.amounts.gstAmount,
         total_amount: c.amounts.totalAmount,
         final_applied_rate: Math.max(0, c.unitRate - c.discount),

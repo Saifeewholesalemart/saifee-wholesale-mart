@@ -249,7 +249,7 @@ export default function FastTradeTerminal() {
     const lRate = prod.loose_selling_price || (Math.round((cRate / unitsPerPack) * 100) / 100);
     const cDisc = prod.carton_discount || 0;
     const lDisc = prod.loose_discount || 0;
-    const gstPct = prod.gst_percent || 18;
+    const gstPct = (prod.gst_percent !== undefined && prod.gst_percent !== null) ? Number(prod.gst_percent) : 0;
 
     const taxableVal = (cQty * Math.max(0, cRate - cDisc)) + (lQty * Math.max(0, lRate - lDisc));
     const gstVal = Math.round(taxableVal * (gstPct / 100) * 100) / 100;
@@ -333,7 +333,7 @@ export default function FastTradeTerminal() {
     const lRate = parseFloat(entryLooseRate) || selectedProduct.loose_selling_price || (Math.round((cRate / unitsPerPack) * 100) / 100);
     const cDisc = parseFloat(entryCartonDiscount) || 0;
     const lDisc = parseFloat(entryLooseDiscount) || 0;
-    const gstPct = selectedProduct.gst_percent || 18;
+    const gstPct = (selectedProduct.gst_percent !== undefined && selectedProduct.gst_percent !== null) ? Number(selectedProduct.gst_percent) : 0;
 
     const taxableVal = (cQty * Math.max(0, cRate - cDisc)) + (lQty * Math.max(0, lRate - lDisc));
     const gstVal = Math.round(taxableVal * (gstPct / 100) * 100) / 100;

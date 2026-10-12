@@ -187,7 +187,7 @@ export default function AdminReturns() {
       const unitsPerPack = prod?.units_per_box_carton || 1;
       const baseUnits = calculateBaseQuantity(row.cartonQty || 0, row.looseQty || 0, unitsPerPack);
       const taxable = (row.cartonQty * row.cartonRate) + (row.looseQty * row.looseRate);
-      const gstPct = prod?.gst_percent || 18;
+      const gstPct = (prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0;
       const gstAmt = (taxable * gstPct) / 100;
       const lineTotal = taxable + gstAmt;
 
@@ -315,7 +315,10 @@ export default function AdminReturns() {
           const cRate = item.rate;
           const lRate = item.loose_rate ?? (cRate / unitsPerPack);
           const lineVal = (cQty * cRate) + (lQty * lRate);
-          const gst = lineVal * ((prod?.gst_percent || 18) / 100);
+          const prodGst = (item.gst_percent !== undefined && (item as any).gst_percent !== null)
+            ? Number((item as any).gst_percent)
+            : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+          const gst = lineVal * (prodGst / 100);
           totalCreditValue += lineVal + gst;
         });
       }
@@ -451,7 +454,10 @@ export default function AdminReturns() {
                 const cRate = item.rate;
                 const lRate = item.loose_rate ?? (cRate / unitsPerPack);
                 const lineVal = (cQty * cRate) + (lQty * lRate);
-                const gst = lineVal * ((prod?.gst_percent || 18) / 100);
+                const prodGst = (item.gst_percent !== undefined && (item as any).gst_percent !== null)
+                  ? Number((item as any).gst_percent)
+                  : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
+                const gst = lineVal * (prodGst / 100);
                 return sum + lineVal + gst;
               }, 0) || 0);
 
@@ -753,7 +759,7 @@ export default function AdminReturns() {
                       const tradingUnit = prod?.trading_unit || 'Carton';
                       const baseUnit = prod?.base_unit || 'Piece';
                       const lineTaxable = (row.cartonQty * row.cartonRate) + (row.looseQty * row.looseRate);
-                      const gstPct = prod?.gst_percent || 18;
+                      const gstPct = (prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0;
                       const lineGst = (lineTaxable * gstPct) / 100;
                       const lineTotal = lineTaxable + lineGst;
                       const baseUnits = calculateBaseQuantity(row.cartonQty, row.looseQty, unitsPerPack);
