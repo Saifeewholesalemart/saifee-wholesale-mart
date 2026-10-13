@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { CompanySwitcher } from '@/components/CompanySwitcher';
 import { CompanySwitchingOverlay } from '@/components/CompanySwitchingOverlay';
+import { CloudSyncStatusButton } from '@/components/CloudSyncStatusButton';
 
 interface MenuItem {
   name: string;
@@ -197,6 +198,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </h1>
           </div>
           <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+            {/* Live Supabase Cloud Sync Status */}
+            <CloudSyncStatusButton />
+
             {/* Multi-Company Workspace Switcher */}
             <CompanySwitcher compactOnMobile={true} />
 

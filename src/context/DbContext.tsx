@@ -15,8 +15,18 @@ import {
   TradeMode, formatAutoBoxQuantity, formatProductStockDisplay, getProductTradeMode, AutoBoxResult,
   DatabaseBackupSnapshot
 } from '@/lib/db';
+import { 
+  syncBidirectional, 
+  pushCloudSnapshot, 
+  fetchCloudSnapshot, 
+  queueCloudBackup, 
+  subscribeToSyncStatus, 
+  setupRealtimeSubscription, 
+  isCloudSyncAvailable, 
+  CloudSyncStatus 
+} from '@/lib/supabaseSyncEngine';
 
-export type { PendingOrderItemWarning, PendingOrderRef, CartItemToCheck, CashFlowTransaction, CompanyOpeningBalance, CustomerCreditProfile, CustomerLedgerEntry, TradeMode, AutoBoxResult, DatabaseBackupSnapshot };
+export type { PendingOrderItemWarning, PendingOrderRef, CartItemToCheck, CashFlowTransaction, CompanyOpeningBalance, CustomerCreditProfile, CustomerLedgerEntry, TradeMode, AutoBoxResult, DatabaseBackupSnapshot, CloudSyncStatus };
 
 export interface RetailerCartItem {
   cartonQty: number;
@@ -574,11 +584,25 @@ interface DbContextType {
   // Database Backup & Restore Utility
   exportFullDatabaseBackup: () => DatabaseBackupSnapshot;
   restoreFullDatabaseBackup: (backup: any) => { success: boolean; message: string; counts: Record<string, number> };
+
+  // Supabase Live Cloud Database Synchronization
+  cloudSyncStatus: CloudSyncStatus;
+  syncWithCloud: () => Promise<{ action: string; message: string }>;
+  forcePushToCloud: () => Promise<string>;
+  forcePullFromCloud: () => Promise<void>;
+  isCloudSyncConfigured: boolean;
 }
 
 const DbContext = createContext<DbContextType | undefined>(undefined);
 
 export function DbProvider({ children }: { children: React.ReactNode }) {
+  // Supabase Cloud Sync State
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>({
+    state: isCloudSyncAvailable() ? 'idle' : 'offline',
+    lastSyncedAt: null,
+    message: isCloudSyncAvailable() ? 'Cloud database connected' : 'Supabase not configured'
+  });
+
   // Multi-Company Tenant State
   const [activeCompanyId, setActiveCompanyId] = useState<string>(() => db.getInitialActiveBusinessCompanyId());
   const [activeCompany, setActiveCompany] = useState<BusinessCompany>(() => db.getInitialBusinessCompanies()[0]);
@@ -678,11 +702,57 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
       // ignore
     }
 
+    // 3. Supabase Cloud Sync & Realtime Channel
+    const unsubStatus = subscribeToSyncStatus((status) => {
+      setCloudSyncStatus(status);
+    });
+
+    // Run initial smart cloud sync on mount
+    syncBidirectional()
+      .then((res) => {
+        if (res.action === 'pulled' || res.action === 'merged') {
+          loadData();
+        }
+      })
+      .catch((err) => {
+        console.warn('[DbContext] Initial cloud sync notice:', err);
+      });
+
+    // Listen for real-time remote updates from Supabase
+    const unsubRealtime = setupRealtimeSubscription(() => {
+      syncBidirectional()
+        .then((res) => {
+          if (res.action === 'pulled' || res.action === 'merged') {
+            loadData();
+          }
+        })
+        .catch(() => {});
+    });
+
+    // Mobile / tab focus trigger
+    const handleVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        syncBidirectional()
+          .then((res) => {
+            if (res.action === 'pulled' || res.action === 'merged') {
+              loadData();
+            }
+          })
+          .catch(() => {});
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+
     return () => {
       window.removeEventListener('storage', handleStorageChange);
       if (syncChannel) {
         syncChannel.close();
       }
+      unsubStatus();
+      unsubRealtime();
+      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
     };
   }, [loadData]);
 
@@ -725,7 +795,31 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore
     }
+    // Queue debounced background backup to Supabase Cloud
+    queueCloudBackup(1200);
   };
+
+  const syncWithCloud = useCallback(async () => {
+    const res = await syncBidirectional();
+    if (res.action === 'pulled' || res.action === 'merged') {
+      loadData();
+    }
+    return res;
+  }, [loadData]);
+
+  const forcePushToCloud = useCallback(async () => {
+    const snap = db.exportFullDatabaseBackup();
+    const ts = await pushCloudSnapshot(snap);
+    return ts;
+  }, []);
+
+  const forcePullFromCloud = useCallback(async () => {
+    const remote = await fetchCloudSnapshot();
+    if (remote?.snapshot) {
+      db.restoreFullDatabaseBackup(remote.snapshot);
+      loadData();
+    }
+  }, [loadData]);
 
   const setCurrentUser = (id: string) => {
     db.setCurrentUser(id);
@@ -2003,7 +2097,14 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
           loadData();
           refreshState();
           return res;
-        }
+        },
+
+        // Supabase Live Cloud Database Synchronization
+        cloudSyncStatus,
+        syncWithCloud,
+        forcePushToCloud,
+        forcePullFromCloud,
+        isCloudSyncConfigured: isCloudSyncAvailable()
       }}
     >
       {children}

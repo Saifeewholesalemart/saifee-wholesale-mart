@@ -6,7 +6,7 @@ import {
   Database, Download, Upload, ShieldCheck, Clock, FileSpreadsheet, 
   FileText, CheckCircle2, AlertTriangle, RefreshCw, Trash2, HardDrive, 
   Layers, Package, Users, DollarSign, Calendar, Eye, AlertCircle, 
-  ArrowDownToLine, Zap, Check, Lock, Sparkles, Server
+  ArrowDownToLine, Zap, Check, Lock, Sparkles, Server, Cloud, ArrowUpCircle, ArrowDownCircle
 } from 'lucide-react';
 import { 
   downloadJsonBackup, 
@@ -46,8 +46,15 @@ export default function DatabaseBackupPage() {
     cashFlowTransactions,
     profiles,
     exportFullDatabaseBackup, 
-    restoreFullDatabaseBackup 
+    restoreFullDatabaseBackup,
+    cloudSyncStatus,
+    syncWithCloud,
+    forcePushToCloud,
+    forcePullFromCloud,
+    isCloudSyncConfigured
   } = useDb();
+
+  const [isCloudActionRunning, setIsCloudActionRunning] = useState(false);
 
   // Toast / notification feedback
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
@@ -116,6 +123,43 @@ export default function DatabaseBackupPage() {
       // ignore
     }
     showToast(customNote || 'Database backup created and downloaded successfully.');
+  };
+
+  // Cloud Database Sync Handlers
+  const handleSyncCloudNow = async () => {
+    setIsCloudActionRunning(true);
+    try {
+      const res = await syncWithCloud();
+      showToast(res.message || 'Synchronized with Supabase Cloud successfully', 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Cloud synchronization failed', 'error');
+    } finally {
+      setIsCloudActionRunning(false);
+    }
+  };
+
+  const handleForcePushCloud = async () => {
+    setIsCloudActionRunning(true);
+    try {
+      const ts = await forcePushToCloud();
+      showToast(`Uploaded local database to Supabase Cloud (${new Date(ts).toLocaleTimeString('en-IN')})`, 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Failed to upload to Cloud', 'error');
+    } finally {
+      setIsCloudActionRunning(false);
+    }
+  };
+
+  const handleForcePullCloud = async () => {
+    setIsCloudActionRunning(true);
+    try {
+      await forcePullFromCloud();
+      showToast('Downloaded latest database from Supabase Cloud', 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Failed to download from Cloud', 'error');
+    } finally {
+      setIsCloudActionRunning(false);
+    }
   };
 
   // 1. One-click Full JSON Backup Download
@@ -433,6 +477,72 @@ export default function DatabaseBackupPage() {
           </div>
           <div className="w-10 h-10 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
             <HardDrive className="w-5 h-5" />
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 0: SUPABASE LIVE CLOUD DATABASE CARD */}
+      <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden">
+        <div className="p-6 md:p-8 bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-900 text-white flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-2 max-w-2xl">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold uppercase tracking-wider">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+              Live Supabase Cloud Sync
+            </div>
+            <h2 className="text-2xl font-black tracking-tight text-white flex items-center gap-2.5">
+              <Cloud className="w-7 h-7 text-emerald-400" />
+              Centralized Cloud Database
+            </h2>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Synchronize your products, purchases, inventory, and invoices across all your devices in real time. Any purchase or product (like Joy Body lotion) is automatically saved to your cloud Supabase database and available on all phones and computers.
+            </p>
+            <div className="flex flex-wrap items-center gap-4 pt-1 text-xs text-slate-400">
+              <span className="flex items-center gap-1.5 font-medium">
+                <Server className="w-3.5 h-3.5 text-indigo-400" /> Endpoint: <code className="text-indigo-200">wxctglnnybhhptkxwxur.supabase.co</code>
+              </span>
+              <span className="flex items-center gap-1.5 font-medium">
+                <Clock className="w-3.5 h-3.5 text-emerald-400" /> Last Cloud Sync:{' '}
+                <strong className="text-emerald-300">
+                  {cloudSyncStatus.lastSyncedAt
+                    ? new Date(cloudSyncStatus.lastSyncedAt).toLocaleString('en-IN')
+                    : 'Not synced yet'}
+                </strong>
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={handleSyncCloudNow}
+              disabled={isCloudActionRunning}
+              className="inline-flex items-center justify-center gap-2.5 px-6 py-3.5 bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-slate-950 font-black rounded-xl text-sm transition-all shadow-lg shadow-emerald-500/20 cursor-pointer transform hover:-translate-y-0.5 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-5 h-5 stroke-[2.5] ${isCloudActionRunning ? 'animate-spin' : ''}`} />
+              <span>Sync Cloud Now</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleForcePushCloud}
+              disabled={isCloudActionRunning}
+              title="Upload this device's current products and purchases to Supabase Cloud"
+              className="inline-flex items-center justify-center gap-2 px-4 py-3.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold rounded-xl text-sm transition-all shadow-md cursor-pointer disabled:opacity-50"
+            >
+              <ArrowUpCircle className="w-4 h-4 text-indigo-200" />
+              <span>Push Local to Cloud</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleForcePullCloud}
+              disabled={isCloudActionRunning}
+              title="Download latest data from Supabase Cloud to this device"
+              className="inline-flex items-center justify-center gap-2 px-4 py-3.5 bg-white/10 hover:bg-white/20 active:bg-white/5 text-white font-bold rounded-xl text-sm transition-all border border-white/10 cursor-pointer disabled:opacity-50"
+            >
+              <ArrowDownCircle className="w-4 h-4 text-slate-300" />
+              <span>Pull from Cloud</span>
+            </button>
           </div>
         </div>
       </div>
