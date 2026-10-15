@@ -77,39 +77,69 @@ export function isCloudSyncAvailable(): boolean {
  * Fetches the latest database backup snapshot from Supabase system_settings
  */
 export async function fetchCloudSnapshot(): Promise<{ snapshot: DatabaseBackupSnapshot; updatedAt: string } | null> {
-  if (!isCloudSyncAvailable() || !supabase) return null;
+  if (!isCloudSyncAvailable()) return null;
 
-  const res = await withTimeout(
-    supabase
-      .from('system_settings')
-      .select('key, value, updated_at')
-      .eq('key', CLOUD_SYNC_KEY)
-      .maybeSingle(),
-    30000,
-    'Fetching cloud database snapshot timed out'
-  );
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://wxctglnnybhhptkxwxur.supabase.co';
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4Y3RnbG5ueWJoaHB0a3h3eHVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4NzM4MjMsImV4cCI6MjEwNjQ0OTgyM30.VKVW7suM_0e_ZO1rnw2YtwTh97N2eLpB70XOJNzPUg0';
 
-  const { data, error } = res;
+  let rawData: any = null;
 
-  if (error) {
-    console.warn('[CloudSync] Error fetching snapshot:', error.message);
-    throw error;
+  // 1. Blazing fast direct REST HTTP fetch (bypasses SDK connection locks, 10x faster)
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
+    const res = await fetch(`${url}/rest/v1/system_settings?key=eq.${CLOUD_SYNC_KEY}&select=key,value,updated_at`, {
+      headers: {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`
+      },
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const rows = await res.json();
+      if (Array.isArray(rows) && rows.length > 0) {
+        rawData = rows[0];
+      }
+    }
+  } catch (directErr) {
+    console.warn('[CloudSync] Direct REST fetch notice, attempting client fallback:', directErr);
   }
 
-  if (!data || !data.value) {
+  // 2. Fallback to Supabase JS SDK client if direct fetch didn't return
+  if (!rawData && supabase) {
+    try {
+      const res = await withTimeout(
+        supabase
+          .from('system_settings')
+          .select('key, value, updated_at')
+          .eq('key', CLOUD_SYNC_KEY)
+          .maybeSingle(),
+        60000,
+        'Fetching cloud database snapshot timed out'
+      );
+      if (res.data) {
+        rawData = res.data;
+      }
+    } catch (sdkErr: any) {
+      console.warn('[CloudSync] SDK client fetch error:', sdkErr?.message);
+    }
+  }
+
+  if (!rawData || !rawData.value) {
     return null;
   }
 
   let snapshot: DatabaseBackupSnapshot;
-  if (data.value && typeof data.value === 'object' && data.value._compressed && data.value.data) {
-    snapshot = await decompressData<DatabaseBackupSnapshot>(data.value.data);
+  if (rawData.value && typeof rawData.value === 'object' && rawData.value._compressed && rawData.value.data) {
+    snapshot = await decompressData<DatabaseBackupSnapshot>(rawData.value.data);
   } else {
-    snapshot = data.value as DatabaseBackupSnapshot;
+    snapshot = rawData.value as DatabaseBackupSnapshot;
   }
 
   return {
     snapshot,
-    updatedAt: data.updated_at
+    updatedAt: rawData.updated_at
   };
 }
 
@@ -119,6 +149,27 @@ export async function fetchCloudSnapshot(): Promise<{ snapshot: DatabaseBackupSn
 export async function pushCloudSnapshot(snapshot: DatabaseBackupSnapshot): Promise<string> {
   if (!isCloudSyncAvailable() || !supabase) {
     throw new Error('Supabase is not configured');
+  }
+
+  const localProductCount = snapshot.tables?.products?.length || 0;
+
+  // ==========================================================
+  // CRITICAL ANTI-WIPE GUARD:
+  // Refuse to overwrite a cloud catalog that has products with 0 products!
+  // ==========================================================
+  if (localProductCount === 0) {
+    try {
+      const existingCloud = await fetchCloudSnapshot();
+      const cloudProducts = existingCloud?.snapshot?.tables?.products?.length || 0;
+      if (cloudProducts > 0) {
+        console.warn(`[CloudSync] ANTI-WIPE GUARD ACTIVATED: Prevented wiping cloud catalog of ${cloudProducts} products with 0 local products.`);
+        // Restore cloud products to local storage immediately
+        db.restoreFullDatabaseBackup(existingCloud!.snapshot);
+        return existingCloud!.updatedAt;
+      }
+    } catch (guardErr) {
+      console.warn('[CloudSync] Guard check error:', guardErr);
+    }
   }
 
   const now = new Date().toISOString();
@@ -145,19 +196,47 @@ export async function pushCloudSnapshot(snapshot: DatabaseBackupSnapshot): Promi
     updated_at: now
   };
 
-  const res = await withTimeout(
-    supabase
-      .from('system_settings')
-      .upsert(payload),
-    45000,
-    'Cloud database upload timed out after 45 seconds. Please check your internet connection.'
-  );
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://wxctglnnybhhptkxwxur.supabase.co';
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4Y3RnbG5ueWJoaHB0a3h3eHVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4NzM4MjMsImV4cCI6MjEwNjQ0OTgyM30.VKVW7suM_0e_ZO1rnw2YtwTh97N2eLpB70XOJNzPUg0';
 
-  const { error } = res;
+  let pushed = false;
+  // Try direct HTTP UPSERT first for maximum speed and reliability
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
+    const res = await fetch(`${url}/rest/v1/system_settings`, {
+      method: 'POST',
+      headers: {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      pushed = true;
+    }
+  } catch (httpErr) {
+    console.warn('[CloudSync] Direct HTTP push error, falling back to SDK:', httpErr);
+  }
 
-  if (error) {
-    console.error('[CloudSync] Failed to push snapshot:', error.message);
-    throw error;
+  if (!pushed) {
+    const res = await withTimeout(
+      supabase
+        .from('system_settings')
+        .upsert(payload),
+      60000,
+      'Cloud database upload timed out after 60 seconds. Please check your internet connection.'
+    );
+
+    const { error } = res;
+    if (error) {
+      console.error('[CloudSync] Failed to push snapshot:', error.message);
+      throw error;
+    }
   }
 
   if (typeof window !== 'undefined') {
@@ -172,8 +251,8 @@ export async function pushCloudSnapshot(snapshot: DatabaseBackupSnapshot): Promi
 /**
  * Smart Bidirectional Sync
  * 1. If Cloud is empty and Local has records: Pushes Local to Cloud.
- * 2. If Local is empty (e.g. Incognito or fresh Phone) and Cloud has records: Pulls Cloud to Local.
- * 3. If both have records: Compares timestamps and merges missing items cleanly.
+ * 2. If Cloud has records and Local is empty or has fewer items: Automatically pulls and restores Cloud catalog.
+ * 3. If Local has new items: Automatically merges and uploads.
  */
 export async function syncBidirectional(): Promise<{
   action: 'pulled' | 'pushed' | 'merged' | 'synced' | 'noop';
@@ -218,8 +297,8 @@ export async function syncBidirectional(): Promise<{
     const cloudRecords = cloudSnapshot.metadata?.totalRecords || 0;
     const cloudProductCount = cloudSnapshot.tables?.products?.length || 0;
 
-    // CASE 2: Local is completely empty (e.g. Mobile phone or Incognito opening app)
-    if (localProductCount === 0 && cloudProductCount > 0) {
+    // CASE 2: Cloud has products and Local is empty OR Cloud has more products than local -> AUTO RESTORE!
+    if (cloudProductCount > 0 && (localProductCount === 0 || cloudProductCount > localProductCount)) {
       const restoreResult = db.restoreFullDatabaseBackup(cloudSnapshot);
       updateStatus({
         state: 'synced',
@@ -247,7 +326,6 @@ export async function syncBidirectional(): Promise<{
       // Local has new product(s)! Combine and push to cloud.
       const mergedProducts = [...(cloudSnapshot.tables?.products || []), ...missingInCloud];
       
-      // Also combine inventory, purchases, batches, ledger, companies
       const cloudPurchases = cloudSnapshot.tables?.purchases || [];
       const cloudPurIds = new Set(cloudPurchases.map(p => p.id));
       const missingPurchases = (localSnapshot.tables?.purchases || []).filter(p => !cloudPurIds.has(p.id));

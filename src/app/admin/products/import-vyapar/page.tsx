@@ -318,6 +318,18 @@ export default function VyaparProductImportPage() {
       setProgressPercent(100);
       setProgressText('Import completed successfully!');
       setCurrentStep('complete');
+
+      // ZERO-CLICK AUTO-SYNC: Automatically push to Supabase Cloud in background
+      setCloudSyncing(true);
+      syncWithCloud()
+        .then((syncRes) => {
+          setCloudSyncing(false);
+          setCloudSyncResult(syncRes.message || 'Auto-synced with Supabase Cloud successfully!');
+        })
+        .catch((err) => {
+          setCloudSyncing(false);
+          console.warn('[VyaparImport] Background cloud auto-sync notice:', err);
+        });
     } catch (err: any) {
       alert(`Import error: ${err?.message || 'Failed to complete batch import.'}`);
       setCurrentStep('preview');

@@ -683,7 +683,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
       // Run initial smart cloud sync only after local hydration is fully complete
       syncBidirectional()
         .then((res) => {
-          if (res.action === 'pulled' || res.action === 'merged') {
+          if (res.action === 'pulled' || res.action === 'merged' || res.action === 'synced') {
             loadData();
           }
         })
@@ -726,7 +726,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     const unsubRealtime = setupRealtimeSubscription(() => {
       syncBidirectional()
         .then((res) => {
-          if (res.action === 'pulled' || res.action === 'merged') {
+          if (res.action === 'pulled' || res.action === 'merged' || res.action === 'synced') {
             loadData();
           }
         })
@@ -738,7 +738,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         syncBidirectional()
           .then((res) => {
-            if (res.action === 'pulled' || res.action === 'merged') {
+            if (res.action === 'pulled' || res.action === 'merged' || res.action === 'synced') {
               loadData();
             }
           })
