@@ -15,11 +15,12 @@ export function CloudSyncStatusButton({ className = '' }: { className?: string }
     if (isSyncing || !isCloudSyncConfigured) return;
     setIsManualSyncing(true);
     try {
-      await syncWithCloud();
+      const res = await syncWithCloud();
       setJustSynced(true);
       setTimeout(() => setJustSynced(false), 3000);
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Manual sync failed:', e);
+      alert(`Cloud sync error: ${e?.message || 'Could not synchronize with Supabase'}`);
     } finally {
       setIsManualSyncing(false);
     }

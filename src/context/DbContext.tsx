@@ -677,6 +677,21 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
 
   // Cross-tab / Cross-portal Real-time Synchronization Engine
   useEffect(() => {
+    // 0. Initialize and hydrate from high-capacity IndexedDB on startup
+    db.initIndexedDB().then(() => {
+      loadData();
+      // Run initial smart cloud sync only after local hydration is fully complete
+      syncBidirectional()
+        .then((res) => {
+          if (res.action === 'pulled' || res.action === 'merged') {
+            loadData();
+          }
+        })
+        .catch((err) => {
+          console.warn('[DbContext] Initial cloud sync notice:', err);
+        });
+    });
+
     loadData();
 
     // 1. Storage Event Listener (triggers across browser tabs when localStorage changes)
@@ -706,17 +721,6 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     const unsubStatus = subscribeToSyncStatus((status) => {
       setCloudSyncStatus(status);
     });
-
-    // Run initial smart cloud sync on mount
-    syncBidirectional()
-      .then((res) => {
-        if (res.action === 'pulled' || res.action === 'merged') {
-          loadData();
-        }
-      })
-      .catch((err) => {
-        console.warn('[DbContext] Initial cloud sync notice:', err);
-      });
 
     // Listen for real-time remote updates from Supabase
     const unsubRealtime = setupRealtimeSubscription(() => {

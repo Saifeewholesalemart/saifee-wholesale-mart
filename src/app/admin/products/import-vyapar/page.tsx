@@ -9,7 +9,7 @@ import {
   ArrowRight, ArrowLeft, RefreshCw, X, Search, Filter, Eye, Download, 
   RotateCcw, Package, Layers, ShieldCheck, HelpCircle, Check, Sparkles, 
   Boxes, Landmark, ChevronRight, Info, AlertOctagon, History, FileText,
-  SlidersHorizontal, ChevronDown, CheckCheck
+  SlidersHorizontal, ChevronDown, CheckCheck, Cloud
 } from 'lucide-react';
 import { 
   TARGET_PRODUCT_FIELDS, TargetFieldDef, ProcessedImportRow,
@@ -25,7 +25,7 @@ type ImportStep = 'upload' | 'mapping' | 'preview' | 'confirm' | 'processing' | 
 export default function VyaparProductImportPage() {
   const { 
     products, companies, vyaparImports, executeVyaparBatchImport, 
-    rollbackVyaparImport, currentUser, refreshState 
+    rollbackVyaparImport, currentUser, refreshState, syncWithCloud 
   } = useDb();
   const router = useRouter();
 
@@ -60,6 +60,23 @@ export default function VyaparProductImportPage() {
   const [progressPercent, setProgressPercent] = useState(0);
   const [progressText, setProgressText] = useState('');
   const [importResult, setImportResult] = useState<{ importId: string; batch: VyaparImportBatch } | null>(null);
+
+  // Cloud Sync state on complete step
+  const [cloudSyncing, setCloudSyncing] = useState(false);
+  const [cloudSyncResult, setCloudSyncResult] = useState<string | null>(null);
+
+  const handleSyncToCloudNow = async () => {
+    setCloudSyncing(true);
+    setCloudSyncResult(null);
+    try {
+      const res = await syncWithCloud();
+      setCloudSyncResult(res.message || 'Catalog synchronized with Supabase Cloud successfully!');
+    } catch (err: any) {
+      alert(`Sync notice: ${err?.message || 'Failed to sync with Supabase'}`);
+    } finally {
+      setCloudSyncing(false);
+    }
+  };
 
   // History Tab States
   const [selectedHistoryBatch, setSelectedHistoryBatch] = useState<VyaparImportBatch | null>(null);
@@ -272,16 +289,17 @@ export default function VyaparProductImportPage() {
       data: r.normalizedData
     }));
 
-    // Non-blocking chunked simulation to show progress bar
-    const chunkSize = 25;
-    const totalChunks = Math.ceil(mappedPayload.length / chunkSize) || 1;
+    // Fast non-blocking chunked simulation to show progress bar
+    const totalItems = mappedPayload.length;
+    const totalChunks = Math.min(25, totalItems) || 1;
+    const chunkSize = Math.ceil(totalItems / totalChunks) || 1;
 
     for (let i = 0; i < totalChunks; i++) {
-      const currentCount = Math.min(mappedPayload.length, (i + 1) * chunkSize);
-      const percent = Math.round((currentCount / (mappedPayload.length || 1)) * 90);
+      const currentCount = Math.min(totalItems, (i + 1) * chunkSize);
+      const percent = Math.round((currentCount / (totalItems || 1)) * 90);
       setProgressPercent(percent);
-      setProgressText(`Processing batch ${i + 1} of ${totalChunks} (${currentCount} of ${mappedPayload.length} items)...`);
-      await new Promise(res => setTimeout(res, 80));
+      setProgressText(`Writing to high-capacity storage: ${currentCount} of ${totalItems} items...`);
+      await new Promise(res => setTimeout(res, 30));
     }
 
     setProgressPercent(95);
@@ -334,6 +352,7 @@ export default function VyaparProductImportPage() {
     setColumnMapping({});
     setProcessedRows([]);
     setImportResult(null);
+    setCloudSyncResult(null);
     setCurrentStep('upload');
   };
 
@@ -1095,6 +1114,41 @@ export default function VyaparProductImportPage() {
                   <span className="text-xs font-bold text-purple-700 uppercase block">Stock Inwarded</span>
                   <span className="text-lg font-black text-purple-700">{importResult.batch.stock_units_imported} Pcs</span>
                 </div>
+              </div>
+
+              {/* Cloud Sync Call-to-Action Card */}
+              <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-left">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <Cloud className="w-4 h-4 text-indigo-600" />
+                    <h4 className="text-xs font-black text-indigo-950">Synchronize to Supabase Cloud</h4>
+                  </div>
+                  <p className="text-[11px] text-indigo-700/80">
+                    {cloudSyncResult || 'Upload all imported items to your Supabase Cloud database so they appear across all computers and salesperson phones.'}
+                  </p>
+                </div>
+                <button
+                  onClick={handleSyncToCloudNow}
+                  disabled={cloudSyncing}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-2 self-start sm:self-auto cursor-pointer disabled:opacity-50 shrink-0"
+                >
+                  {cloudSyncing ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Syncing Catalog...</span>
+                    </>
+                  ) : cloudSyncResult ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Cloud Synced!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Sync to Cloud Now</span>
+                    </>
+                  )}
+                </button>
               </div>
 
               {/* Action Buttons */}

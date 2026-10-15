@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { db, DatabaseBackupSnapshot } from './db';
+import { compressData, decompressData } from './compressionUtils';
 
 export type SyncState = 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
 
@@ -51,6 +52,21 @@ function updateStatus(updates: Partial<CloudSyncStatus>) {
 }
 
 /**
+ * Timeout wrapper for network operations to prevent infinite hanging
+ */
+async function withTimeout<T>(
+  promise: PromiseLike<T>,
+  timeoutMs = 45000,
+  errorMsg = 'Cloud network request timed out. Please check your internet connection.'
+): Promise<T> {
+  let timer: any;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(errorMsg)), timeoutMs);
+  });
+  return Promise.race([Promise.resolve(promise), timeoutPromise]).finally(() => clearTimeout(timer));
+}
+
+/**
  * Checks if Supabase connection is enabled and configured
  */
 export function isCloudSyncAvailable(): boolean {
@@ -63,11 +79,17 @@ export function isCloudSyncAvailable(): boolean {
 export async function fetchCloudSnapshot(): Promise<{ snapshot: DatabaseBackupSnapshot; updatedAt: string } | null> {
   if (!isCloudSyncAvailable() || !supabase) return null;
 
-  const { data, error } = await supabase
-    .from('system_settings')
-    .select('key, value, updated_at')
-    .eq('key', CLOUD_SYNC_KEY)
-    .maybeSingle();
+  const res = await withTimeout(
+    supabase
+      .from('system_settings')
+      .select('key, value, updated_at')
+      .eq('key', CLOUD_SYNC_KEY)
+      .maybeSingle(),
+    30000,
+    'Fetching cloud database snapshot timed out'
+  );
+
+  const { data, error } = res;
 
   if (error) {
     console.warn('[CloudSync] Error fetching snapshot:', error.message);
@@ -78,14 +100,21 @@ export async function fetchCloudSnapshot(): Promise<{ snapshot: DatabaseBackupSn
     return null;
   }
 
+  let snapshot: DatabaseBackupSnapshot;
+  if (data.value && typeof data.value === 'object' && data.value._compressed && data.value.data) {
+    snapshot = await decompressData<DatabaseBackupSnapshot>(data.value.data);
+  } else {
+    snapshot = data.value as DatabaseBackupSnapshot;
+  }
+
   return {
-    snapshot: data.value as DatabaseBackupSnapshot,
+    snapshot,
     updatedAt: data.updated_at
   };
 }
 
 /**
- * Pushes a complete database snapshot to Supabase system_settings
+ * Pushes a complete database snapshot to Supabase system_settings with high-efficiency gzip compression
  */
 export async function pushCloudSnapshot(snapshot: DatabaseBackupSnapshot): Promise<string> {
   if (!isCloudSyncAvailable() || !supabase) {
@@ -93,15 +122,38 @@ export async function pushCloudSnapshot(snapshot: DatabaseBackupSnapshot): Promi
   }
 
   const now = new Date().toISOString();
+  let payloadValue: any;
+
+  try {
+    const compressedBase64 = await compressData(snapshot);
+    payloadValue = {
+      _compressed: true,
+      _encoding: 'gzip-base64',
+      data: compressedBase64,
+      metadata: snapshot.metadata,
+      version: snapshot.version,
+      timestamp: snapshot.timestamp
+    };
+  } catch (compErr) {
+    console.warn('[CloudSync] Compression fallback:', compErr);
+    payloadValue = snapshot;
+  }
+
   const payload = {
     key: CLOUD_SYNC_KEY,
-    value: snapshot,
+    value: payloadValue,
     updated_at: now
   };
 
-  const { error } = await supabase
-    .from('system_settings')
-    .upsert(payload);
+  const res = await withTimeout(
+    supabase
+      .from('system_settings')
+      .upsert(payload),
+    45000,
+    'Cloud database upload timed out after 45 seconds. Please check your internet connection.'
+  );
+
+  const { error } = res;
 
   if (error) {
     console.error('[CloudSync] Failed to push snapshot:', error.message);
@@ -192,10 +244,10 @@ export async function syncBidirectional(): Promise<{
     const missingInLocal = (cloudSnapshot.tables?.products || []).filter(p => !localProdIds.has(p.id));
 
     if (missingInCloud.length > 0) {
-      // Local has new product(s) like "Joy Body lotion"! Combine and push to cloud.
+      // Local has new product(s)! Combine and push to cloud.
       const mergedProducts = [...(cloudSnapshot.tables?.products || []), ...missingInCloud];
       
-      // Also combine inventory, purchases, batches if any missing
+      // Also combine inventory, purchases, batches, ledger, companies
       const cloudPurchases = cloudSnapshot.tables?.purchases || [];
       const cloudPurIds = new Set(cloudPurchases.map(p => p.id));
       const missingPurchases = (localSnapshot.tables?.purchases || []).filter(p => !cloudPurIds.has(p.id));
@@ -206,6 +258,21 @@ export async function syncBidirectional(): Promise<{
       const missingInv = (localSnapshot.tables?.inventory || []).filter(i => !cloudInvIds.has(i.product_id));
       const mergedInv = [...cloudInv, ...missingInv];
 
+      const cloudBatches = cloudSnapshot.tables?.batches || [];
+      const cloudBatchIds = new Set(cloudBatches.map(b => b.id));
+      const missingBatches = (localSnapshot.tables?.batches || []).filter(b => !cloudBatchIds.has(b.id));
+      const mergedBatches = [...cloudBatches, ...missingBatches];
+
+      const cloudLedger = cloudSnapshot.tables?.stock_ledger || [];
+      const cloudLedgerIds = new Set(cloudLedger.map(l => l.id));
+      const missingLedger = (localSnapshot.tables?.stock_ledger || []).filter(l => !cloudLedgerIds.has(l.id));
+      const mergedLedger = [...cloudLedger, ...missingLedger];
+
+      const cloudCompanies = cloudSnapshot.tables?.companies || [];
+      const cloudCompIds = new Set(cloudCompanies.map(c => c.id));
+      const missingCompanies = (localSnapshot.tables?.companies || []).filter(c => !cloudCompIds.has(c.id));
+      const mergedCompanies = [...cloudCompanies, ...missingCompanies];
+
       const mergedSnapshot: DatabaseBackupSnapshot = {
         ...localSnapshot,
         timestamp: new Date().toISOString(),
@@ -213,13 +280,17 @@ export async function syncBidirectional(): Promise<{
           ...localSnapshot.tables,
           products: mergedProducts,
           purchases: mergedPurchases,
-          inventory: mergedInv
+          inventory: mergedInv,
+          batches: mergedBatches,
+          stock_ledger: mergedLedger,
+          companies: mergedCompanies
         },
         metadata: {
           ...localSnapshot.metadata,
           productsCount: mergedProducts.length,
           purchasesCount: mergedPurchases.length,
-          inventoryCount: mergedInv.length
+          inventoryCount: mergedInv.length,
+          batchesCount: mergedBatches.length
         }
       };
 

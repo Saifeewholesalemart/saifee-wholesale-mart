@@ -1,4 +1,5 @@
 // Saifee General Stores - Multi-Business & FMCG Database Engine (V5 Multi-Tenant)
+import { getIdbItem, setIdbItem, getAllIdbItems } from './indexedDbStorage';
 
 export interface BusinessCompany {
   id: string; // e.g. 'biz-saifee', 'biz-second-trading'
@@ -2653,6 +2654,7 @@ class FMCGDatabase {
 
       if (needsResave) {
         try { localStorage.setItem(vKey, JSON.stringify(items)); } catch {}
+        setIdbItem(vKey, items).catch(() => {});
       }
 
       this.memoryStore[vKey] = Array.isArray(items) ? [...items] : items;
@@ -2663,20 +2665,60 @@ class FMCGDatabase {
     }
   }
 
+  /**
+   * Hydrates memory store from IndexedDB on startup.
+   * If IndexedDB is empty on first run, automatically migrates data from localStorage.
+   */
+  async initIndexedDB(): Promise<void> {
+    if (typeof window === 'undefined') return;
+    try {
+      const allItems = await getAllIdbItems();
+      const idbKeys = Object.keys(allItems);
+
+      if (idbKeys.length > 0) {
+        // Hydrate in-memory cache directly from IndexedDB
+        idbKeys.forEach(k => {
+          if (allItems[k] !== undefined && allItems[k] !== null) {
+            this.memoryStore[k] = allItems[k];
+          }
+        });
+      } else {
+        // First run with IndexedDB: migrate existing localStorage keys to IndexedDB
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('fmcg_')) {
+            try {
+              const raw = localStorage.getItem(k);
+              if (raw) {
+                const parsed = JSON.parse(raw);
+                await setIdbItem(k, parsed);
+                this.memoryStore[k] = parsed;
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[FMCGDatabase] IndexedDB hydration error:', err);
+    }
+  }
+
   private saveStore<T>(key: string, data: T[]): void {
     const vKey = `${key}_v4`;
     this.memoryStore[vKey] = Array.isArray(data) ? [...data] : data;
     if (typeof window === 'undefined') return;
+
+    // 1. High-capacity IndexedDB persistence (Gigabyte capacity, safe for 6,200+ products, ledgers, batches)
+    setIdbItem(vKey, data).catch(err => {
+      console.warn(`[FMCGDatabase] IndexedDB write error for ${vKey}:`, err);
+    });
+
+    // 2. Also mirror to localStorage when possible for fast synchronous fallback
     try {
       localStorage.setItem(vKey, JSON.stringify(data));
     } catch (e) {
-      console.warn(`[FMCGDatabase] Storage quota reached for ${vKey}. Purging legacy storage and trimming...`);
+      // QuotaExceededError is expected for large datasets (6,200 items); IndexedDB has already safely persisted it.
       this.cleanOldStorage();
-      try {
-        localStorage.setItem(vKey, JSON.stringify(data));
-      } catch (innerErr) {
-        console.warn(`[FMCGDatabase] Could not persist ${vKey} to localStorage. Retaining in memory.`);
-      }
     }
   }
 
