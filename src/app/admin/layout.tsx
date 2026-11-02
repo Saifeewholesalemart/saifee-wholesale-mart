@@ -27,7 +27,8 @@ const MENU_ITEMS: MenuItem[] = [
   { name: 'Import from Vyapar', path: '/admin/products/import-vyapar', icon: FileSpreadsheet },
   { name: 'Godowns / Warehouses', path: '/admin/godowns', icon: Warehouse },
   { name: 'Categories', path: '/admin/categories', icon: Tags },
-  { name: 'Order Register', path: '/admin/orders', icon: ShoppingCart },
+  { name: 'Order Board', path: '/admin/order-board', icon: ClipboardList },
+  { name: 'Order Register (Advanced)', path: '/admin/orders', icon: ShoppingCart },
   { name: 'Purchases', path: '/admin/purchases', icon: PackageCheck },
   { name: 'AI Purchase Import', path: '/admin/purchase/import', icon: Cpu },
   { name: 'Inventory & Batch', path: '/admin/inventory', icon: Boxes },
@@ -120,7 +121,7 @@ function AdminSidebar({
 }
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
-  const { currentUser, setCurrentUser, activeCompany } = useDb();
+  const { currentUser, activeCompany, isAuthenticated, isAuthLoading, logout } = useDb();
   const router = useRouter();
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -130,10 +131,25 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     setSidebarOpen(false);
   }, [pathname]);
 
-  const handleLogout = () => {
-    setCurrentUser('p-admin-1');
-    router.push('/');
+  // Route protection: Guard admin portal from unauthenticated or non-admin access
+  const isAllowed = isAuthenticated && !!currentUser && (currentUser.role === 'admin' || currentUser.profile_type === 'ADMIN');
+  React.useEffect(() => {
+    if (!isAuthLoading && !isAllowed) {
+      router.replace('/');
+    }
+  }, [isAllowed, isAuthLoading, router]);
+
+  const handleLogout = async () => {
+    await logout();
   };
+
+  if (isAuthLoading || !isAllowed) {
+    return (
+      <div className="flex-1 min-h-screen flex items-center justify-center bg-slate-50">
+        <p className="text-sm font-semibold text-slate-600">{isAuthLoading ? 'Checking sign-in...' : 'Redirecting to login...'}</p>
+      </div>
+    );
+  }
 
   const currentTitle = MENU_ITEMS.find(m => m.path === pathname)?.name || `${activeCompany?.name || 'Saifee'} ERP`;
 
@@ -207,7 +223,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <div className="hidden md:block text-right">
               <span className="text-[10px] text-slate-400 font-bold block leading-none">LOCATION</span>
               <span className="text-xs font-semibold text-slate-700 mt-0.5 inline-block">
-                {activeCompany?.city || 'Mumbai'} ({activeCompany?.state_code || '27'})
+                {activeCompany?.city || 'Khachrod'} ({activeCompany?.state_code || '23'})
               </span>
             </div>
           </div>

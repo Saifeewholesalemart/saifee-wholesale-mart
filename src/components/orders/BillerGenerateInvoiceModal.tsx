@@ -1,5 +1,6 @@
 'use client';
 
+import { isIntraStateSupply, formatPlaceOfSupply, describeStockShortfall } from '@/lib/db';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
 import { RetailerPackingLot, PackingLotItem } from '@/lib/orderTerminalTypes';
@@ -111,7 +112,7 @@ export default function BillerGenerateInvoiceModal({
       const gstAmount = Math.round(lineTaxable * (gstPercent / 100) * 100) / 100;
 
       let cgst = 0, sgst = 0, igst = 0;
-      if (lot.retailer.state_code === '27' || !lot.retailer.state_code) {
+      if (isIntraStateSupply(lot.retailer.state_code)) {
         cgst = Math.round((gstAmount / 2) * 100) / 100;
         sgst = Math.round((gstAmount / 2) * 100) / 100;
       } else {
@@ -292,13 +293,15 @@ export default function BillerGenerateInvoiceModal({
       generateChallan
     }, currentUser ? { id: currentUser.id, name: currentUser.name } : undefined);
 
+    const shortMsg = describeStockShortfall();
     if (res && res.invoice) {
+      if (shortMsg) alert(shortMsg);
       if (onInvoiceGenerated) {
         onInvoiceGenerated(res.invoice, res.challan);
       }
       onClose();
     } else {
-      setErrorMessage('Failed to generate invoice. Please check packed quantities.');
+      setErrorMessage(shortMsg ? `Invoice not generated. ${shortMsg}` : 'Failed to generate invoice. Please check packed quantities.');
     }
   };
 
@@ -337,7 +340,7 @@ export default function BillerGenerateInvoiceModal({
             <span>Core Biller Rule: Invoice quantities are locked to physical packed quantities. Edit rate, flat ₹ discount, &amp; payment settlement below.</span>
           </div>
           <span className="text-[11px] text-slate-500 font-medium">
-            Place of Supply: <strong>State {lot.retailer.state_code || '27'}</strong>
+            Place of Supply: <strong>{formatPlaceOfSupply(lot.retailer.state_code)}</strong>
           </span>
         </div>
 

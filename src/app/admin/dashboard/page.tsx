@@ -88,7 +88,7 @@ export default function AdminDashboard() {
     const map: { [city: string]: { orderCount: number; cartonCount: number; retailerCount: Set<string> } } = {};
     eligiblePendingOrders.forEach(ord => {
       const ret = retailers.find(r => r.id === ord.retailer_id);
-      const city = ret?.city || 'Indore';
+      const city = ret?.city || 'Unknown';
       if (!map[city]) {
         map[city] = { orderCount: 0, cartonCount: 0, retailerCount: new Set<string>() };
       }
@@ -363,7 +363,7 @@ export default function AdminDashboard() {
                   <div>
                     <h4 className="font-extrabold text-slate-800 text-sm">{g.name}</h4>
                     <span className="text-[11px] text-slate-500 font-medium">
-                      {g.city || 'Indore'} {g.manager_name ? `• ${g.manager_name}` : ''}
+                      {g.city || ''} {g.manager_name ? `• ${g.manager_name}` : ''}
                     </span>
                   </div>
                 </div>

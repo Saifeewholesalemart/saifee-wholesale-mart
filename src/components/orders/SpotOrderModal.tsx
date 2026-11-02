@@ -1,5 +1,6 @@
 'use client';
 
+import { ensureWalkInRetailer, describeStockShortfall } from '@/lib/db';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -381,7 +382,8 @@ export default function SpotOrderModal({
     setIsSubmitting(true);
 
     try {
-      const targetRetailerId = isWalkIn ? 'ret-walkin-counter' : selectedRetailer!.id;
+      // Walk-in ke liye company ka asli "Counter / Walk-in Customer" record (bill sahi naam par bane)
+      const targetRetailerId = isWalkIn ? ensureWalkInRetailer().id : selectedRetailer!.id;
 
       // 1. Prepare Order Items
       const orderItems = orderCalculations.map(c => ({
@@ -464,9 +466,16 @@ export default function SpotOrderModal({
         });
 
         setIsSubmitting(false);
+        const shortMsg = describeStockShortfall();
+        if (shortMsg) {
+          alert(dispatchRes
+            ? shortMsg
+            : `Invoice not generated because the items are out of stock. Order ${newOrder.order_number} has been saved as a backorder. ${shortMsg}`);
+        }
         onClose();
-        if (onOrderCreated && dispatchRes) {
-          onOrderCreated(newOrder, dispatchRes.invoice, dispatchRes.challan);
+        if (onOrderCreated) {
+          if (dispatchRes) onOrderCreated(newOrder, dispatchRes.invoice, dispatchRes.challan);
+          else onOrderCreated(newOrder);
         }
       } else {
         setIsSubmitting(false);

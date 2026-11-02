@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { getAuthenticatedUser, validateCsrfOrigin } from '@/lib/authSession';
 
 // Active high-availability multimodal Gemini models in order of verified speed and reliability
 const CANDIDATE_MODELS = [
@@ -73,6 +74,25 @@ async function generateWithFallback(genAI: GoogleGenerativeAI, prompt: string, d
 
 export async function POST(request: NextRequest) {
   try {
+    if (!validateCsrfOrigin(request)) {
+      return NextResponse.json({ error: 'Forbidden: Cross-site request rejected.' }, { status: 403 });
+    }
+
+    const auth = await getAuthenticatedUser(request);
+    if (!auth) {
+      return NextResponse.json({ error: 'Authentication Required: Please sign in to import purchase invoices.' }, { status: 401 });
+    }
+
+    const allowed = 
+      auth.session.role === 'admin' || 
+      auth.session.role === 'staff' || 
+      auth.session.profileType === 'ADMIN' || 
+      auth.session.profileType === 'STAFF';
+
+    if (!allowed) {
+      return NextResponse.json({ error: 'Unauthorized: Staff or Administrator access required.' }, { status: 403 });
+    }
+
     const formData = await request.formData();
     const file = formData.get('file') as File;
 

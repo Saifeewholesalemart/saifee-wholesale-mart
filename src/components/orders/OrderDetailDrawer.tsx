@@ -1,5 +1,6 @@
 'use client';
 
+import { isIntraStateSupply, formatPlaceOfSupply } from '@/lib/db';
 import React, { useState, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -525,7 +526,7 @@ export default function OrderDetailDrawer({
             <div className="p-4 bg-slate-50/80 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="text-xs text-slate-500 space-y-1">
                 <p>Taxation Mode: <strong>GST Registered B2B Invoice</strong></p>
-                <p>State: <strong>Maharashtra (27) &bull; Intra-State (CGST + SGST)</strong></p>
+                <p>State: <strong>{formatPlaceOfSupply(retailer?.state_code)} &bull; {isIntraStateSupply(retailer?.state_code) ? 'Intra-State (CGST + SGST)' : 'Inter-State (IGST)'}</strong></p>
               </div>
 
               <div className="space-y-1.5 text-xs text-slate-700">

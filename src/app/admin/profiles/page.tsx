@@ -61,7 +61,7 @@ export default function ManageProfilesPage() {
   const [retOwnerName, setRetOwnerName] = useState('');
   const [retContactNo, setRetContactNo] = useState('');
   const [retShopAddress, setRetShopAddress] = useState('');
-  const [retCity, setRetCity] = useState('Indore');
+  const [retCity, setRetCity] = useState('Khachrod');
   const [retPassword, setRetPassword] = useState('');
   const [retShowPassword, setRetShowPassword] = useState(false);
   const [retGstin, setRetGstin] = useState('');
@@ -298,7 +298,7 @@ export default function ManageProfilesPage() {
         owner_name: retOwnerName.trim(),
         mobile: cleanMobile,
         address: retShopAddress.trim(),
-        city: retCity.trim() || 'Indore',
+        city: retCity.trim() || 'Khachrod',
         password: retPassword.trim(),
         gstin: retGstin.trim() ? retGstin.trim().toUpperCase() : undefined,
         credit_limit: parseFloat(retCreditLimit) || 50000
@@ -311,7 +311,7 @@ export default function ManageProfilesPage() {
       setRetOwnerName('');
       setRetContactNo('');
       setRetShopAddress('');
-      setRetCity('Indore');
+      setRetCity('Khachrod');
       setRetPassword('');
       setRetGstin('');
       setRetCreditLimit('50000');
@@ -824,7 +824,7 @@ export default function ManageProfilesPage() {
                       type="text"
                       value={retCity}
                       onChange={(e) => setRetCity(e.target.value)}
-                      placeholder="e.g. Indore, Dewas, Ujjain"
+                      placeholder="e.g. Khachrod, Nagda, Ujjain"
                       className="w-full bg-slate-50 border border-slate-300 px-3.5 py-2.5 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>

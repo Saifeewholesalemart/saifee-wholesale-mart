@@ -1,5 +1,6 @@
 'use client';
 
+import { isIntraStateSupply } from '@/lib/db';
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -109,7 +110,7 @@ export default function AdminBillingOverrideModal({
     return deriveOrderChannel(effectiveOrders[0]);
   }, [effectiveOrders]);
 
-  const isLocalGst = (retailer?.state_code || '27') === '27';
+  const isLocalGst = isIntraStateSupply(retailer?.state_code);
 
   // Real-time calculations across all overridden items
   const computedLines = useMemo(() => {

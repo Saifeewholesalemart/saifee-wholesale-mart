@@ -57,13 +57,18 @@ export function openIndexedDb(): Promise<IDBDatabase | null> {
 
   return dbOpenPromise;
 }
+// Memory fallback for environments without window.indexedDB (Node.js tests, SSR)
+const memoryFallbackStore = new Map<string, any>();
 
 /**
  * Retrieves an item from IndexedDB by key
  */
 export async function getIdbItem<T>(key: string): Promise<T | null> {
   const db = await openIndexedDb();
-  if (!db) return null;
+  if (!db) {
+    const item = memoryFallbackStore.get(key);
+    return item !== undefined ? (item as T) : null;
+  }
 
   return new Promise((resolve) => {
     try {
@@ -91,7 +96,10 @@ export async function getIdbItem<T>(key: string): Promise<T | null> {
  */
 export async function setIdbItem<T>(key: string, value: T): Promise<void> {
   const db = await openIndexedDb();
-  if (!db) return;
+  if (!db) {
+    memoryFallbackStore.set(key, value);
+    return;
+  }
 
   return new Promise((resolve) => {
     try {
@@ -116,7 +124,13 @@ export async function setIdbItem<T>(key: string, value: T): Promise<void> {
  */
 export async function getAllIdbItems(): Promise<Record<string, any>> {
   const db = await openIndexedDb();
-  if (!db) return {};
+  if (!db) {
+    const items: Record<string, any> = {};
+    memoryFallbackStore.forEach((val, k) => {
+      items[k] = val;
+    });
+    return items;
+  }
 
   return new Promise((resolve) => {
     try {
@@ -165,7 +179,10 @@ export async function getAllIdbItems(): Promise<Record<string, any>> {
  */
 export async function deleteIdbItem(key: string): Promise<void> {
   const db = await openIndexedDb();
-  if (!db) return;
+  if (!db) {
+    memoryFallbackStore.delete(key);
+    return;
+  }
 
   return new Promise((resolve) => {
     try {

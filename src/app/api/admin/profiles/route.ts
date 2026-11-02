@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getAuthenticatedUser, sanitizeProfiles, sanitizeProfile, validateCsrfOrigin } from '@/lib/authSession';
 
 export async function GET(req: NextRequest) {
   try {
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+
+    if (auth.session.role !== 'admin' && auth.session.profileType !== 'ADMIN') {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Administrator access required.' }, { status: 403 });
+    }
+
     const { searchParams } = new URL(req.url);
     const role = searchParams.get('role');
     const search = searchParams.get('search')?.toLowerCase().trim();
@@ -24,7 +34,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       count: profiles.length,
-      profiles
+      profiles: sanitizeProfiles(profiles)
     });
   } catch (err: any) {
     return NextResponse.json({
@@ -36,6 +46,19 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!validateCsrfOrigin(req)) {
+      return NextResponse.json({ success: false, error: 'Forbidden: Cross-site request rejected.' }, { status: 403 });
+    }
+
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+
+    if (auth.session.role !== 'admin' && auth.session.profileType !== 'ADMIN') {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Administrator access required.' }, { status: 403 });
+    }
+
     const body = await req.json();
     const { profileType } = body;
 
@@ -65,7 +88,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         message: 'Retailer Profile created successfully',
-        data: result
+        data: sanitizeProfile(result as any)
       }, { status: 201 });
     } else if (profileType === 'salesperson') {
       const { name, mobile, password, role, assigned_company_ids, assigned_category_ids, email } = body;
@@ -105,7 +128,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         message: 'Salesperson Profile created successfully',
-        data: profile
+        data: sanitizeProfile(profile)
       }, { status: 201 });
     } else if (profileType === 'staff') {
       const { full_name, name, contact_no, mobile, password, custom_role, email } = body;
@@ -130,7 +153,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         message: 'Staff / Job Worker Profile created successfully',
-        data: profile
+        data: sanitizeProfile(profile)
       }, { status: 201 });
     } else {
       return NextResponse.json({

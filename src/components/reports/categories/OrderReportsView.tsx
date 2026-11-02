@@ -45,7 +45,7 @@ export default function OrderReportsView({
           orderNumber: o.order_number,
           orderDate: o.order_date.slice(0, 10),
           retailerName: ret?.shop_name || 'Retailer',
-          city: ret?.city || 'Indore',
+          city: ret?.city || '',
           productName: prod?.name || 'Product',
           variantPacking: prod?.pack_size || '',
           tradingUnit: formatTradingUnit(prod?.trading_unit || 'Box'),

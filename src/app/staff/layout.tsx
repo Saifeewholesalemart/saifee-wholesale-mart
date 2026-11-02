@@ -5,17 +5,32 @@ import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
 import { Boxes, LogOut, ArrowLeft } from 'lucide-react';
 import RoleSwitcher from '@/components/RoleSwitcher';
+import { CloudSyncStatusButton } from '@/components/CloudSyncStatusButton';
 
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
-  const { currentUser, setCurrentUser } = useDb();
+  const { currentUser, isAuthenticated, isAuthLoading, logout } = useDb();
   const router = useRouter();
 
-  const handleExit = () => {
-    setCurrentUser('p-admin-1');
-    router.push('/');
+  const isAllowed = isAuthenticated && !!currentUser?.id;
+  React.useEffect(() => {
+    if (!isAuthLoading && !isAllowed) {
+      router.replace('/');
+    }
+  }, [isAllowed, isAuthLoading, router]);
+
+  const handleExit = async () => {
+    await logout();
   };
 
-  const workerName = currentUser?.name?.split(' ')[0] || 'Ramesh';
+  if (isAuthLoading || !isAllowed) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-100">
+        <p className="text-sm font-semibold text-slate-600">{isAuthLoading ? 'Checking sign-in...' : 'Redirecting to login...'}</p>
+      </div>
+    );
+  }
+
+  const workerName = currentUser?.name?.split(' ')[0] || 'Staff';
   const workerRole = currentUser?.custom_role || (currentUser?.role === 'staff' ? 'Packer' : 'Staff');
 
   return (
@@ -38,10 +53,8 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
 
         {/* Right: Shift/Status indicator (green dot + "Active") and Logout/Back button */}
         <div className="flex items-center gap-2 shrink-0">
-          <div className="hidden xs:flex items-center gap-1.5 bg-emerald-950/80 border border-emerald-800/80 px-2 py-0.5 rounded-md text-[11px] font-semibold text-emerald-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>Active</span>
-          </div>
+          {/* Cloud save status (Saved / Saving / Offline) */}
+          <CloudSyncStatusButton />
 
           <button
             type="button"

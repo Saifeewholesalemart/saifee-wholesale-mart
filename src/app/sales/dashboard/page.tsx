@@ -19,7 +19,7 @@ import OrderReviewModal from '@/components/orders/OrderReviewModal';
 
 export default function SalesDashboard() {
   const { 
-    currentUser, setCurrentUser, products, batches, retailers, orders, placeOrder, inventory, profiles,
+    currentUser, setCurrentUser, logout, products, batches, retailers, orders, placeOrder, inventory, profiles,
     companies, categories, getCategoriesForProduct,
     salespersonCart: cart, setSalespersonCart: setCart,
     getAssignedCategoriesForSalesperson, getAssignedCategoriesForRetailer,
@@ -30,15 +30,8 @@ export default function SalesDashboard() {
   
   const router = useRouter();
 
-  // Auto-switch to salesperson persona if not already set
-  useEffect(() => {
-    if (currentUser && currentUser.role !== 'sales_dist' && currentUser.role !== 'sales_co') {
-      const salesProfile = profiles.find(p => p.role === 'sales_dist' || p.role === 'sales_co');
-      if (salesProfile) {
-        setCurrentUser(salesProfile.id);
-      }
-    }
-  }, [currentUser, profiles, setCurrentUser]);
+  // (Removed: the page used to silently switch any visitor into a salesperson account.
+  //  Access is now checked on the server by src/proxy.ts.)
 
   // Mounted check to prevent SSR hydration mismatches
   const [mounted, setMounted] = useState(false);
@@ -477,9 +470,8 @@ export default function SalesDashboard() {
           </div>
         </div>
         <button 
-          onClick={() => {
-            setCurrentUser('p-admin-1'); // Switch back to admin/default
-            router.push('/');
+          onClick={async () => {
+            await logout();
           }} 
           className="text-xs text-slate-300 font-bold border border-slate-700 px-3 py-1.5 rounded hover:bg-slate-800 cursor-pointer"
         >
@@ -1307,7 +1299,7 @@ export default function SalesDashboard() {
                         <div>
                           <span className="font-black text-slate-900 text-sm block group-hover:text-cyan-700 transition-colors">{ord.order_number}</span>
                           <span className="text-[11px] text-slate-500 font-medium block mt-0.5">
-                            Shop: <strong className="text-slate-800 font-bold">{retObj?.shop_name || 'Retailer'}</strong> &bull; {retObj?.city || 'Indore'}
+                            Shop: <strong className="text-slate-800 font-bold">{retObj?.shop_name || 'Retailer'}</strong> &bull; {retObj?.city || ''}
                           </span>
                         </div>
                         <span className={`px-2 py-0.5 rounded-[4px] text-[10px] font-black uppercase tracking-wider shrink-0 ${
@@ -1504,7 +1496,7 @@ export default function SalesDashboard() {
         onClose={() => setAddRetailerModalOpen(false)}
         isQuickAdd={true}
         title="Register New Shop (Field Booking)"
-        defaultCity={selectedRetailer?.city || 'Indore'}
+        defaultCity={selectedRetailer?.city || 'Khachrod'}
         onSuccess={(newRetailer) => {
           setSelectedRetailerId(newRetailer.id);
           setOrderStep('catalog');
@@ -1546,7 +1538,7 @@ export default function SalesDashboard() {
                           )}
                         </div>
                         <span className="text-[11px] text-slate-500 font-medium">
-                          {targetRet?.city || 'Indore'} &bull; Past Orders in your scope ({retailerScopedOrders.length})
+                          {targetRet?.city || ''} &bull; Past Orders in your scope ({retailerScopedOrders.length})
                         </span>
                       </div>
                     </div>
@@ -1770,7 +1762,7 @@ export default function SalesDashboard() {
                     <div>
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Customer / Shop</span>
                       <strong className="text-slate-900 text-sm">{ret?.shop_name || 'Retailer'}</strong>
-                      <span className="text-slate-500 block text-[11px] mt-0.5">{ret?.owner_name} &bull; {ret?.city || 'Indore'} {ret?.mobile ? `(${ret.mobile})` : ''}</span>
+                      <span className="text-slate-500 block text-[11px] mt-0.5">{ret?.owner_name} &bull; {ret?.city || ''} {ret?.mobile ? `(${ret.mobile})` : ''}</span>
                     </div>
                     {ret?.retailer_code && (
                       <span className="self-start sm:self-auto px-2 py-1 bg-white border border-slate-200 rounded font-mono text-[11px] font-bold text-slate-700">

@@ -1,41 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/authSession';
 
 /**
  * GET /api/salesperson/orders/[id]
- * Retrieves order details strictly scoped to salesperson's authorized brand/category scope.
- * If Company Salesperson, hides out-of-scope line items and recalculates scoped invoice totals.
+ * Retrieves order details strictly scoped to authenticated salesperson's authorized brand/category scope.
+ * Client-supplied salesperson IDs are strictly ignored for non-admins.
  */
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
-    const resolvedParams = await params;
-    const orderId = resolvedParams.id;
-    const { searchParams } = new URL(req.url);
-    const salespersonId = 
-      searchParams.get('salesperson_id') || 
-      req.headers.get('x-salesperson-id') || 
-      db.getCurrentUser()?.id;
-
-    if (!salespersonId) {
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
       return NextResponse.json({
         success: false,
-        error: 'Authentication Required: salesperson_id must be provided in query parameters or x-salesperson-id header.'
+        error: 'Authentication Required: Please sign in to access order details.'
       }, { status: 401 });
     }
 
-    const profile = db.getProfiles().find(p => p.id === salespersonId);
+    const isAdmin = auth.session.role === 'admin' || auth.session.profileType === 'ADMIN';
+    const isSalesperson = 
+      auth.session.role === 'sales_dist' || 
+      auth.session.role === 'sales_co' || 
+      auth.session.profileType === 'SALESPERSON';
+
+    if (!isAdmin && !isSalesperson) {
+      return NextResponse.json({
+        success: false,
+        error: `Unauthorized: User role '${auth.session.role}' is not authorized for salesperson order APIs.`
+      }, { status: 403 });
+    }
+
+    const resolvedParams = await params;
+    const orderId = resolvedParams.id;
+    const { searchParams } = new URL(req.url);
+
+    // Strict Scope: Salesperson is strictly bound to session.userId; only admin can inspect other sales IDs
+    let targetSalespersonId = auth.session.userId;
+    if (isAdmin && searchParams.get('salesperson_id')) {
+      targetSalespersonId = searchParams.get('salesperson_id')!;
+    }
+
+    const profile = db.getProfiles().find(p => p.id === targetSalespersonId);
     if (!profile) {
       return NextResponse.json({
         success: false,
-        error: `Salesperson profile not found with ID: ${salespersonId}`
+        error: `Salesperson profile not found with ID: ${targetSalespersonId}`
       }, { status: 404 });
     }
 
     // Scoped order query
-    const scopedOrder = db.getScopedOrderByIdForSalesperson(orderId, salespersonId);
+    const scopedOrder = db.getScopedOrderByIdForSalesperson(orderId, targetSalespersonId);
 
     if (!scopedOrder) {
       // Check if order exists in general to provide a clear permission error

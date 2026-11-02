@@ -1,5 +1,6 @@
 'use client';
 
+import { getHomeStateCode, extractStateCode } from '@/lib/db';
 import React, { useState, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
 import { Retailer } from '@/lib/db';
@@ -15,7 +16,7 @@ interface AddRetailerModalProps {
   title?: string;
 }
 
-const COMMON_CITIES = ['Indore', 'Mumbai', 'Bhopal', 'Ujjain', 'Dewas', 'Thane', 'Navi Mumbai', 'Pune'];
+const COMMON_CITIES = ['Khachrod', 'Nagda', 'Ujjain', 'Ratlam', 'Badnagar', 'Jaora', 'Mahidpur', 'Indore'];
 
 export default function AddRetailerModal({
   isOpen,
@@ -23,7 +24,7 @@ export default function AddRetailerModal({
   onSuccess,
   initialData = null,
   isQuickAdd = false,
-  defaultCity = 'Indore',
+  defaultCity = 'Khachrod',
   title
 }: AddRetailerModalProps) {
   const { createRetailer, updateRetailer, retailers, categories } = useDb();
@@ -38,7 +39,7 @@ export default function AddRetailerModal({
   const [customCity, setCustomCity] = useState('');
   const [isCustomCity, setIsCustomCity] = useState(false);
   const [address, setAddress] = useState('');
-  const [stateCode, setStateCode] = useState('27');
+  const [stateCode, setStateCode] = useState(() => getHomeStateCode());
   const [gstin, setGstin] = useState('');
   const [creditLimit, setCreditLimit] = useState('50000');
   const [active, setActive] = useState(true);
@@ -72,7 +73,7 @@ export default function AddRetailerModal({
           setCustomCity('');
         }
         setAddress(initialData.address || '');
-        setStateCode(initialData.state_code || '27');
+        setStateCode(initialData.state_code || getHomeStateCode());
         setGstin(initialData.gstin || '');
         setCreditLimit(initialData.credit_limit?.toString() || '50000');
         setActive(initialData.active !== undefined ? initialData.active : true);
@@ -88,7 +89,7 @@ export default function AddRetailerModal({
         setIsCustomCity(false);
         setCustomCity('');
         setAddress('');
-        setStateCode('27');
+        setStateCode(getHomeStateCode());
         setGstin('');
         setCreditLimit(isQuickAdd ? '25000' : '50000');
         setActive(true);
@@ -172,7 +173,7 @@ export default function AddRetailerModal({
           mobile: mobile.trim(),
           city: effectiveCity,
           address: address.trim(),
-          state_code: stateCode.trim() || '27',
+          state_code: extractStateCode(gstin) || extractStateCode(stateCode) || getHomeStateCode(),
           gstin: gstin.trim() ? gstin.trim().toUpperCase() : undefined,
           credit_limit: parsedCreditLimit,
           active,
@@ -191,7 +192,7 @@ export default function AddRetailerModal({
           mobile: mobile.trim(),
           city: effectiveCity,
           address: address.trim(),
-          state_code: stateCode.trim() || '27',
+          state_code: extractStateCode(gstin) || extractStateCode(stateCode) || getHomeStateCode(),
           gstin: gstin.trim() ? gstin.trim().toUpperCase() : undefined,
           credit_limit: parsedCreditLimit,
           active,
@@ -399,7 +400,7 @@ export default function AddRetailerModal({
               </label>
               <input
                 type="text"
-                placeholder="27 (Maharashtra)"
+                placeholder="23 (Madhya Pradesh)"
                 value={stateCode}
                 onChange={(e) => setStateCode(e.target.value)}
                 className="w-full bg-white border border-slate-250 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:border-indigo-500 outline-none font-mono"

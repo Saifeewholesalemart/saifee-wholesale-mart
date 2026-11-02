@@ -1,5 +1,6 @@
 'use client';
 
+import { describeStockShortfall } from '@/lib/db';
 import React, { useState, useEffect, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -212,16 +213,21 @@ export default function OrderReviewConfirmModal({
 
     const confirmedOrder = confirmOrder(order.id, confirmsArray, adminUser);
 
-    // 3. Generate Tax Invoice if confirmed
+    // 3. Generate Tax Invoice if confirmed (sirf jitna stock hai utna; baaki backorder)
+    let billRes: any = null;
     if (confirmedOrder) {
-      dispatchOrder(confirmedOrder.id, {
+      billRes = dispatchOrder(confirmedOrder.id, {
         notes: 'Generated via Single-Order 1-Bill Engine',
         generateChallan: false
       }, adminUser);
     }
+    const shortMsg = describeStockShortfall();
+    if (shortMsg) alert(billRes ? shortMsg : `Invoice not generated. ${shortMsg}`);
 
     setIsProcessing(false);
-    setSuccessToast(`Order ${order.order_number} confirmed & Tax Invoice generated successfully!`);
+    setSuccessToast(billRes
+      ? `Order ${order.order_number} confirmed & Tax Invoice generated successfully!`
+      : `Order ${order.order_number} confirmed. No invoice was generated because the items are out of stock (backorder).`);
     setTimeout(() => {
       onSuccess?.();
       onClose();

@@ -9,7 +9,7 @@ import {
   ExternalLink, DollarSign, Barcode, Hash, Warehouse, RefreshCw,
   Sparkles, SlidersHorizontal, Info, Check, X, ShieldAlert, ArrowLeft,
   MoreVertical, Eye, History, ShoppingCart, FileSpreadsheet, ArrowUpRight, ArrowDownRight,
-  Building2, Calendar, ShieldCheck, Image as ImageIcon, Trash2, FolderPlus
+  Building2, Calendar, ShieldCheck, Trash2, FolderPlus
 } from 'lucide-react';
 import { 
   Product, Inventory, Company, BaseUnit, TradeMode, formatQuantityDisplay, calculateBaseQuantity, splitBaseQuantity,
@@ -17,6 +17,7 @@ import {
 } from '@/lib/db';
 import CentralItemDetailHub from '@/components/CentralItemDetailHub';
 import SmartSearchBar from '@/components/SmartSearchBar';
+import { buildSearchCorpusMap, filterCatalogueProducts } from '@/lib/catalogueSearch';
 
 function ProductsContent() {
   const router = useRouter();
@@ -45,7 +46,7 @@ function ProductsContent() {
     setProductCategories,
     getCategoriesForProduct,
     getCategoryIdsForProduct
-  } = useDb();
+  , godowns } = useDb();
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
@@ -123,7 +124,6 @@ function ProductsContent() {
   const [formSelectedCatIds, setFormSelectedCatIds] = useState<string[]>([]);
   const [formBatchTrackingEnabled, setFormBatchTrackingEnabled] = useState(true);
   const [formExpiryTrackingEnabled, setFormExpiryTrackingEnabled] = useState(true);
-  const [formImageUrl, setFormImageUrl] = useState('');
   const [formActive, setFormActive] = useState(true);
 
   // Initial Stock Fields
@@ -137,7 +137,7 @@ function ProductsContent() {
   const [formInitialExpiryDate, setFormInitialExpiryDate] = useState(
     new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
   );
-  const [formInitialGodown, setFormInitialGodown] = useState('Central Godown (Indore Hub)');
+  const [formInitialGodown, setFormInitialGodown] = useState('Main Godown');
   const [formInitialNotes, setFormInitialNotes] = useState('Opening Stock / Initial Purchase');
   const [formError, setFormError] = useState('');
 
@@ -277,7 +277,7 @@ function ProductsContent() {
       const inv = inventoryMap.get(p.id);
       const avail = inv?.available_qty || 0;
       const physical = inv?.physical_qty || 0;
-      const reorder = p.reorder_level || 10;
+      const reorder = p.reorder_level ?? 10;
       const unitsPerPack = p.units_per_box_carton || 24;
       val += (physical / unitsPerPack) * (p.purchase_price || 0);
       if (avail <= reorder && p.active) low++;
@@ -286,80 +286,24 @@ function ProductsContent() {
     return { totalValuation: Math.round(val), lowStockCount: low, inStockCount: inStock };
   }, [currentBusinessProducts, inventoryMap]);
 
-  // Filtered & Sorted Products (O(1) Map Lookups)
+  // High-Performance Precomputed Search Corpus Index (O(1) lookup per product, multi-word matching)
+  const productSearchCorpusMap = useMemo(() => {
+    return buildSearchCorpusMap(currentBusinessProducts, companyMap);
+  }, [currentBusinessProducts, companyMap]);
+
+  // Filtered & Sorted Products (O(1) Map Lookups & Tokenized Sub-Millisecond Search)
   const filteredProducts = useMemo(() => {
-    const q = searchTerm.trim().toLowerCase();
-    const hasQuery = q.length > 0;
-
-    const result: Product[] = [];
-    for (let i = 0; i < currentBusinessProducts.length; i++) {
-      const p = currentBusinessProducts[i];
-
-      // Company Filter
-      if (companyFilter !== 'all' && p.company_id !== companyFilter) continue;
-
-      // Category Filter (Optional filter)
-      if (categoryFilter !== 'all') {
-        const catIds = getCategoryIdsForProduct(p.id);
-        if (categoryFilter === 'uncategorized') {
-          if (catIds.length > 0) continue;
-        } else {
-          if (!catIds.includes(categoryFilter)) continue;
-        }
-      }
-
-      // Status Filter
-      if (statusFilter === 'active' && !p.active) continue;
-      if (statusFilter === 'inactive' && p.active) continue;
-
-      // Stock Status Filter
-      const inv = inventoryMap.get(p.id);
-      const avail = inv?.available_qty || 0;
-      const reorder = p.reorder_level || 10;
-      if (stockStatusFilter === 'in_stock' && avail <= 0) continue;
-      if (stockStatusFilter === 'out_of_stock' && avail > 0) continue;
-      if (stockStatusFilter === 'low_stock' && (avail > reorder || avail <= 0)) continue;
-
-      // Search Filter
-      if (hasQuery) {
-        const comp = companyMap.get(p.company_id || '');
-        const matchName = p.name ? p.name.toLowerCase().includes(q) : false;
-        const matchCode = p.product_code ? p.product_code.toLowerCase().includes(q) : false;
-        const matchSku = p.sku ? p.sku.toLowerCase().includes(q) : false;
-        const matchBarcode = p.barcode ? p.barcode.toLowerCase().includes(q) : false;
-        const matchBrand = p.brand ? p.brand.toLowerCase().includes(q) : false;
-        const matchCompany = comp?.name ? comp.name.toLowerCase().includes(q) : false;
-        const matchHsn = p.hsn ? p.hsn.toLowerCase().includes(q) : false;
-        if (!matchName && !matchCode && !matchSku && !matchBarcode && !matchBrand && !matchCompany && !matchHsn) {
-          continue;
-        }
-      }
-
-      result.push(p);
-    }
-
-    if (sortBy === 'name') return result.sort((a, b) => a.name.localeCompare(b.name));
-    if (sortBy === 'stock_desc') {
-      return result.sort((a, b) => {
-        const aInv = inventoryMap.get(a.id)?.available_qty || 0;
-        const bInv = inventoryMap.get(b.id)?.available_qty || 0;
-        return bInv - aInv;
-      });
-    }
-    if (sortBy === 'stock_asc') {
-      return result.sort((a, b) => {
-        const aInv = inventoryMap.get(a.id)?.available_qty || 0;
-        const bInv = inventoryMap.get(b.id)?.available_qty || 0;
-        return aInv - bInv;
-      });
-    }
-    if (sortBy === 'price_desc') return result.sort((a, b) => b.selling_price - a.selling_price);
-    if (sortBy === 'mrp_desc') return result.sort((a, b) => b.mrp - a.mrp);
-    if (sortBy === 'updated') {
-      return result.sort((a, b) => new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime());
-    }
-    return result;
-  }, [currentBusinessProducts, companyFilter, categoryFilter, statusFilter, stockStatusFilter, searchTerm, sortBy, inventoryMap, companyMap, getCategoryIdsForProduct]);
+    return filterCatalogueProducts(currentBusinessProducts, productSearchCorpusMap, {
+      searchTerm,
+      companyFilter,
+      categoryFilter,
+      statusFilter,
+      stockStatusFilter,
+      sortBy,
+      inventoryMap,
+      categoryIdsLookup: getCategoryIdsForProduct
+    });
+  }, [currentBusinessProducts, companyFilter, categoryFilter, statusFilter, stockStatusFilter, searchTerm, sortBy, inventoryMap, productSearchCorpusMap, getCategoryIdsForProduct]);
 
   // Mobile & Desktop Pagination Controls (Smooth 60 FPS on any phone)
   const [currentPage, setCurrentPage] = useState(1);
@@ -661,7 +605,6 @@ function ProductsContent() {
         reorder_level: formReorderLevel,
         batch_tracking_enabled: formBatchTrackingEnabled,
         expiry_tracking_enabled: formExpiryTrackingEnabled,
-        image_url: formImageUrl.trim() || undefined,
         active: formActive,
         categoryIds: formSelectedCatIds,
         // Initial stock details
@@ -684,7 +627,6 @@ function ProductsContent() {
       setFormDescription('');
       setFormSku('');
       setFormBarcode('');
-      setFormImageUrl('');
       setFormInitialStockCartons(10);
       setFormInitialStockLoose(2);
       setFormSelectedCatIds([]);
@@ -732,8 +674,8 @@ function ProductsContent() {
       dealer_price: prod.dealer_price,
       gst_percent: prod.gst_percent,
       hsn: prod.hsn,
-      min_stock_level: prod.min_stock_level || 5,
-      reorder_level: prod.reorder_level || 10,
+      min_stock_level: prod.min_stock_level ?? 5,
+      reorder_level: prod.reorder_level ?? 10,
       active: prod.active
     });
     setEditError('');
@@ -1188,7 +1130,7 @@ function ProductsContent() {
                   const comp = companyMap.get(prod.company_id || '');
                   const inv = inventoryMap.get(prod.id);
                   const avail = inv?.available_qty || 0;
-                  const reorder = prod.reorder_level || 10;
+                  const reorder = prod.reorder_level ?? 10;
                   const isLow = avail <= reorder && prod.active;
                   const isMenuOpen = activeRowMenuId === prod.id;
 
@@ -1265,8 +1207,8 @@ function ProductsContent() {
                       <td className="p-3.5">
                         {(() => {
                           const meta = getProductTradeMode(prod);
-                          const purchaseRate = prod.purchase_price || 0;
-                          const loosePurchase = prod.loose_purchase_price || (meta.packSize > 1 ? (purchaseRate / meta.packSize) : purchaseRate);
+                          const purchaseRate = Number(prod.purchase_price) || 0;
+                          const loosePurchase = Number(prod.loose_purchase_price) || (meta.packSize > 1 ? (purchaseRate / meta.packSize) : purchaseRate);
                           return (
                             <div className="space-y-0.5">
                               {meta.tradeMode === 'PIECES' ? (
@@ -1294,25 +1236,27 @@ function ProductsContent() {
                       <td className="p-3.5">
                         {(() => {
                           const meta = getProductTradeMode(prod);
+                          const sellingRate = Number(prod.selling_price) || 0;
+                          const looseSelling = Number(prod.loose_selling_price) || (sellingRate / (meta.packSize || 1));
                           return (
                             <div className="space-y-0.5">
                               {meta.tradeMode === 'PIECES' ? (
                                 <span className="font-black text-indigo-700 text-sm block">
-                                  ₹{prod.selling_price}<span className="text-xs text-slate-500 font-medium">/Piece</span>
+                                  ₹{sellingRate}<span className="text-xs text-slate-500 font-medium">/Piece</span>
                                 </span>
                               ) : (
                                 <>
                                   <span className="font-black text-indigo-700 text-sm block">
-                                    ₹{prod.selling_price}<span className="text-xs text-slate-500 font-medium">/Carton</span>
+                                    ₹{sellingRate}<span className="text-xs text-slate-500 font-medium">/Carton</span>
                                   </span>
                                   {meta.allowPieces && (
                                     <span className="text-xs text-emerald-700 font-bold block">
-                                      ₹{(prod.loose_selling_price || (prod.selling_price / meta.packSize)).toFixed(2)}/Piece
+                                      ₹{Number(looseSelling).toFixed(2)}/Piece
                                     </span>
                                   )}
                                 </>
                               )}
-                              <span className="text-xs text-slate-600 font-bold block">MRP: ₹{prod.mrp}</span>
+                              <span className="text-xs text-slate-600 font-bold block">MRP: ₹{Number(prod.mrp) || 0}</span>
                             </div>
                           );
                         })()}
@@ -1712,19 +1656,6 @@ function ProductsContent() {
                         placeholder="e.g. 8901719101015"
                         className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-mono text-xs bg-white"
                       />
-                    </div>
-
-                    <div className="sm:col-span-2">
-                      <label className="font-bold text-slate-700 block mb-1">Product Image URL (Optional)</label>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={formImageUrl}
-                          onChange={(e) => setFormImageUrl(e.target.value)}
-                          placeholder="https://images.unsplash.com/... or leave blank"
-                          className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none bg-white text-xs"
-                        />
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -2173,9 +2104,9 @@ function ProductsContent() {
                             onChange={(e) => setFormInitialGodown(e.target.value)}
                             className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none bg-white font-semibold text-slate-800 text-xs"
                           >
-                            <option value="Central Godown (Indore Hub)">Central Godown (Indore Hub)</option>
-                            <option value="Main Godown (Bhiwandi Bay 1)">Main Godown (Bhiwandi Bay 1)</option>
-                            <option value="City Godown (South Bay 2)">City Godown (South Bay 2)</option>
+                            {(godowns || []).map((g: any) => (
+                              <option key={g.id} value={g.name}>{g.name}</option>
+                            ))}
                           </select>
                         </div>
 

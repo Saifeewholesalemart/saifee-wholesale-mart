@@ -1,9 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { saveSnapshotToServer } from '@/lib/serverSnapshotManager';
+import { getAuthenticatedUser, validateCsrfOrigin } from '@/lib/authSession';
 
 export async function POST(req: NextRequest) {
   try {
+    if (!validateCsrfOrigin(req)) {
+      return NextResponse.json({ success: false, error: 'Forbidden: Cross-site request rejected.' }, { status: 403 });
+    }
+
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+    if (auth.session.role !== 'admin' && auth.session.profileType !== 'ADMIN') {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Admin access required.' }, { status: 403 });
+    }
+
     const body = await req.json();
 
     if (!body || typeof body !== 'object') {

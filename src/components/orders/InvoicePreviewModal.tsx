@@ -1,5 +1,7 @@
 'use client';
 
+import { getSellerDetails } from '@/lib/db';
+import { isIntraStateSupply, formatPlaceOfSupply } from '@/lib/db';
 import React, { useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import {
@@ -178,12 +180,10 @@ export default function InvoicePreviewModal({
   const orderInfos = getInvoiceOrderInfo(invoice);
 
   // Business Firm Information (SAIFEE GENERAL STORES)
-  const firmName = activeCompany?.name?.toUpperCase() || 'SAIFEE GENERAL STORES';
+  const seller = getSellerDetails(activeCompany);
+  const firmName = seller.name.toUpperCase();
   const firmFirstLetter = firmName.charAt(0) || 'S';
-  const firmAddress = activeCompany?.address
-    ? `${activeCompany.address}${activeCompany.city ? `, ${activeCompany.city}` : ''}`
-    : 'FMCG Warehouse Distributors, Sector 15, Kalamboli Logistics Zone, Navi Mumbai, MH';
-  const firmGstin = activeCompany?.gstin || '27SAIFE1234A1Z5';
+  const firmAddress = seller.address;
 
   // Payment Status
   const isPaid = (invoice.outstanding_amount ?? (invoice.grand_total - (invoice.paid_amount || 0))) <= 0;
@@ -191,7 +191,7 @@ export default function InvoicePreviewModal({
 
   // Filtered invoice items based on itemSearchQuery with dynamic fallback and SKU consolidation across all linked orders
   const rawInvoiceItems = React.useMemo(() => {
-    const isLocal = (ret?.state_code || '27') === '27';
+    const isLocal = isIntraStateSupply(ret?.state_code);
     const aggregatedItemsMap = new Map<string, any>();
 
     // 1. Determine all matching/linked orders across references
@@ -226,7 +226,10 @@ export default function InvoicePreviewModal({
     const processItem = (it: any, idx: number, originOrderId?: string) => {
       const prod = products.find(p => p.id === it.product_id);
       const unitsPerPack = it.units_per_trading_unit || it.units_per_box_carton || prod?.units_per_box_carton || 1;
-      const baseQty = it.fulfilled_qty || it.confirmed_qty || it.packed_qty || it.ordered_qty || it.base_qty || it.quantity || 0;
+      const isInvoiceLine = !originOrderId;
+      const baseQty = isInvoiceLine
+        ? (Number(it.base_qty) || Number(it.quantity) || 0)
+        : (it.fulfilled_qty || it.confirmed_qty || it.packed_qty || it.ordered_qty || it.base_qty || it.quantity || 0);
       if (baseQty <= 0) return;
 
       const cartonRate = it.manual_billing_rate || it.carton_rate || it.rate || it.order_time_rate || it.base_price || prod?.selling_price || 0;
@@ -242,7 +245,9 @@ export default function InvoicePreviewModal({
         : splitBaseQuantity(baseQty, unitsPerPack);
 
       const disc = it.discount || ((it.carton_discount || 0) * cartonQty + (it.loose_discount || 0) * looseQty) || 0;
-      const taxable = Math.max(0, Math.round(((baseQty * (cartonRate / Math.max(1, unitsPerPack))) - disc) * 100) / 100) ||
+      const taxable = (isInvoiceLine && it.taxable_value !== undefined && it.taxable_value !== null)
+        ? Number(it.taxable_value)
+        : Math.max(0, Math.round(((baseQty * (cartonRate / Math.max(1, unitsPerPack))) - disc) * 100) / 100) ||
                       (it.taxable_value !== undefined ? Number(it.taxable_value) : Math.round(cartonQty * cartonRate * 100) / 100);
 
       // Strict Mathematical Logic for GST:
@@ -302,7 +307,14 @@ export default function InvoicePreviewModal({
       }
     };
 
-    // Always gather from all linked orders first
+    // The invoice's own lines are what was actually billed. Never rebuild them from the
+    // order: an order can still hold backorder items that were NOT billed.
+    if (invoice.items && invoice.items.length > 0) {
+      invoice.items.forEach((it, idx) => processItem(it, idx));
+      return Array.from(aggregatedItemsMap.values());
+    }
+
+    // Old invoices without stored lines: fall back to the linked orders
     if (matchingOrders.length > 0) {
       matchingOrders.forEach(ord => {
         (ord.items || []).forEach((it, idx) => {
@@ -347,7 +359,7 @@ export default function InvoicePreviewModal({
   // Dynamic Tax Slab Summary calculated strictly from active items
   const taxSlabs = React.useMemo(() => {
     const slabMap = new Map<number, { taxable: number; cgst: number; sgst: number; igst: number; totalTax: number }>();
-    const isLocal = (ret?.state_code || '27') === '27';
+    const isLocal = isIntraStateSupply(ret?.state_code);
     
     rawInvoiceItems.forEach(item => {
       const rate = Number(item.gst_percent ?? 0);
@@ -375,7 +387,7 @@ export default function InvoicePreviewModal({
     let totalCgst = 0;
     let totalSgst = 0;
     let totalIgst = 0;
-    const isLocal = (ret?.state_code || '27') === '27';
+    const isLocal = isIntraStateSupply(ret?.state_code);
 
     rawInvoiceItems.forEach(item => {
       const taxable = Number(item.taxable_value || 0);
@@ -587,7 +599,7 @@ export default function InvoicePreviewModal({
                   <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
                     {firmAddress}
                   </p>
-                  <p className="text-[11px] text-slate-900 font-bold">GSTIN: {firmGstin} <span className="text-slate-500 font-normal">| State: 27 (MH)</span></p>
+                  <p className="text-[11px] text-slate-900 font-bold">{seller.gstinLabel} <span className="text-slate-500 font-normal">| State: {seller.stateLabel}</span></p>
                 </div>
 
                 <div className="text-right flex flex-col items-end gap-1">
@@ -612,7 +624,7 @@ export default function InvoicePreviewModal({
                   <div className="text-[11px] text-slate-700 text-right space-y-0.5">
                     <p><span className="text-slate-500">Invoice No:</span> <strong className="text-slate-900 font-bold font-mono">{invoice.invoice_number}</strong></p>
                     <p><span className="text-slate-500">Date:</span> <strong className="text-slate-900 font-bold">{formatDate(invoice.date)}</strong></p>
-                    <p><span className="text-slate-500">Place of Supply:</span> <strong className="text-slate-900 font-semibold">{invoice.place_of_supply || 'Maharashtra (27)'}</strong></p>
+                    <p><span className="text-slate-500">Place of Supply:</span> <strong className="text-slate-900 font-semibold">{invoice.place_of_supply || formatPlaceOfSupply(ret?.state_code)}</strong></p>
                     {orderInfos.length > 0 && (
                       <p><span className="text-slate-500">Ref Orders:</span> <strong className="text-indigo-900 font-bold font-mono">{orderInfos.map(o => o.orderNumber).join(', ')}</strong></p>
                     )}
@@ -627,7 +639,7 @@ export default function InvoicePreviewModal({
                   <p className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] leading-snug tracking-tight uppercase">{ret?.shop_name || 'Retailer Store'}</p>
                   <p className="text-slate-700 leading-tight">{ret?.address || 'Local Market Area'}</p>
                   <p className="text-slate-800"><span className="text-slate-500">Prop:</span> {ret?.owner_name || 'N/A'} <span className="text-slate-500">| Ph:</span> {ret?.mobile || ret?.phone || 'N/A'}</p>
-                  <p className="font-bold text-slate-900"><span className="text-slate-500 font-normal">GSTIN:</span> {ret?.gstin || 'Unregistered'} <span className="text-slate-500 font-normal">| State:</span> {ret?.state_code || '27'}</p>
+                  <p className="font-bold text-slate-900"><span className="text-slate-500 font-normal">GSTIN:</span> {ret?.gstin || 'Unregistered'} <span className="text-slate-500 font-normal">| State:</span> {formatPlaceOfSupply(ret?.state_code)}</p>
                 </div>
                 <div className="space-y-0.5 pl-2">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">DESPATCH &amp; TERMS</span>
@@ -833,22 +845,29 @@ export default function InvoicePreviewModal({
                     </div>
                   </div>
 
-                  {/* Bank & Payment QR Details */}
-                  <div className="p-2 bg-slate-50 border border-slate-200 rounded text-xs flex items-center justify-between gap-3">
-                    <div className="space-y-0.5 text-[10px]">
-                      <span className="font-bold text-slate-700 uppercase block">BANK &amp; PAYMENT DETAILS</span>
-                      <p className="text-slate-700"><span className="text-slate-500">Bank:</span> <strong>HDFC Bank Ltd</strong> &bull; <span className="text-slate-500">A/C:</span> <strong className="font-mono">50200084920194</strong></p>
-                      <p className="text-slate-700"><span className="text-slate-500">IFSC:</span> <strong className="font-mono">HDFC0001234</strong> &bull; <span className="text-slate-500">Branch:</span> Navi Mumbai</p>
-                      <p className="text-slate-700"><span className="text-slate-500">UPI VPA:</span> <strong className="font-mono text-indigo-700">saifeestores@hdfcbank</strong></p>
-                    </div>
-                    <div className="text-center shrink-0 border border-slate-300 bg-white p-1 rounded">
-                      <div className="w-12 h-12 bg-slate-900 text-white flex flex-col items-center justify-center rounded font-mono text-[7px] font-black leading-tight">
-                        <span>UPI</span>
-                        <span>PAY QR</span>
+                  {/* Bank & Payment Details (sirf company settings me bhari ho tab) */}
+                  {seller.bank && (
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-xs">
+                      <div className="space-y-0.5 text-[10px]">
+                        <span className="font-bold text-slate-700 uppercase block">BANK &amp; PAYMENT DETAILS</span>
+                        {(seller.bank.bankName || seller.bank.accountNumber) && (
+                          <p className="text-slate-700">
+                            {seller.bank.bankName && <><span className="text-slate-500">Bank:</span> <strong>{seller.bank.bankName}</strong></>}
+                            {seller.bank.accountNumber && <> &bull; <span className="text-slate-500">A/C:</span> <strong className="font-mono">{seller.bank.accountNumber}</strong></>}
+                          </p>
+                        )}
+                        {(seller.bank.ifsc || seller.bank.branch) && (
+                          <p className="text-slate-700">
+                            {seller.bank.ifsc && <><span className="text-slate-500">IFSC:</span> <strong className="font-mono">{seller.bank.ifsc}</strong></>}
+                            {seller.bank.branch && <> &bull; <span className="text-slate-500">Branch:</span> {seller.bank.branch}</>}
+                          </p>
+                        )}
+                        {seller.bank.upiId && (
+                          <p className="text-slate-700"><span className="text-slate-500">UPI:</span> <strong className="font-mono text-indigo-700">{seller.bank.upiId}</strong></p>
+                        )}
                       </div>
-                      <span className="text-[7.5px] text-slate-600 font-bold block mt-0.5">Scan to Pay</span>
                     </div>
-                  </div>
+                  )}
                 </div>
 
                 {/* Right Side: Totals Summary Card */}
@@ -860,7 +879,7 @@ export default function InvoicePreviewModal({
 
                   {/* Dynamic GST Tax Slabs Breakdown */}
                   {taxSlabs.filter(([slabRate, data]) => slabRate > 0 && data.totalTax > 0).map(([slabRate, data]) => {
-                    const isLocal = (ret?.state_code || '27') === '27';
+                    const isLocal = isIntraStateSupply(ret?.state_code);
                     if (isLocal) {
                       const halfRate = slabRate / 2;
                       return (
@@ -932,7 +951,7 @@ export default function InvoicePreviewModal({
                     <p className="text-xs text-slate-600 mt-2 leading-relaxed max-w-[280px]">
                       {firmAddress}
                     </p>
-                    <p className="text-xs text-slate-900 font-bold mt-1">GSTIN: {firmGstin}</p>
+                    <p className="text-xs text-slate-900 font-bold mt-1">{seller.gstinLabel}</p>
                   </div>
 
                   <div className="text-right flex flex-col items-end gap-2">

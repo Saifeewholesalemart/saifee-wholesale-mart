@@ -1,5 +1,6 @@
 'use client';
 
+import { getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
@@ -75,7 +76,7 @@ const BUILTIN_DEMO_ACCOUNTS = [
 ];
 
 export default function Home() {
-  const { setCurrentUser, profiles, retailers } = useDb();
+  const { setCurrentUser, profiles, retailers, activeCompany } = useDb();
   const router = useRouter();
 
   // Form states
@@ -142,126 +143,63 @@ export default function Home() {
 
     setIsLoading(true);
 
-    // Simulate snappy network verification
-    await new Promise((resolve) => setTimeout(resolve, 250));
-
+    // Server-side authentication with graceful offline fallback
     try {
-      // -----------------------------------------------------------
-      // STEP 1: Check Built-in Demo Accounts Map (Instant & 100% Reliable)
-      // -----------------------------------------------------------
-      const matchedDemo = BUILTIN_DEMO_ACCOUNTS.find((demo) => {
-        const demoClean = demo.mobile.replace(/[^0-9]/g, '').slice(-10);
-        const mobileMatch = (cleanDigits && cleanDigits === demoClean) || inputVal.toLowerCase() === demo.profileId.toLowerCase();
-        if (!mobileMatch) return false;
+      let loginData: any = null;
+      let isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
-        const pwdMatch = demo.passwords.some(
-          (p) => p.toLowerCase() === enteredPassword.toLowerCase()
-        ) || enteredPassword === '123456' || enteredPassword === 'password123';
+      if (!isOffline) {
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mobile: inputVal, password: enteredPassword })
+          });
 
-        return pwdMatch;
-      });
+          loginData = await res.json();
 
-      if (matchedDemo) {
-        // Authenticate User in Context
-        setCurrentUser(matchedDemo.profileId);
-        
-        // Save session cookie for persistence
-        if (typeof document !== 'undefined') {
-          document.cookie = `saifee_user_id=${matchedDemo.profileId}; path=/; max-age=86400; SameSite=Lax`;
-        }
-
-        if (rememberMe) {
-          try {
-            localStorage.setItem('saifee_remembered_mobile', inputVal);
-            localStorage.setItem('saifee_remember_me', 'true');
-          } catch {}
-        }
-
-        setSuccessRole(matchedDemo.roleLabel);
-
-        setTimeout(() => {
-          router.push(matchedDemo.targetRoute);
-        }, 300);
-        return;
-      }
-
-      // -----------------------------------------------------------
-      // STEP 2: Check Dynamic Database Profiles & Retailers Table
-      // -----------------------------------------------------------
-      let matchedProfile = profiles.find((p) => {
-        const pMobile = (p.mobile || '').replace(/[^0-9]/g, '').slice(-10);
-        const pContact = (p.contact_no || '').replace(/[^0-9]/g, '').slice(-10);
-        const pPhone = (p.phone || '').replace(/[^0-9]/g, '').slice(-10);
-
-        if (cleanDigits && cleanDigits.length >= 10) {
-          if (pMobile === cleanDigits || pContact === cleanDigits || pPhone === cleanDigits) {
-            return true;
+          if (!res.ok || !loginData.success) {
+            setErrorMessage(loginData.error || 'Authentication error. Please verify credentials.');
+            setIsLoading(false);
+            return;
           }
-        }
-
-        // Exact match with ID or email
-        if (p.id.toLowerCase() === inputVal.toLowerCase()) return true;
-        if (p.email && p.email.toLowerCase() === inputVal.toLowerCase()) return true;
-
-        // Retailer profile check
-        if (p.retailer_id) {
-          const ret = retailers.find((r) => r.id === p.retailer_id);
-          if (ret) {
-            const retMobile = (ret.mobile || '').replace(/[^0-9]/g, '').slice(-10);
-            if (cleanDigits && retMobile === cleanDigits) return true;
-            if (ret.retailer_code && ret.retailer_code.toLowerCase() === inputVal.toLowerCase()) return true;
-          }
-        }
-
-        return false;
-      });
-
-      // If not directly found in profiles, check if it's a retailer ID/mobile without a profile
-      if (!matchedProfile && cleanDigits) {
-        const matchingRetailer = retailers.find((r) => (r.mobile || '').replace(/[^0-9]/g, '').slice(-10) === cleanDigits);
-        if (matchingRetailer) {
-          matchedProfile = profiles.find((p) => p.retailer_id === matchingRetailer.id);
+        } catch (fetchErr) {
+          // Network failed, fall back to offline verification check
+          isOffline = true;
         }
       }
 
-      if (!matchedProfile) {
-        setErrorMessage('Invalid mobile number or password. Please verify your credentials.');
-        setIsLoading(false);
-        return;
-      }
+      if (isOffline) {
+        // Strict Offline Mode: Verify against previously cached session on this device
+        // Do NOT silently default to Distributor Admin
+        const cachedRaw = typeof localStorage !== 'undefined' ? localStorage.getItem('fmcg_cached_session') : null;
+        let cachedSession: any = null;
+        try {
+          cachedSession = cachedRaw ? JSON.parse(cachedRaw) : null;
+        } catch {}
 
-      // Check Password
-      const profilePwd = (matchedProfile.password || matchedProfile.password_hash || '').trim();
-      const associatedRetailer = matchedProfile.retailer_id ? retailers.find(r => r.id === matchedProfile.retailer_id) : null;
-      const retailerPwd = (associatedRetailer?.password || '').trim();
+        const cachedMobile = (cachedSession?.user?.mobile || '').replace(/[^0-9]/g, '').slice(-10);
+        const cachedId = (cachedSession?.user?.id || '').toLowerCase();
 
-      const isValidPassword = 
-        (profilePwd && (profilePwd === enteredPassword || profilePwd.toLowerCase() === enteredPassword.toLowerCase())) ||
-        (retailerPwd && (retailerPwd === enteredPassword || retailerPwd.toLowerCase() === enteredPassword.toLowerCase())) ||
-        enteredPassword === 'admin' ||
-        enteredPassword === 'admin123' ||
-        enteredPassword === 'sales' ||
-        enteredPassword === 'sales123' ||
-        enteredPassword === 'packer' ||
-        enteredPassword === 'packer123' ||
-        enteredPassword === 'staff' ||
-        enteredPassword === 'staff123' ||
-        enteredPassword === 'retail' ||
-        enteredPassword === 'retail123' ||
-        enteredPassword === '123456' ||
-        enteredPassword === 'password123';
+        if (cachedSession?.user && ((cleanDigits && cleanDigits === cachedMobile) || inputVal.toLowerCase() === cachedId)) {
+          // Valid cached offline user
+          const uRole = cachedSession.user.role;
+          let targetRoute = '/retailer/home';
+          if (uRole === 'admin') targetRoute = '/admin/orders';
+          else if (uRole === 'sales_dist' || uRole === 'sales_co') targetRoute = '/salesperson/dashboard';
+          else if (uRole === 'staff') targetRoute = '/staff/dashboard';
 
-      if (!isValidPassword) {
-        setErrorMessage('Invalid mobile number or password. Please verify your credentials.');
-        setIsLoading(false);
-        return;
-      }
-
-      // Check account active status
-      if (matchedProfile.active === false || matchedProfile.status === 'INACTIVE') {
-        setErrorMessage('Your account is currently disabled. Please contact the administrator.');
-        setIsLoading(false);
-        return;
+          loginData = {
+            success: true,
+            user: cachedSession.user,
+            roleLabel: `${cachedSession.user.name} (Offline)`,
+            targetRoute
+          };
+        } else {
+          setErrorMessage('Offline Authentication: No verified session found on this device for these credentials. Please connect online once to sign in.');
+          setIsLoading(false);
+          return;
+        }
       }
 
       // Save Remember Me preference
@@ -273,40 +211,22 @@ export default function Home() {
           localStorage.removeItem('saifee_remembered_mobile');
           localStorage.setItem('saifee_remember_me', 'false');
         }
+
+        // Cache session for offline hydration
+        if (loginData.user) {
+          localStorage.setItem('fmcg_cached_session', JSON.stringify({
+            user: loginData.user,
+            savedAt: Date.now()
+          }));
+        }
       } catch {}
 
       // Authenticate User in Context
-      setCurrentUser(matchedProfile.id);
-
-      if (typeof document !== 'undefined') {
-        document.cookie = `saifee_user_id=${matchedProfile.id}; path=/; max-age=86400; SameSite=Lax`;
-      }
-
-      // Automatic Smart Role-Based Redirection
-      const profileType = (matchedProfile.profile_type || '').toUpperCase();
-      const role = (matchedProfile.role || '').toLowerCase();
-
-      let targetRoute = '/retailer/home';
-      let roleLabel = 'Retailer';
-
-      if (profileType === 'ADMIN' || profileType === 'SUPERUSER' || role === 'admin') {
-        targetRoute = '/admin/orders';
-        roleLabel = 'Distributor Administrator';
-      } else if (profileType === 'SALESPERSON' || role === 'sales_dist' || role === 'sales_co') {
-        targetRoute = '/salesperson/dashboard';
-        roleLabel = 'Sales Representative';
-      } else if (profileType === 'STAFF' || role === 'staff') {
-        targetRoute = '/staff/dashboard';
-        roleLabel = `${matchedProfile.custom_role || 'Warehouse Staff'}`;
-      } else if (profileType === 'RETAILER' || role === 'retailer') {
-        targetRoute = '/retailer/home';
-        roleLabel = 'Retail Shop Partner';
-      }
-
-      setSuccessRole(roleLabel);
+      setCurrentUser(loginData.user.id, loginData.user);
+      setSuccessRole(loginData.roleLabel);
 
       setTimeout(() => {
-        router.push(targetRoute);
+        router.push(loginData.targetRoute);
       }, 300);
 
     } catch (err: any) {
@@ -609,7 +529,7 @@ export default function Home() {
               </div>
               <div>
                 <h3 className="text-sm font-bold text-white">Admin &amp; Trade Support</h3>
-                <p className="text-xs text-slate-400">Saifee General Stores Portal Desk</p>
+                <p className="text-xs text-slate-400">{getSellerDetails(activeCompany).name}</p>
               </div>
             </div>
 
@@ -618,7 +538,7 @@ export default function Home() {
                 <PhoneCall className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <div>
                   <div className="font-bold text-white">Helpline &amp; Password Reset</div>
-                  <div className="text-slate-300 font-mono mt-0.5">+91 98260 12345 / 0731-2540000</div>
+                  <div className="text-slate-300 font-mono mt-0.5">{getSellerDetails(activeCompany).phone || 'Please contact your administrator'}</div>
                   <div className="text-[10px] text-slate-400 mt-0.5">Mon - Sat: 9:00 AM to 9:00 PM</div>
                 </div>
               </div>
@@ -627,7 +547,7 @@ export default function Home() {
                 <Mail className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
                 <div>
                   <div className="font-bold text-white">Email Support</div>
-                  <div className="text-slate-300 font-mono mt-0.5">support@saifeewholesale.com</div>
+                  <div className="text-slate-300 font-mono mt-0.5">{(activeCompany as any)?.email || 'Please contact your administrator'}</div>
                 </div>
               </div>
 
@@ -635,7 +555,7 @@ export default function Home() {
                 <MapPin className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                 <div>
                   <div className="font-bold text-white">Wholesale Depot / Office</div>
-                  <div className="text-slate-300 mt-0.5">124, M.G. Road, Wholesale Market, Indore (M.P.)</div>
+                  <div className="text-slate-300 mt-0.5">{getSellerDetails(activeCompany).address || 'Khachrod, Dist. Ujjain'}, {getSellerDetails(activeCompany).stateLabel}</div>
                 </div>
               </div>
             </div>

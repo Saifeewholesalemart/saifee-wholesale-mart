@@ -417,7 +417,7 @@ export default function OrderReviewModal({
                   {retailer?.shop_name || 'Retailer Customer'}
                 </span>
                 <span>&bull;</span>
-                <span className="text-slate-300">{retailer?.city || 'Indore'}</span>
+                <span className="text-slate-300">{retailer?.city || ''}</span>
                 <span>&bull;</span>
                 <span>Channel: <strong className="text-indigo-300">{channelObj?.label || order.channel || 'Direct Booking'}</strong></span>
                 <span>&bull;</span>

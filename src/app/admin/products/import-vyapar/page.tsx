@@ -14,7 +14,7 @@ import {
 import { 
   TARGET_PRODUCT_FIELDS, TargetFieldDef, ProcessedImportRow,
   parseUploadedVyaparFile, autoDetectVyaparColumnMapping, 
-  validateAndMatchVyaparRows, generateVyaparErrorReportCsv,
+  validateAndMatchVyaparRows, validateAndMatchVyaparRowsAsync, generateVyaparErrorReportCsv,
   generateVyaparSampleWorkbook
 } from '@/lib/vyaparImportEngine';
 import { VyaparImportBatch, formatQuantityDisplay } from '@/lib/db';
@@ -52,9 +52,16 @@ export default function VyaparProductImportPage() {
   // Step 3: Validation & Matching State
   const [processedRows, setProcessedRows] = useState<ProcessedImportRow[]>([]);
   const [globalMatchPolicy, setGlobalMatchPolicy] = useState<'update' | 'skip' | 'prompt'>('update');
-  const [previewFilterTab, setPreviewFilterTab] = useState<'all' | 'new' | 'exact' | 'fuzzy' | 'errors' | 'skipped'>('all');
+  const [previewFilterTab, setPreviewFilterTab] = useState<'all' | 'new' | 'exact' | 'fuzzy' | 'duplicates' | 'errors' | 'skipped'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRowForReview, setSelectedRowForReview] = useState<ProcessedImportRow | null>(null);
+
+  // Pagination for large files (6,200+ products)
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const PAGE_SIZE = 50;
+
+  // Step 4: Explicit Opening Stock Setting (Requirement 7: Keep Product Master separate from Stock)
+  const [importOpeningStock, setImportOpeningStock] = useState<boolean>(false);
 
   // Step 5: Live Execution Progress
   const [progressPercent, setProgressPercent] = useState(0);
@@ -62,19 +69,30 @@ export default function VyaparProductImportPage() {
   const [importResult, setImportResult] = useState<{ importId: string; batch: VyaparImportBatch } | null>(null);
 
   // Cloud Sync state on complete step
-  const [cloudSyncing, setCloudSyncing] = useState(false);
-  const [cloudSyncResult, setCloudSyncResult] = useState<string | null>(null);
+  type CloudSyncStatus = 'idle' | 'syncing' | 'synced' | 'error';
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>('idle');
+  const [cloudSyncMessage, setCloudSyncMessage] = useState<string>('');
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
 
   const handleSyncToCloudNow = async () => {
-    setCloudSyncing(true);
-    setCloudSyncResult(null);
+    setCloudSyncStatus('syncing');
+    setCloudSyncError(null);
     try {
       const res = await syncWithCloud();
-      setCloudSyncResult(res.message || 'Catalog synchronized with Supabase Cloud successfully!');
+      if (res.action === 'error') {
+        setCloudSyncStatus('error');
+        setCloudSyncError(res.message || 'Synchronization with Supabase Cloud failed.');
+      } else {
+        setCloudSyncStatus('synced');
+        setCloudSyncMessage(res.message || 'Catalog synchronized with Supabase Cloud successfully!');
+        setCloudSyncError(null);
+        if (typeof refreshState === 'function') {
+          refreshState();
+        }
+      }
     } catch (err: any) {
-      alert(`Sync notice: ${err?.message || 'Failed to sync with Supabase'}`);
-    } finally {
-      setCloudSyncing(false);
+      setCloudSyncStatus('error');
+      setCloudSyncError(err?.message || 'Failed to sync with Supabase Cloud.');
     }
   };
 
@@ -168,16 +186,41 @@ export default function VyaparProductImportPage() {
     return requiredKeys.every(k => !!columnMapping[k]);
   }, [columnMapping]);
 
-  const handleProceedToValidation = () => {
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationProgress, setValidationProgress] = useState(0);
+
+  const handleProceedToValidation = async () => {
     if (!isRequiredMappingComplete) {
       alert('Please map all required fields: Product Name, MRP, Purchase Price, and Selling Price.');
       return;
     }
 
-    // Run validation and matching
-    const processed = validateAndMatchVyaparRows(rawRows, columnMapping, products, companies);
-    setProcessedRows(processed);
-    setCurrentStep('preview');
+    setIsValidating(true);
+    setValidationProgress(0);
+    try {
+      const processed = await validateAndMatchVyaparRowsAsync(
+        rawRows,
+        columnMapping,
+        products,
+        companies,
+        (done, total) => {
+          setValidationProgress(Math.round((done / (total || 1)) * 100));
+        }
+      );
+      setProcessedRows(processed);
+      // If stock quantity column is mapped and contains stock units, pre-select opening stock toggle
+      if (columnMapping.stock_qty) {
+        const hasStock = processed.some(r => (r.normalizedData?.stock_qty || 0) > 0);
+        if (hasStock) {
+          setImportOpeningStock(true);
+        }
+      }
+      setCurrentStep('preview');
+    } catch (err: any) {
+      alert(`Validation error: ${err?.message || 'Failed to process rows'}`);
+    } finally {
+      setIsValidating(false);
+    }
   };
 
   // ----------------------------------------------------
@@ -190,6 +233,7 @@ export default function VyaparProductImportPage() {
     const invalid = total - valid;
     const exactMatches = processedRows.filter(r => r.matchType === 'EXACT_MATCH').length;
     const fuzzyMatches = processedRows.filter(r => r.matchType === 'FUZZY_MATCH').length;
+    const duplicates = processedRows.filter(r => r.matchType === 'DUPLICATE_IN_FILE').length;
     const newItems = processedRows.filter(r => r.matchType === 'NEW').length;
     const toCreate = processedRows.filter(r => r.action === 'CREATE_NEW').length;
     const toUpdate = processedRows.filter(r => r.action === 'UPDATE_EXISTING').length;
@@ -207,6 +251,7 @@ export default function VyaparProductImportPage() {
       invalid,
       exactMatches,
       fuzzyMatches,
+      duplicates,
       newItems,
       toCreate,
       toUpdate,
@@ -221,6 +266,7 @@ export default function VyaparProductImportPage() {
       if (previewFilterTab === 'new' && row.matchType !== 'NEW') return false;
       if (previewFilterTab === 'exact' && row.matchType !== 'EXACT_MATCH') return false;
       if (previewFilterTab === 'fuzzy' && row.matchType !== 'FUZZY_MATCH') return false;
+      if (previewFilterTab === 'duplicates' && row.matchType !== 'DUPLICATE_IN_FILE') return false;
       if (previewFilterTab === 'errors' && row.isValid) return false;
       if (previewFilterTab === 'skipped' && row.action !== 'SKIP') return false;
 
@@ -239,6 +285,13 @@ export default function VyaparProductImportPage() {
     });
   }, [processedRows, previewFilterTab, searchQuery]);
 
+  // Paginated slice for 6,200+ rows
+  const totalPages = Math.ceil(filteredPreviewRows.length / PAGE_SIZE) || 1;
+  const paginatedPreviewRows = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return filteredPreviewRows.slice(start, start + PAGE_SIZE);
+  }, [filteredPreviewRows, currentPage, PAGE_SIZE]);
+
   const handleRowActionChange = (rowNumber: number, action: 'CREATE_NEW' | 'UPDATE_EXISTING' | 'SKIP') => {
     setProcessedRows(prev => prev.map(r => r.rowNumber === rowNumber ? { ...r, action } : r));
   };
@@ -246,7 +299,7 @@ export default function VyaparProductImportPage() {
   const handleApplyGlobalPolicy = (policy: 'update' | 'skip' | 'prompt') => {
     setGlobalMatchPolicy(policy);
     setProcessedRows(prev => prev.map(r => {
-      if (!r.isValid) return { ...r, action: 'SKIP' };
+      if (!r.isValid || r.matchType === 'DUPLICATE_IN_FILE') return { ...r, action: 'SKIP' };
       if (r.matchType === 'EXACT_MATCH') {
         return { ...r, action: policy === 'skip' ? 'SKIP' : 'UPDATE_EXISTING' };
       }
@@ -289,47 +342,78 @@ export default function VyaparProductImportPage() {
       data: r.normalizedData
     }));
 
-    // Fast non-blocking chunked simulation to show progress bar
+    // Honest progress: the real work happens on the server in one request
     const totalItems = mappedPayload.length;
-    const totalChunks = Math.min(25, totalItems) || 1;
-    const chunkSize = Math.ceil(totalItems / totalChunks) || 1;
-
-    for (let i = 0; i < totalChunks; i++) {
-      const currentCount = Math.min(totalItems, (i + 1) * chunkSize);
-      const percent = Math.round((currentCount / (totalItems || 1)) * 90);
-      setProgressPercent(percent);
-      setProgressText(`Writing to high-capacity storage: ${currentCount} of ${totalItems} items...`);
-      await new Promise(res => setTimeout(res, 30));
-    }
-
-    setProgressPercent(95);
-    setProgressText('Finalizing warehouse stock and generating audit history logs...');
+    setProgressPercent(30);
+    setProgressText(`Saving ${totalItems} products to the cloud database... (this can take 1-3 minutes, please keep this page open)`);
 
     try {
-      const result = executeVyaparBatchImport(mappedPayload, {
-        file_name: file?.name || 'vyapar_products.xlsx',
-        file_size: fileSize,
-        column_mapping: columnMapping,
-        user_name: currentUser.name,
-        user_id: currentUser.id
+      // 1. Single Authoritative Path: Enforce server-side authorization & persistence via Next.js API
+      const serverResp = await fetch('/api/admin/products/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rows: mappedPayload,
+          meta: {
+            file_name: file?.name || 'vyapar_products.xlsx',
+            file_size: fileSize,
+            column_mapping: columnMapping,
+            import_opening_stock: importOpeningStock,
+            idempotency_key: `idemp-${file?.name || 'import'}-${fileSize}-${mappedPayload.length}`
+          }
+        })
       });
 
+      const serverData = await serverResp.json().catch(() => ({}));
+      if (!serverResp.ok || !serverData.success) {
+        throw new Error(serverData.error || `Server import failed with status ${serverResp.status}`);
+      }
+
+      // 2. Authoritative server-derived result
+      const result = {
+        importId: serverData.importId,
+        batch: serverData.batch
+      };
+
       setImportResult(result);
+
+      // Data is now safely saved in the cloud: show success immediately.
+      const stockMsg = (result.batch?.stock_units_imported || 0) > 0
+        ? `, ${result.batch.stock_units_imported} Pcs stock inwarded`
+        : importOpeningStock
+          ? ' (Warning: Opening stock was requested but 0 units were inwarded)'
+          : ' (Opening stock was disabled)';
       setProgressPercent(100);
-      setProgressText('Import completed successfully!');
+      setProgressText(`Import complete! ${result.batch?.created_count || 0} products saved to cloud${stockMsg}`);
+      setCloudSyncStatus('syncing');
+      setCloudSyncError(null);
       setCurrentStep('complete');
 
-      // ZERO-CLICK AUTO-SYNC: Automatically push to Supabase Cloud in background
-      setCloudSyncing(true);
-      syncWithCloud()
-        .then((syncRes) => {
-          setCloudSyncing(false);
-          setCloudSyncResult(syncRes.message || 'Auto-synced with Supabase Cloud successfully!');
+      // Refresh the on-screen catalog in the background (never blocks the success screen).
+      const SYNC_TIMEOUT_MS = 60000;
+      Promise.race([
+        syncWithCloud(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Catalog refresh is taking long. Data is safe in cloud; reload the page to see it.')), SYNC_TIMEOUT_MS))
+      ])
+        .then((syncRes: any) => {
+          if (syncRes?.action === 'error') {
+            setCloudSyncStatus('error');
+            setCloudSyncError(syncRes.message || 'Catalog refresh reported an error');
+          } else {
+            setCloudSyncStatus('synced');
+            setCloudSyncMessage(syncRes?.message || 'Catalog refreshed from cloud.');
+            setCloudSyncError(null);
+          }
         })
-        .catch((err) => {
-          setCloudSyncing(false);
-          console.warn('[VyaparImport] Background cloud auto-sync notice:', err);
+        .catch((syncErr: any) => {
+          console.warn('[VyaparImport] Background catalog refresh notice:', syncErr);
+          setCloudSyncStatus('error');
+          setCloudSyncError(syncErr?.message || 'Failed to refresh catalog. Reload the page.');
+        })
+        .finally(() => {
+          if (typeof refreshState === 'function') refreshState();
         });
+      return;
     } catch (err: any) {
       alert(`Import error: ${err?.message || 'Failed to complete batch import.'}`);
       setCurrentStep('preview');
@@ -340,20 +424,38 @@ export default function VyaparProductImportPage() {
   // HANDLERS: ROLLBACK & HISTORY
   // ----------------------------------------------------
 
-  const handleExecuteRollback = () => {
+  const handleExecuteRollback = async () => {
     if (!rollbackModalBatch) return;
     setRollbackStatusMsg(null);
 
-    const res = rollbackVyaparImport(rollbackModalBatch.id, rollbackReason, currentUser.name);
-    if (res.success) {
-      setRollbackStatusMsg({ type: 'success', text: res.message });
+    // Single Authoritative Path: Server-side rollback with foreign key dependency checks
+    try {
+      const resp = await fetch('/api/admin/products/import/rollback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          importId: rollbackModalBatch.id,
+          reason: rollbackReason
+        })
+      });
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success) {
+        setRollbackStatusMsg({ type: 'error', text: data.error || `Rollback rejected by server (Status ${resp.status})` });
+        return;
+      }
+
+      setRollbackStatusMsg({ type: 'success', text: data.message || 'Import batch rolled back successfully.' });
+      if (typeof refreshState === 'function') {
+        refreshState();
+      }
       setTimeout(() => {
         setRollbackModalBatch(null);
         setRollbackReason('');
         setRollbackStatusMsg(null);
       }, 2500);
-    } else {
-      setRollbackStatusMsg({ type: 'error', text: res.message });
+    } catch (netErr: any) {
+      setRollbackStatusMsg({ type: 'error', text: netErr?.message || 'Network error executing rollback.' });
     }
   };
 
@@ -364,7 +466,9 @@ export default function VyaparProductImportPage() {
     setColumnMapping({});
     setProcessedRows([]);
     setImportResult(null);
-    setCloudSyncResult(null);
+    setCloudSyncStatus('idle');
+    setCloudSyncMessage('');
+    setCloudSyncError(null);
     setCurrentStep('upload');
   };
 
@@ -679,15 +783,24 @@ export default function VyaparProductImportPage() {
                 </button>
                 <button
                   onClick={handleProceedToValidation}
-                  disabled={!isRequiredMappingComplete}
+                  disabled={!isRequiredMappingComplete || isValidating}
                   className={`px-6 py-2.5 rounded-xl text-xs font-bold shadow-md transition-all flex items-center gap-1.5 ${
-                    isRequiredMappingComplete
+                    isRequiredMappingComplete && !isValidating
                       ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-600/20 cursor-pointer'
                       : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                   }`}
                 >
-                  <span>Validate &amp; Match Products</span>
-                  <ArrowRight className="w-4 h-4" />
+                  {isValidating ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Validating &amp; Indexing {validationProgress}%...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Validate &amp; Match Products</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -780,12 +893,16 @@ export default function VyaparProductImportPage() {
                   { id: 'new', label: `New Items (${previewStats.toCreate})` },
                   { id: 'exact', label: `Exact Matches (${previewStats.exactMatches})` },
                   { id: 'fuzzy', label: `Fuzzy Review (${previewStats.fuzzyMatches})` },
+                  { id: 'duplicates', label: `In-File Duplicates (${previewStats.duplicates})` },
                   { id: 'errors', label: `Errors (${previewStats.invalid})` },
                   { id: 'skipped', label: `Skipped (${previewStats.toSkip})` }
                 ].map(tab => (
                   <button
                     key={tab.id}
-                    onClick={() => setPreviewFilterTab(tab.id as any)}
+                    onClick={() => {
+                      setPreviewFilterTab(tab.id as any);
+                      setCurrentPage(1);
+                    }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
                       previewFilterTab === tab.id
                         ? 'bg-slate-800 text-white shadow-xs'
@@ -813,14 +930,14 @@ export default function VyaparProductImportPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {filteredPreviewRows.length === 0 ? (
+                      {paginatedPreviewRows.length === 0 ? (
                         <tr>
                           <td colSpan={7} className="p-12 text-center text-slate-400 font-semibold">
                             No products matching the current filter.
                           </td>
                         </tr>
                       ) : (
-                        filteredPreviewRows.map(row => {
+                        paginatedPreviewRows.map(row => {
                           const d = row.normalizedData;
 
                           return (
@@ -833,6 +950,8 @@ export default function VyaparProductImportPage() {
                                   ? 'bg-blue-50/15'
                                   : row.matchType === 'FUZZY_MATCH'
                                   ? 'bg-amber-50/15'
+                                  : row.matchType === 'DUPLICATE_IN_FILE'
+                                  ? 'bg-rose-50/20'
                                   : ''
                               }`}
                             >
@@ -930,7 +1049,17 @@ export default function VyaparProductImportPage() {
                                     </button>
                                   </div>
                                 )}
-                                {!row.isValid && (
+                                {row.matchType === 'DUPLICATE_IN_FILE' && (
+                                  <div>
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-black bg-rose-50 text-rose-700 border border-rose-200">
+                                      Duplicate in File
+                                    </span>
+                                    <span className="text-xs text-slate-500 font-medium block mt-0.5">
+                                      Skipped to prevent duplicate
+                                    </span>
+                                  </div>
+                                )}
+                                {!row.isValid && row.matchType !== 'DUPLICATE_IN_FILE' && (
                                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-black bg-rose-50 text-rose-700 border border-rose-200">
                                     Invalid Row
                                   </span>
@@ -939,7 +1068,7 @@ export default function VyaparProductImportPage() {
 
                               {/* Action Selector */}
                               <td className="p-3.5 text-center">
-                                {row.isValid ? (
+                                {row.isValid && row.matchType !== 'DUPLICATE_IN_FILE' ? (
                                   <select
                                     value={row.action}
                                     onChange={(e) => handleRowActionChange(row.rowNumber, e.target.value as any)}
@@ -956,7 +1085,7 @@ export default function VyaparProductImportPage() {
                                     <option value="SKIP">Skip Row</option>
                                   </select>
                                 ) : (
-                                  <span className="text-slate-500 text-xs font-bold uppercase">Skipped (Invalid)</span>
+                                  <span className="text-slate-500 text-xs font-bold uppercase">Skipped</span>
                                 )}
                               </td>
                             </tr>
@@ -966,6 +1095,37 @@ export default function VyaparProductImportPage() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* PAGINATION TOOLBAR FOR 6,200+ ROWS */}
+                {filteredPreviewRows.length > PAGE_SIZE && (
+                  <div className="p-3.5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                    <span className="font-semibold text-slate-500">
+                      Showing <strong className="text-slate-900">{(currentPage - 1) * PAGE_SIZE + 1}</strong> to{' '}
+                      <strong className="text-slate-900">{Math.min(currentPage * PAGE_SIZE, filteredPreviewRows.length)}</strong> of{' '}
+                      <strong className="text-slate-900">{filteredPreviewRows.length}</strong> items
+                    </span>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        Previous
+                      </button>
+                      <span className="px-2 font-bold text-slate-600">
+                        Page {currentPage} of {totalPages}
+                      </span>
+                      <button
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Bottom Nav */}
@@ -1020,17 +1180,48 @@ export default function VyaparProductImportPage() {
                     <span className="text-xs font-bold text-blue-800 uppercase tracking-wider block">2. Existing Product Updates</span>
                     <p className="text-2xl font-black text-blue-700">{previewStats.toUpdate} Items</p>
                     <p className="text-xs text-blue-900 font-medium">
-                      Will be updated with new rates. Previous values will be snapshotted in Activity Logs.
+                      Will be updated with new rates and packaging. Previous values snapshotted in Activity Logs.
                     </p>
                   </div>
 
-                  <div className="p-4 bg-purple-50/50 rounded-xl border border-purple-200 space-y-1">
-                    <span className="text-xs font-bold text-purple-800 uppercase tracking-wider block">3. Warehouse Stock Inward</span>
-                    <p className="text-2xl font-black text-purple-700">{previewStats.totalStockUnits} Base Units</p>
-                    <p className="text-xs text-purple-900 font-medium">
-                      Will create Opening Batches, Stock Ledger IN events, and an Inward Purchase entry.
+                  <div className={`p-4 rounded-xl border space-y-1 ${
+                    importOpeningStock ? 'bg-purple-50/50 border-purple-200' : 'bg-slate-50 border-slate-200'
+                  }`}>
+                    <span className={`text-xs font-bold uppercase tracking-wider block ${
+                      importOpeningStock ? 'text-purple-800' : 'text-slate-500'
+                    }`}>3. Warehouse Stock Inward</span>
+                    <p className={`text-2xl font-black ${importOpeningStock ? 'text-purple-700' : 'text-slate-400'}`}>
+                      {importOpeningStock ? `${previewStats.totalStockUnits} Base Units` : '0 Units (Disabled)'}
+                    </p>
+                    <p className="text-xs text-slate-600 font-medium">
+                      {importOpeningStock 
+                        ? 'Will create Opening Batches, Stock Ledger IN events, and an Inward Purchase entry.' 
+                        : 'Stock inwarding disabled. Products will be created with zero inventory.'}
                     </p>
                   </div>
+                </div>
+
+                {/* EXPLICIT OPENING STOCK INWARD TOGGLE (Requirement 7) */}
+                <div className="p-5 rounded-2xl border-2 transition-all bg-amber-50/40 border-amber-300">
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input 
+                      type="checkbox"
+                      checked={importOpeningStock}
+                      onChange={(e) => setImportOpeningStock(e.target.checked)}
+                      className="w-5 h-5 text-indigo-600 rounded mt-0.5 border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                    />
+                    <div className="space-y-1">
+                      <span className="text-sm font-black text-slate-900 block">
+                        Inward Warehouse Opening Stock &amp; Create Batch Ledgers
+                      </span>
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        <strong>Unchecked (Recommended for Catalog Setup):</strong> Only product master records, prices, variants, and packaging units will be imported. Warehouse inventory quantities will remain strictly at 0 without creating stock ledger or purchase entries.
+                      </p>
+                      <p className="text-xs text-amber-800 font-semibold">
+                        <strong>Checked:</strong> Inwards {previewStats.totalStockUnits} base units into Main Godown, creates opening inventory batches, and writes immutable IN entries to the stock ledger.
+                      </p>
+                    </div>
+                  </label>
                 </div>
 
                 {/* Audit Trail Note */}
@@ -1122,37 +1313,103 @@ export default function VyaparProductImportPage() {
                   <span className="text-xs font-bold text-slate-500 uppercase block">Skipped</span>
                   <span className="text-lg font-black text-slate-800">{importResult.batch.skipped_count} Items</span>
                 </div>
-                <div className="p-3 bg-purple-50 rounded-xl border border-purple-200">
-                  <span className="text-xs font-bold text-purple-700 uppercase block">Stock Inwarded</span>
-                  <span className="text-lg font-black text-purple-700">{importResult.batch.stock_units_imported} Pcs</span>
+                <div className={`p-3 rounded-xl border ${
+                  importOpeningStock && importResult.batch.stock_units_imported === 0
+                    ? 'bg-amber-50 border-amber-300'
+                    : 'bg-purple-50 border-purple-200'
+                }`}>
+                  <span className={`text-xs font-bold uppercase block ${
+                    importOpeningStock && importResult.batch.stock_units_imported === 0 ? 'text-amber-800' : 'text-purple-700'
+                  }`}>Stock Inwarded</span>
+                  <span className={`text-lg font-black ${
+                    importOpeningStock && importResult.batch.stock_units_imported === 0 ? 'text-amber-900' : 'text-purple-700'
+                  }`}>{importResult.batch.stock_units_imported} Pcs</span>
                 </div>
               </div>
 
+              {/* Opening Stock Clarity Notices */}
+              {importOpeningStock && importResult.batch.stock_units_imported === 0 && (
+                <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-left flex items-start gap-2.5">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="text-xs text-amber-900">
+                    <span className="font-bold block">Opening Stock Inward Notice</span>
+                    Opening stock inwarding was enabled, but 0 stock units were recorded in PostgreSQL. Ensure your spreadsheet contains non-zero quantities in the mapped stock quantity column.
+                  </div>
+                </div>
+              )}
+              {!importOpeningStock && (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-left flex items-center gap-2 text-xs text-slate-600">
+                  <Info className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span>Opening stock inwarding was not selected. Products have been registered with zero warehouse inventory as chosen.</span>
+                </div>
+              )}
+
               {/* Cloud Sync Call-to-Action Card */}
-              <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-left">
+              <div className={`p-4 border rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-left transition-all ${
+                cloudSyncStatus === 'synced'
+                  ? 'bg-emerald-50/70 border-emerald-200'
+                  : cloudSyncStatus === 'error'
+                    ? 'bg-rose-50/80 border-rose-300'
+                    : 'bg-indigo-50/70 border-indigo-200'
+              }`}>
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-1.5">
-                    <Cloud className="w-4 h-4 text-indigo-600" />
-                    <h4 className="text-xs font-black text-indigo-950">Synchronize to Supabase Cloud</h4>
+                    {cloudSyncStatus === 'synced' ? (
+                      <CheckCheck className="w-4 h-4 text-emerald-600" />
+                    ) : cloudSyncStatus === 'error' ? (
+                      <AlertCircle className="w-4 h-4 text-rose-600" />
+                    ) : (
+                      <Cloud className="w-4 h-4 text-indigo-600" />
+                    )}
+                    <h4 className={`text-xs font-black ${
+                      cloudSyncStatus === 'synced' ? 'text-emerald-950' : cloudSyncStatus === 'error' ? 'text-rose-950' : 'text-indigo-950'
+                    }`}>
+                      {cloudSyncStatus === 'synced'
+                        ? 'Synchronized to Supabase Cloud'
+                        : cloudSyncStatus === 'error'
+                          ? 'Cloud Synchronization Error'
+                          : 'Synchronize to Supabase Cloud'}
+                    </h4>
                   </div>
-                  <p className="text-[11px] text-indigo-700/80">
-                    {cloudSyncResult || 'Upload all imported items to your Supabase Cloud database so they appear across all computers and salesperson phones.'}
+                  <p className={`text-[11px] leading-relaxed ${
+                    cloudSyncStatus === 'synced'
+                      ? 'text-emerald-700'
+                      : cloudSyncStatus === 'error'
+                        ? 'text-rose-700 font-medium'
+                        : 'text-indigo-700/80'
+                  }`}>
+                    {cloudSyncStatus === 'synced'
+                      ? 'Authoritative PostgreSQL database write confirmed. All items, prices, and stock ledgers are in sync.'
+                      : cloudSyncStatus === 'error'
+                        ? (cloudSyncError || 'Failed to complete cloud synchronization.')
+                        : (cloudSyncMessage || 'Upload all imported items to your Supabase Cloud database so they appear across all computers and salesperson phones.')}
                   </p>
                 </div>
                 <button
                   onClick={handleSyncToCloudNow}
-                  disabled={cloudSyncing}
-                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-2 self-start sm:self-auto cursor-pointer disabled:opacity-50 shrink-0"
+                  disabled={cloudSyncStatus === 'syncing'}
+                  className={`px-4 py-2.5 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-2 self-start sm:self-auto cursor-pointer disabled:opacity-50 shrink-0 ${
+                    cloudSyncStatus === 'synced'
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : cloudSyncStatus === 'error'
+                        ? 'bg-rose-600 hover:bg-rose-700'
+                        : 'bg-indigo-600 hover:bg-indigo-700'
+                  }`}
                 >
-                  {cloudSyncing ? (
+                  {cloudSyncStatus === 'syncing' ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                       <span>Syncing Catalog...</span>
                     </>
-                  ) : cloudSyncResult ? (
+                  ) : cloudSyncStatus === 'synced' ? (
                     <>
                       <Check className="w-3.5 h-3.5" />
                       <span>Cloud Synced!</span>
+                    </>
+                  ) : cloudSyncStatus === 'error' ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Retry Cloud Sync</span>
                     </>
                   ) : (
                     <>

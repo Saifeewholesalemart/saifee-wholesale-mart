@@ -1,5 +1,6 @@
 'use client';
 
+import { getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -826,12 +827,10 @@ export default function OneBillConsolidationModal({
             <div id="printable-tax-invoice" className="bg-white border border-slate-300 rounded-xl p-3 sm:p-5 shadow-sm space-y-3 text-slate-900 print-area text-xs">
               {/* Header: Firm & Invoice Info */}
               {(() => {
-                const firmName = activeCompany?.name?.toUpperCase() || companies?.[0]?.name?.toUpperCase() || 'SAIFEE GENERAL STORES';
+                const seller = getSellerDetails(activeCompany);
+                const firmName = seller.name.toUpperCase();
                 const firmFirstLetter = firmName.charAt(0) || 'S';
-                const firmAddress = activeCompany?.address 
-                  ? `${activeCompany.address}${activeCompany.city ? `, ${activeCompany.city}` : ''}` 
-                  : 'FMCG Warehouse Distributors, Sector 15, Kalamboli Logistics Zone, Navi Mumbai, MH';
-                const firmGstin = activeCompany?.gstin || '27SAIFE1234A1Z5';
+                const firmAddress = seller.address;
 
                 return (
                   <div className="flex justify-between items-start gap-3 border-b border-slate-300 pb-2">
@@ -847,7 +846,7 @@ export default function OneBillConsolidationModal({
                       <p className="text-[11px] text-slate-600 mt-0.5 leading-snug max-w-sm">
                         {firmAddress}
                       </p>
-                      <p className="text-[11px] text-slate-900 font-bold">GSTIN: {firmGstin} <span className="text-slate-500 font-normal">| State: 27 (MH)</span></p>
+                      <p className="text-[11px] text-slate-900 font-bold">{seller.gstinLabel} <span className="text-slate-500 font-normal">| State: {seller.stateLabel}</span></p>
                     </div>
 
                     <div className="text-right flex flex-col items-end gap-1">

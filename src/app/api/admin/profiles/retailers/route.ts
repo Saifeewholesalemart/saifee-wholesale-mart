@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getAuthenticatedUser, sanitizeProfile, validateCsrfOrigin } from '@/lib/authSession';
 
 export async function GET(req: NextRequest) {
   try {
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+    if (auth.session.role !== 'admin' && auth.session.profileType !== 'ADMIN') {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Admin access required' }, { status: 403 });
+    }
+
     const { searchParams } = new URL(req.url);
     const search = searchParams.get('search')?.toLowerCase().trim();
     let retailers = db.getRetailers();
@@ -22,8 +31,9 @@ export async function GET(req: NextRequest) {
 
     const combined = retailers.map(r => {
       const p = profiles.find(pr => pr.retailer_id === r.id || pr.id === `p-ret-${r.id}`);
+      const sanitizedRetailer = sanitizeProfile(r);
       return {
-        ...r,
+        ...sanitizedRetailer,
         profile_id: p?.id,
         email: p?.email,
         auth_active: p ? p.active : r.active
@@ -38,6 +48,18 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!validateCsrfOrigin(req)) {
+      return NextResponse.json({ success: false, error: 'Forbidden: Cross-site request rejected.' }, { status: 403 });
+    }
+
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+    if (auth.session.role !== 'admin' && auth.session.profileType !== 'ADMIN') {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Admin access required' }, { status: 403 });
+    }
+
     const body = await req.json();
     const { shop_name, owner_name, mobile, address, password, city, state_code, gstin, credit_limit, email } = body;
 
@@ -64,7 +86,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       message: 'Retailer Profile created successfully',
-      data: result
+      data: sanitizeProfile(result as any)
     }, { status: 201 });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err?.message || 'Failed to create retailer' }, { status: 400 });

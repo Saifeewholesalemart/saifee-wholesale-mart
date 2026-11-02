@@ -1,5 +1,6 @@
 'use client';
 
+import { isIntraStateSupply, formatPlaceOfSupply, describeStockShortfall } from '@/lib/db';
 import React, { useState, useEffect, Suspense, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -660,7 +661,7 @@ function AdminOrdersContent() {
         retailerName: retailer?.shop_name || 'Retailer Customer',
         ownerName: retailer?.owner_name || 'N/A',
         phone: retailer?.phone || retailer?.mobile || 'N/A',
-        city: retailer?.city || 'Indore',
+        city: retailer?.city || '',
         route: retailer?.beat_name || (retailer as any)?.route || 'Main Market',
         address: retailer?.address || (retailer as any)?.shop_address || '',
         currentOutstanding,
@@ -857,6 +858,8 @@ function AdminOrdersContent() {
       adminUser
     );
 
+    const shortMsg = describeStockShortfall();
+    if (shortMsg) alert(res && res.invoice ? shortMsg : `Invoice not generated. ${shortMsg}`);
     if (res && res.invoice) {
       setSelectedInvoiceForPreview(res.invoice);
       setSelectedChallanForPreview(res.challan || null);
@@ -894,7 +897,7 @@ function AdminOrdersContent() {
     let calcCgst = 0;
     let calcSgst = 0;
     let calcIgst = 0;
-    const isLocal = (retailer.state_code || '27') === '27';
+    const isLocal = isIntraStateSupply(retailer.state_code);
 
     const processOrderItem = (it: any, idx: number, fallbackInvId: string) => {
       const prod = products.find(p => p.id === it.product_id);
@@ -1023,7 +1026,7 @@ function AdminOrdersContent() {
       source_order_numbers: targetOrders.map(o => o.order_number),
       order_numbers: targetOrders.map(o => o.order_number),
       date: primaryInvoice?.date || targetOrders[0]?.dispatched_at || targetOrders[0]?.order_date || new Date().toISOString(),
-      place_of_supply: retailer.state_code === '27' || !retailer.state_code ? 'Maharashtra (27)' : `Out of State (${retailer.state_code})`,
+      place_of_supply: formatPlaceOfSupply(retailer.state_code),
       subtotal: calcSubtotal,
       discount_amount: 0,
       taxable_value: calcTaxable,

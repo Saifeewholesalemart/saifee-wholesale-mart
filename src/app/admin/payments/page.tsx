@@ -1,5 +1,6 @@
 'use client';
 
+import { getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect, useMemo, Suspense } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -68,7 +69,7 @@ interface LedgerRow {
 }
 
 function AdminPaymentsContent() {
-  const { retailers, payments, invoices, salesReturns, products, payInvoice } = useDb();
+  const { retailers, payments, invoices, salesReturns, products, payInvoice, activeCompany } = useDb();
   const router = useRouter();
   const searchParams = useSearchParams();
   
@@ -749,9 +750,9 @@ function AdminPaymentsContent() {
               <div className="hidden print:block p-6 border-b border-slate-300 text-xs">
                 <div className="flex justify-between items-start">
                   <div>
-                    <h2 className="text-lg font-black uppercase text-slate-900">SAIFEE GENERAL STORES</h2>
-                    <p className="text-slate-600 font-semibold">Authorised FMCG Super Distributor &bull; Logistics Hub, Navi Mumbai, MH</p>
-                    <p className="text-slate-500">GSTIN: 27SAIFE1234A1Z5 &bull; Contact: +91 98200 12345</p>
+                    <h2 className="text-lg font-black uppercase text-slate-900">{getSellerDetails(activeCompany).name}</h2>
+                    {getSellerDetails(activeCompany).address && <p className="text-slate-600 font-semibold">{getSellerDetails(activeCompany).address}</p>}
+                    <p className="text-slate-500">{getSellerDetails(activeCompany).gstinLabel}{getSellerDetails(activeCompany).phone ? ` • Contact: ${getSellerDetails(activeCompany).phone}` : ''}</p>
                   </div>
                   <div className="text-right">
                     <span className="text-xs font-bold bg-slate-100 border border-slate-300 px-3 py-1 rounded-md uppercase block">
@@ -1480,8 +1481,8 @@ function AdminPaymentsContent() {
                 </div>
                 <div className="space-y-1 md:text-right">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Distributor (Supplier)</span>
-                  <h4 className="font-extrabold text-slate-900 text-sm">SAIFEE GENERAL STORES</h4>
-                  <p className="text-slate-600 mt-0.5">Logistics Zone, Navi Mumbai, MH &bull; GSTIN: <strong className="text-slate-700">27SAIFE1234A1Z5</strong></p>
+                  <h4 className="font-extrabold text-slate-900 text-sm">{getSellerDetails(activeCompany).name}</h4>
+                  <p className="text-slate-600 mt-0.5">{getSellerDetails(activeCompany).address ? `${getSellerDetails(activeCompany).address} • ` : ''}<strong className="text-slate-700">{getSellerDetails(activeCompany).gstinLabel}</strong></p>
                   <p className="text-slate-500 mt-0.5">Invoice Date: <strong className="text-slate-700">{new Date(activeInvoiceModal.date).toLocaleDateString('en-IN', { dateStyle: 'medium' })}</strong> &bull; POS: <strong>{activeInvoiceModal.place_of_supply}</strong></p>
                 </div>
               </div>

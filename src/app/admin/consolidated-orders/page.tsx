@@ -15,7 +15,7 @@ function ConsolidatedOrdersContent() {
     fulfilments, retailers, orders, products, profiles, invoices, batches, deliveryChallans,
     packConsolidation, dispatchConsolidation, deliverConsolidation, cancelConsolidation,
     getFifoBatchSuggestions 
-  } = useDb();
+  , godowns } = useDb();
   
   const router = useRouter();
 
@@ -45,7 +45,7 @@ function ConsolidatedOrdersContent() {
     deliveryPerson: 'Ramesh Sawant (Van Staff)',
     notes: 'Consolidated commercial cartons. Handle with care.',
     dispatchDate: new Date().toISOString().split('T')[0],
-    dispatchGodown: 'Main Godown - Bhiwandi Bay 1'
+    dispatchGodown: 'Main Godown'
   });
 
   const selectedFul = fulfilments.find(f => f.id === selectedFulId);
@@ -617,9 +617,9 @@ function ConsolidatedOrdersContent() {
                     className="border border-slate-300 rounded-lg px-2 py-1 bg-white text-xs font-semibold text-slate-700 outline-none"
                   >
                     <option value="all">All Warehouse Godowns</option>
-                    <option value="Main Godown - Bhiwandi Bay 1">Main Godown - Bhiwandi Bay 1</option>
-                    <option value="Central Godown - Indore Hub">Central Godown - Indore Hub</option>
-                    <option value="City Godown - South Bay 2">City Godown - South Bay 2</option>
+                    {(godowns || []).map((g: any) => (
+                      <option key={g.id} value={g.name}>{g.name}</option>
+                    ))}
                   </select>
                 </div>
                 <span className="text-xs text-slate-500 font-medium">Prioritizes oldest entry date, cost layer, and godown availability</span>
@@ -827,9 +827,9 @@ function ConsolidatedOrdersContent() {
                     onChange={(e) => setDispatchInfo({ ...dispatchInfo, dispatchGodown: e.target.value })}
                     className="w-full border border-slate-200 rounded-lg p-2 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 bg-white"
                   >
-                    <option value="Main Godown - Bhiwandi Bay 1">Main Godown - Bhiwandi Bay 1</option>
-                    <option value="Central Godown - Indore Hub">Central Godown - Indore Hub</option>
-                    <option value="City Godown - South Bay 2">City Godown - South Bay 2</option>
+                    {(godowns || []).map((g: any) => (
+                      <option key={g.id} value={g.name}>{g.name}</option>
+                    ))}
                   </select>
                 </div>
                 <div className="space-y-1">

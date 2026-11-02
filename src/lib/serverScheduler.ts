@@ -27,6 +27,20 @@ export function checkAndExecuteNightlyBackup(): { executed: boolean; message: st
 
     if (!alreadyBackedUpToday && isNightlyWindow) {
       const snapshotPayload = db.exportFullDatabaseBackup();
+      if (snapshotPayload.tables) {
+        if (snapshotPayload.tables.profiles) {
+          snapshotPayload.tables.profiles = snapshotPayload.tables.profiles.map((p: any) => {
+            const { password, password_hash, ...rest } = p;
+            return rest;
+          }) as any;
+        }
+        if (snapshotPayload.tables.retailers) {
+          snapshotPayload.tables.retailers = snapshotPayload.tables.retailers.map((r: any) => {
+            const { password, password_hash, ...rest } = r;
+            return rest;
+          }) as any;
+        }
+      }
       const savedInfo = saveSnapshotToServer(snapshotPayload, true);
       return {
         executed: true,

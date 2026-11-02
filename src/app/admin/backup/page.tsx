@@ -498,7 +498,11 @@ export default function DatabaseBackupPage() {
             </p>
             <div className="flex flex-wrap items-center gap-4 pt-1 text-xs text-slate-400">
               <span className="flex items-center gap-1.5 font-medium">
-                <Server className="w-3.5 h-3.5 text-indigo-400" /> Endpoint: <code className="text-indigo-200">wxctglnnybhhptkxwxur.supabase.co</code>
+                <Server className="w-3.5 h-3.5 text-indigo-400" /> Endpoint: <code className="text-indigo-200">
+                  {typeof window !== 'undefined' && process.env.NEXT_PUBLIC_SUPABASE_URL
+                    ? (() => { try { return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).hostname; } catch { return 'Custom Endpoint'; } })()
+                    : 'Not Configured (Isolated)'}
+                </code>
               </span>
               <span className="flex items-center gap-1.5 font-medium">
                 <Clock className="w-3.5 h-3.5 text-emerald-400" /> Last Cloud Sync:{' '}

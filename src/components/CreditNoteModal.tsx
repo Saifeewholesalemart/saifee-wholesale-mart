@@ -1,5 +1,6 @@
 'use client';
 
+import { getSellerDetails } from '@/lib/db';
 import React from 'react';
 import { X, Printer, CheckCircle, FileText, Building2, Store, Calendar, Tag } from 'lucide-react';
 import { SalesReturn, Retailer, Product, BusinessCompany, formatQuantityDisplay } from '@/lib/db';
@@ -109,15 +110,17 @@ export default function CreditNoteModal({
                 <span>Authorized FMCG Distributor</span>
               </div>
               <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-                {businessCompany?.name || 'Saifee General Stores'}
+                {getSellerDetails(businessCompany).name}
               </h1>
-              <p className="text-xs text-slate-600 font-medium leading-relaxed">
-                {businessCompany?.address || '124, M.G. Road, Wholesale Market, Indore - 452001 (M.P.)'}
-              </p>
+              {getSellerDetails(businessCompany).address && (
+                <p className="text-xs text-slate-600 font-medium leading-relaxed">
+                  {getSellerDetails(businessCompany).address}
+                </p>
+              )}
               <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-4 gap-y-1 pt-1 font-semibold">
-                <span>GSTIN: <strong className="text-slate-800">{businessCompany?.gstin || '23AABCS1429E1Z8'}</strong></span>
-                <span>State: <strong className="text-slate-800">Madhya Pradesh (23)</strong></span>
-                <span>Phone: <strong className="text-slate-800">+91 98260 12345</strong></span>
+                <span><strong className="text-slate-800">{getSellerDetails(businessCompany).gstinLabel}</strong></span>
+                <span>State: <strong className="text-slate-800">{getSellerDetails(businessCompany).stateLabel}</strong></span>
+                {getSellerDetails(businessCompany).phone && <span>Phone: <strong className="text-slate-800">{getSellerDetails(businessCompany).phone}</strong></span>}
               </div>
             </div>
 
@@ -159,7 +162,7 @@ export default function CreditNoteModal({
                 Proprietor: {retailer?.owner_name || 'Store Owner'}
               </p>
               <p className="text-xs text-slate-500 leading-tight">
-                {retailer?.address ? `${retailer.address}, ${retailer.city || 'Indore'}` : 'Indore Wholesale Route'}
+                {retailer?.address ? `${retailer.address}${retailer.city ? `, ${retailer.city}` : ''}` : (retailer?.city || '')}
               </p>
             </div>
 

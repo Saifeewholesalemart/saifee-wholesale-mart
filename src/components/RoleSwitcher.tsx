@@ -3,19 +3,21 @@
 import React, { useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter, usePathname } from 'next/navigation';
-import { Shield, Smartphone, Store, User, Boxes } from 'lucide-react';
+import { Shield, Smartphone, Store, User, Boxes, AlertTriangle } from 'lucide-react';
 
 export default function RoleSwitcher() {
-  const { currentUser, setCurrentUser, profiles } = useDb();
+  const { currentUser, setCurrentUser, profiles, isAuthenticated } = useDb();
   const router = useRouter();
   const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
 
-  // We only show the active switcher on client side
-  if (!currentUser) return null;
+  // SECURITY: Prevent client-side role switching completely in production environments
+  if (process.env.NODE_ENV === 'production') {
+    return null;
+  }
 
-  // Strict Isolation: Do not render floating role switcher on root login landing page or inside the Admin ERP portal
-  if (pathname === '/' || pathname?.startsWith('/admin')) {
+  // Do not render switcher if unauthenticated or on root login landing page
+  if (!isAuthenticated || !currentUser || !currentUser.id || pathname === '/' || pathname?.startsWith('/admin')) {
     return null;
   }
 
@@ -58,52 +60,55 @@ export default function RoleSwitcher() {
       {isOpen && (
         <div 
           className="fixed inset-0 z-40 bg-slate-950/20 backdrop-blur-[1px] animate-in fade-in duration-100" 
-          onClick={() => setIsOpen(false)} 
+          onClick={() => setIsOpen(false)}
         />
       )}
-      <div className={`fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50 no-print ${pathname?.startsWith('/staff') ? 'hidden md:block' : ''}`}>
-        <div className="relative">
-          <button
-            onClick={() => setIsOpen(!isOpen)}
-            className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-3 bg-slate-900 text-white rounded-full shadow-lg hover:bg-slate-800 active:scale-95 transition-all text-[11px] sm:text-xs font-semibold tracking-wider border border-slate-700 cursor-pointer"
-          >
-            {getRoleIcon(currentUser.role)}
-            <span className="truncate max-w-[140px] sm:max-w-none">ROLE: {currentUser.name.split(' ')[0].toUpperCase()} ({currentUser.role.toUpperCase()})</span>
-          </button>
 
-          {isOpen && (
-            <div className="absolute bottom-12 sm:bottom-14 right-0 w-[calc(100vw-24px)] max-w-xs sm:w-80 max-h-[75vh] overflow-y-auto bg-white rounded-xl shadow-2xl border border-slate-200 p-2 animate-in fade-in slide-in-from-bottom-2 duration-150 z-50">
-              <div className="px-3 py-2 border-b border-slate-100 text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Switch Demo User Role
-              </div>
-              <div className="space-y-1 mt-1">
-                {profiles.map((p) => (
+      <div className="fixed bottom-20 right-4 z-50 flex flex-col items-end">
+        {isOpen && (
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 p-2 mb-3 w-64 max-h-[70vh] overflow-y-auto animate-in slide-in-from-bottom-2 duration-150">
+            <div className="px-2 py-1.5 border-b border-slate-100 mb-1 flex items-center justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Dev Switcher</span>
+              <span className="inline-flex items-center gap-1 text-[9px] font-semibold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                <AlertTriangle className="w-2.5 h-2.5" /> Dev Mode
+              </span>
+            </div>
+
+            <div className="space-y-1">
+              {profiles.filter(p => p.active !== false).map(p => {
+                const isSelected = p.id === currentUser.id;
+                return (
                   <button
                     key={p.id}
                     onClick={() => handleRoleChange(p.id)}
-                    className={`w-full text-left flex items-start gap-3 p-2.5 rounded-lg transition-all text-xs cursor-pointer ${
-                      currentUser.id === p.id 
-                        ? 'bg-indigo-50 border border-indigo-100 font-semibold' 
-                        : 'hover:bg-slate-50 active:bg-slate-100 border border-transparent'
+                    className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left text-xs transition-colors ${
+                      isSelected 
+                        ? 'bg-indigo-50 text-indigo-900 font-semibold border border-indigo-100' 
+                        : 'hover:bg-slate-50 text-slate-700'
                     }`}
                   >
-                    <div className="mt-0.5">{getRoleIcon(p.role)}</div>
-                    <div className="flex-1">
-                      <div className="text-slate-800 font-bold">{p.name}</div>
-                      <div className="text-slate-500 text-xs mt-0.5 font-medium leading-tight">
-                        {p.role === 'admin' && 'Full ERP access, Purchases, Consolidation, Invoices'}
-                        {p.role === 'sales_dist' && 'Distributor Sales: Places orders for any product & retailer'}
-                        {p.role === 'sales_co' && `Company Sales (${p.company_id?.split('-')[1]?.toUpperCase()}): Places brand orders`}
-                        {p.role === 'retailer' && 'Retailer direct: Places orders, views invoices & outstanding'}
-                        {(p.role === 'staff' || p.profile_type === 'STAFF') && `${p.custom_role || 'Warehouse Staff'}: Order packing queues & box verification`}
-                      </div>
+                    <div className="shrink-0 p-1 rounded-md bg-slate-100">
+                      {getRoleIcon(p.role)}
+                    </div>
+                    <div className="truncate flex-1">
+                      <p className="truncate leading-tight">{p.name || p.full_name}</p>
+                      <p className="text-[10px] text-slate-400 capitalize">{p.custom_role || p.role.replace('_', ' ')}</p>
                     </div>
                   </button>
-                ))}
-              </div>
+                );
+              })}
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="bg-slate-900 hover:bg-slate-800 text-white rounded-full p-2.5 shadow-lg border border-slate-700 flex items-center gap-2 text-xs font-medium transition-all active:scale-95"
+          title="Development Role Switcher (Disabled in Production)"
+        >
+          {getRoleIcon(currentUser.role)}
+          <span className="hidden sm:inline font-semibold">Switch Role</span>
+        </button>
       </div>
     </>
   );

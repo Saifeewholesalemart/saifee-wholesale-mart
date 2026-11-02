@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getAuthenticatedUser, sanitizeProfile, validateCsrfOrigin } from '@/lib/authSession';
 
 export async function GET(req: NextRequest) {
   try {
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+    if (auth.session.role !== 'admin' && auth.session.profileType !== 'ADMIN') {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Admin access required' }, { status: 403 });
+    }
+
     const { searchParams } = new URL(req.url);
     const search = searchParams.get('search')?.toLowerCase().trim();
     const type = searchParams.get('type'); // 'sales_dist' | 'sales_co'
@@ -33,8 +42,10 @@ export async function GET(req: NextRequest) {
         .map(catId => categories.find(c => c.id === catId)?.name)
         .filter(Boolean);
 
+      const sanitized = sanitizeProfile(p);
+
       return {
-        ...p,
+        ...sanitized,
         channel_code: p.role === 'sales_dist' ? 'CH_DIST_SALES' : 'CH_CO_SALES',
         channel_label: p.role === 'sales_dist' ? 'Distributor Salesperson' : 'Company Salesperson',
         assigned_company_names: assignedCompanies,
@@ -53,6 +64,18 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!validateCsrfOrigin(req)) {
+      return NextResponse.json({ success: false, error: 'Forbidden: Cross-site request rejected.' }, { status: 403 });
+    }
+
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+    if (auth.session.role !== 'admin' && auth.session.profileType !== 'ADMIN') {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Admin access required' }, { status: 403 });
+    }
+
     const body = await req.json();
     const { name, mobile, password, role, assigned_company_ids, assigned_category_ids, email } = body;
 
@@ -91,7 +114,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       message: 'Salesperson Profile created successfully',
-      data: profile
+      data: sanitizeProfile(profile)
     }, { status: 201 });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err?.message || 'Failed to create salesperson' }, { status: 400 });

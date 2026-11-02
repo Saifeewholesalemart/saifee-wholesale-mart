@@ -1,5 +1,6 @@
 'use client';
 
+import { isIntraStateSupply, getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useDb } from '@/context/DbContext';
 import { Product, Retailer, Invoice, CustomerCreditProfile } from '@/lib/db';
@@ -253,7 +254,7 @@ export default function FastTradeTerminal() {
 
     const taxableVal = (cQty * Math.max(0, cRate - cDisc)) + (lQty * Math.max(0, lRate - lDisc));
     const gstVal = Math.round(taxableVal * (gstPct / 100) * 100) / 100;
-    const isLocal = !activeCompany?.state || activeCompany.state.includes('Maharashtra') || activeCompany.state.includes('27');
+    const isLocal = isIntraStateSupply(retailers.find(r => r.id === selectedRetailerId)?.state_code);
 
     const cgst = isLocal ? Math.round((gstVal / 2) * 100) / 100 : 0;
     const sgst = isLocal ? (gstVal - cgst) : 0;
@@ -1126,11 +1127,10 @@ export default function FastTradeTerminal() {
               <div className="border-b pb-4 flex justify-between items-start">
                 <div>
                   <h2 className="text-base font-black text-slate-900 uppercase tracking-wide">
-                    {activeCompany?.name || 'SAIFEE GENERAL STORES'}
+                    {getSellerDetails(activeCompany).name}
                   </h2>
-                  <p className="text-slate-600 font-medium">FMCG Wholesalers &amp; Distributors</p>
-                  <p className="text-slate-500 text-[11px]">{activeCompany?.address || 'Shop 12-14, Wholesale Market'}, {activeCompany?.city || 'Mumbai'}</p>
-                  <p className="text-slate-500 text-[11px]">GSTIN: <strong>{activeCompany?.gstin || '27AABCS1429B1ZB'}</strong></p>
+                  {getSellerDetails(activeCompany).address && <p className="text-slate-500 text-[11px]">{getSellerDetails(activeCompany).address}</p>}
+                  <p className="text-slate-500 text-[11px]"><strong>{getSellerDetails(activeCompany).gstinLabel}</strong></p>
                 </div>
                 <div className="text-right">
                   <div className="text-xs font-black text-indigo-700 uppercase">Tax Invoice (GST)</div>

@@ -1368,7 +1368,7 @@ export default function CategoryManagementPage() {
                           <div className="flex items-start justify-between gap-2">
                             <div>
                               <span className="text-xs font-bold text-slate-800 block">{ret.shop_name}</span>
-                              <span className="text-[11px] text-slate-500 block">{ret.retailer_code} • {ret.city || 'Mumbai'}</span>
+                              <span className="text-[11px] text-slate-500 block">{ret.retailer_code} • {ret.city || ''}</span>
                             </div>
                           </div>
                           <div className="mt-2 flex items-center justify-between text-[11px]">

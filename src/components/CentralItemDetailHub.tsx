@@ -178,7 +178,7 @@ export default function CentralItemDetailHub({
   const [purDiscount, setPurDiscount] = useState(0);
   const [purBatch, setPurBatch] = useState('');
   const [purExpiry, setPurExpiry] = useState('');
-  const [purGodown, setPurGodown] = useState('Central Godown (Indore Hub)');
+  const [purGodown, setPurGodown] = useState('Main Godown');
   const [purError, setPurError] = useState('');
 
   const [mounted, setMounted] = useState(false);
@@ -326,7 +326,7 @@ export default function CentralItemDetailHub({
             orderDate: ord.order_date,
             retailerId: ord.retailer_id,
             retailerName: ret?.shop_name || 'Retail Store',
-            city: ret?.city || 'Mumbai',
+            city: ret?.city || '',
             salespersonName: (() => {
               const spProfile = profiles?.find(p => p.id === ord.created_by || p.name === ord.created_by || p.email === ord.created_by);
               return spProfile?.name?.replace(/\s*\([^)]*\)/g, '')?.trim() || ord.created_by;
@@ -558,8 +558,8 @@ export default function CentralItemDetailHub({
       dealer_price: product.dealer_price,
       gst_percent: product.gst_percent,
       hsn: product.hsn,
-      min_stock_level: product.min_stock_level || 5,
-      reorder_level: product.reorder_level || 10,
+      min_stock_level: product.min_stock_level ?? 5,
+      reorder_level: product.reorder_level ?? 10,
       batch_tracking_enabled: product.batch_tracking_enabled !== false,
       expiry_tracking_enabled: product.expiry_tracking_enabled !== false,
       active: product.active
@@ -920,7 +920,7 @@ export default function CentralItemDetailHub({
               <div className="flex flex-wrap items-center gap-3 pt-1">
                 <div className="flex items-baseline gap-1 text-xs">
                   <span className="text-slate-500 font-medium">Available:</span>
-                  <span className={`font-black text-sm ${inv.available_qty <= (product.reorder_level || 10) ? 'text-amber-600' : 'text-slate-900'}`}>
+                  <span className={`font-black text-sm ${inv.available_qty <= (product.reorder_level ?? 10) ? 'text-amber-600' : 'text-slate-900'}`}>
                     {formatProductStockDisplay(inv.available_qty, product, true)}
                   </span>
                 </div>
@@ -942,7 +942,7 @@ export default function CentralItemDetailHub({
                     <div className="flex items-baseline gap-1 text-xs">
                       <span className="text-slate-500 font-medium">Loose Rate:</span>
                       <span className="font-black text-emerald-700 text-sm">
-                        ₹{product.loose_selling_price || (product.selling_price / (tradeMeta.packSize || 1)).toFixed(2)}
+                        ₹{Number(product.loose_selling_price || (Number(product.selling_price) / (tradeMeta.packSize || 1))).toFixed(2)}
                       </span>
                       <span className="text-xs text-slate-500">/Piece</span>
                     </div>
@@ -1132,7 +1132,7 @@ export default function CentralItemDetailHub({
             <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-xs">
               <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Available Stock</span>
               <div className="mt-1">
-                <span className={`text-sm font-black block leading-tight ${inv.available_qty <= (product.reorder_level || 10) ? 'text-amber-600' : 'text-slate-900'}`}>
+                <span className={`text-sm font-black block leading-tight ${inv.available_qty <= (product.reorder_level ?? 10) ? 'text-amber-600' : 'text-slate-900'}`}>
                   {formatProductStockDisplay(inv.available_qty, product, true)}
                 </span>
               </div>
@@ -1552,7 +1552,7 @@ export default function CentralItemDetailHub({
                       return (
                         <tr key={b.id} className="hover:bg-slate-50">
                           <td className="p-2.5 font-mono font-bold text-indigo-700">{b.batch_number}</td>
-                          <td className="p-2.5 text-slate-700 font-medium">{b.godown || 'Central Godown (Indore Hub)'}</td>
+                          <td className="p-2.5 text-slate-700 font-medium">{b.godown || ''}</td>
                           <td className="p-2.5 text-slate-600">{b.entry_date || 'N/A'}</td>
                           <td className="p-2.5 font-semibold text-slate-800">{b.expiry_date}</td>
                           <td className="p-2.5 font-bold text-slate-800">₹{b.purchase_rate}</td>
@@ -2098,7 +2098,7 @@ export default function CentralItemDetailHub({
                   </div>
                   <div>
                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Reorder Alert Level</span>
-                    <p className="font-bold text-amber-600">{product.reorder_level || 10} {product.trading_unit}s</p>
+                    <p className="font-bold text-amber-600">{product.reorder_level ?? 10} {product.trading_unit}s</p>
                   </div>
                   <div>
                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Batch &amp; Expiry Tracking</span>
@@ -2585,7 +2585,7 @@ export default function CentralItemDetailHub({
                     <label className="font-semibold text-slate-700 block mb-1">Reorder Alert Level</label>
                     <input
                       type="number"
-                      value={editForm.reorder_level || 10}
+                      value={editForm.reorder_level ?? 10}
                       onChange={(e) => setEditForm({ ...editForm, reorder_level: parseInt(e.target.value, 10) || 5 })}
                       className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none"
                     />
@@ -2594,7 +2594,7 @@ export default function CentralItemDetailHub({
                     <label className="font-semibold text-slate-700 block mb-1">Minimum Stock</label>
                     <input
                       type="number"
-                      value={editForm.min_stock_level || 5}
+                      value={editForm.min_stock_level ?? 5}
                       onChange={(e) => setEditForm({ ...editForm, min_stock_level: parseInt(e.target.value, 10) || 1 })}
                       className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none"
                     />

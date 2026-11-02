@@ -1,8 +1,10 @@
 // Saifee General Stores - Multi-Business & FMCG Database Engine (V5 Multi-Tenant)
 import { getIdbItem, setIdbItem, getAllIdbItems } from './indexedDbStorage';
+import { resolveRecordId } from './cloudRecordStores';
 
 export interface BusinessCompany {
   id: string; // e.g. 'biz-saifee', 'biz-second-trading'
+  code?: string; // e.g. 'SGS', 'SWT'
   name: string; // e.g. 'Saifee General Stores', 'Saifee Wholesale & Trading'
   legal_name?: string;
   business_type: string; // 'FMCG Distribution' | 'Wholesale Trading' | 'Retail Chain' | 'Manufacturing' | string
@@ -17,6 +19,12 @@ export interface BusinessCompany {
   pincode?: string;
   logo_url?: string;
   currency?: string; // 'INR'
+  invoice_prefix?: string;
+  order_prefix?: string;
+  customer_term?: string;
+  settings?: Record<string, any>;
+  modules?: string[];
+  status?: 'active' | 'inactive' | 'archived';
   is_active: boolean;
   is_default?: boolean;
   created_at: string;
@@ -26,9 +34,12 @@ export interface BusinessCompany {
 export interface CompanyMember {
   id: string;
   business_id: string;
+  company_id?: string; // backwards-compatible alias for business_id
   user_id: string;
-  role: 'owner' | 'admin' | 'manager' | 'staff';
+  role: 'owner' | 'admin' | 'manager' | 'staff' | 'salesperson' | 'retailer';
+  status?: 'active' | 'inactive' | 'suspended';
   created_at: string;
+  updated_at?: string;
 }
 
 export type ProfileType = 'RETAILER' | 'SALESPERSON' | 'STAFF' | 'ADMIN';
@@ -89,6 +100,7 @@ export interface DatabaseBackupSnapshot {
 
 export interface Profile {
   id: string;
+  business_id?: string;
   email: string;
   name: string;
   full_name?: string;
@@ -264,7 +276,8 @@ export interface ItemActivityLog {
 
 export interface Godown {
   id: string;
-  company_id: string; // scoped to business_id (e.g. 'biz-saifee')
+  business_id?: string; // primary tenant identifier (references business_companies.id)
+  company_id?: string; // legacy alias for business_id (e.g. 'biz-saifee')
   name: string; // 'Main Godown', 'Secondary Godown'
   code: string; // 'GD01', 'GD02'
   address?: string;
@@ -337,6 +350,9 @@ export interface StockLedgerEntry {
   reason: string; // 'Purchase', 'Sale', 'Sales Return', 'Damage', 'Adjustment', 'Stock Transfer In', 'Stock Transfer Out'
   reference_id?: string;
   user_id?: string;
+  batch_id?: string;
+  batch_number?: string;
+  notes?: string;
   business_id?: string;
   created_at: string;
 }
@@ -357,8 +373,9 @@ export interface StockTransferItem {
 
 export interface StockTransfer {
   id: string;
+  business_id?: string; // primary tenant identifier (references business_companies.id)
+  company_id?: string; // legacy alias or brand scope
   transfer_number: string; // e.g. TR-2026-00001
-  company_id: string;
   from_godown_id: string;
   to_godown_id: string;
   status: 'Draft' | 'Requested' | 'Approved' | 'Dispatched' | 'Received' | 'Completed' | 'Cancelled';
@@ -440,6 +457,8 @@ export interface OrderItem {
   pending_reason?: 'Stock Unavailable' | 'Partial Stock Available' | 'Awaiting Purchase' | 'Retailer Requested Later' | 'Delivery Issue' | 'Other' | string;
   backordered?: boolean;
   batch_allocations?: BatchAllocation[];
+  /** Simple flow: quantity the packer packed in the current session (not billed yet) */
+  flow_packed_qty?: number;
 }
 
 export type OrderChannel =
@@ -477,6 +496,11 @@ export interface Order {
   challan_id?: string;
   business_id?: string;
   updated_at?: string;
+
+  // Simple flow (Order Board / Packer / Biller)
+  flow_ready_to_bill?: boolean;      // packed, waiting for the biller
+  flow_pack_attempted_at?: string;   // last time a packer finished packing this order
+  flow_packed_by?: string;
 
   // Role-Scoped Metadata (for Salesperson Scoped Views)
   is_scoped_view?: boolean;
@@ -937,7 +961,8 @@ export interface CashFlowEditHistoryEntry {
 export interface CashFlowTransaction {
   id: string;
   transaction_number: string; // e.g. CF-2026-00001
-  company_id: string; // business_id e.g. 'biz-saifee' or 'biz-second-trading'
+  business_id?: string; // primary tenant identifier (references business_companies.id)
+  company_id: string; // legacy backwards-compatible alias for business_id e.g. 'biz-saifee' or 'biz-second-trading'
   date: string; // YYYY-MM-DD or ISO
   time: string; // HH:mm:ss or HH:mm
   type: CashFlowType;
@@ -968,6 +993,8 @@ export interface CashFlowTransaction {
 }
 
 export interface CompanyOpeningBalance {
+  id?: string;
+  business_id?: string; // primary tenant identifier (references business_companies.id)
   company_id: string;
   opening_balance: number;
   as_of_date: string; // e.g. '2026-04-01'
@@ -1148,7 +1175,7 @@ export interface VyaparImportBatch {
   created_purchase_id?: string;
   created_batch_ids: string[];
   created_ledger_ids: string[];
-  column_mapping: Record<string, string>;
+  column_mapping?: Record<string, string>;
   row_logs: VyaparImportRowLog[];
   rollback_at?: string;
   rollback_by_name?: string;
@@ -2171,126 +2198,50 @@ export function checkSingleItemPendingWarning(
 export const SEED_BUSINESS_COMPANIES: BusinessCompany[] = [
   {
     id: 'biz-saifee',
-    name: 'Saifee General Stores',
-    legal_name: 'Saifee General Stores Private Limited',
-    business_type: 'FMCG Distribution',
-    gstin: '27ABCDE1234F1Z5',
-    pan: 'ABCDE1234F',
-    email: 'contact@saifeegeneralstores.com',
-    phone: '+91 98200 12345',
-    address: 'Shop 1-4, Ground Floor, Saifee Jubilee Market, Bhendi Bazaar, South Mumbai',
-    city: 'Mumbai',
-    state: 'Maharashtra (27)',
-    pincode: '400003',
+    code: 'SWM',
+    name: 'Saifee Wholesale Mart',
+    business_type: 'FMCG Wholesale Distribution',
+    address: 'Khachrod, Dist. Ujjain',
+    city: 'Khachrod',
+    state: 'Madhya Pradesh',
+    state_code: '23',
     currency: 'INR',
+    invoice_prefix: 'SWM-INV',
+    order_prefix: 'SWM-ORD',
+    customer_term: 'Retailer',
+    status: 'active',
     is_active: true,
+    is_default: true,
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z'
-  },
-  {
-    id: 'biz-second-trading',
-    name: 'Saifee Wholesale & Trading',
-    legal_name: 'Saifee Wholesale & Trading Enterprises LLP',
-    business_type: 'Wholesale Trading & Distribution',
-    gstin: '27XYZAB5678C1Z2',
-    pan: 'XYZAB5678C',
-    email: 'orders@saifeetrading.com',
-    phone: '+91 98199 54321',
-    address: 'Plot 45-B, Sector 19, APMC Commodity Market, Vashi, Navi Mumbai',
-    city: 'Navi Mumbai',
-    state: 'Maharashtra (27)',
-    pincode: '400705',
-    currency: 'INR',
-    is_active: true,
-    created_at: '2026-02-15T00:00:00.000Z',
-    updated_at: '2026-02-15T00:00:00.000Z'
   }
 ];
 
 export const SEED_COMPANY_MEMBERS: CompanyMember[] = [
-  { id: 'mem-1', business_id: 'biz-saifee', user_id: 'p-admin-1', role: 'owner', created_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'mem-2', business_id: 'biz-second-trading', user_id: 'p-admin-1', role: 'owner', created_at: '2026-02-15T00:00:00.000Z' },
-  { id: 'mem-3', business_id: 'biz-saifee', user_id: 'p-dist-sales-1', role: 'staff', created_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'mem-4', business_id: 'biz-saifee', user_id: 'p-dist-sales-2', role: 'staff', created_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'mem-5', business_id: 'biz-saifee', user_id: 'p-dist-sales-3', role: 'staff', created_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'mem-6', business_id: 'biz-saifee', user_id: 'p-co-sales-1', role: 'staff', created_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'mem-8', business_id: 'biz-second-trading', user_id: 'p-dist-sales-1', role: 'staff', created_at: '2026-02-15T00:00:00.000Z' },
-  { id: 'mem-ret-1', business_id: 'biz-saifee', user_id: 'p-retailer-ganesh', role: 'staff', created_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'mem-ret-2', business_id: 'biz-saifee', user_id: 'p-retailer-om', role: 'staff', created_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'mem-ret-3', business_id: 'biz-saifee', user_id: 'p-retailer-gupta', role: 'staff', created_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'mem-ret-4', business_id: 'biz-saifee', user_id: 'p-retailer-apna', role: 'staff', created_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'mem-ret-5', business_id: 'biz-saifee', user_id: 'p-retailer-laxmi', role: 'staff', created_at: '2026-01-01T00:00:00.000Z' }
+  { id: 'mem-admin-initial', business_id: 'biz-saifee', user_id: 'p-admin-initial', role: 'owner', created_at: '2026-01-01T00:00:00.000Z' }
 ];
 
-const SEED_COMPANIES: Company[] = [
-  { id: 'c-parle', name: 'Parle', code: 'PARLE', active: true },
-  { id: 'c-britannia', name: 'Britannia Industries', code: 'BRITANNIA', active: true },
-  { id: 'c-itc', name: 'ITC Limited', code: 'ITC', active: true },
-  { id: 'c-hul', name: 'Hindustan Unilever (HUL)', code: 'HUL', active: true },
-  { id: 'c-nestle', name: 'Nestlé India', code: 'NESTLE', active: true },
-  { id: 'c-pepsico', name: 'PepsiCo India', code: 'PEPSICO', active: true },
-  { id: 'c-cocacola', name: 'Coca-Cola India', code: 'COCACOLA', active: true },
-  { id: 'c-tata', name: 'Tata Consumer Products', code: 'TATA', active: true },
-  { id: 'c-dabur', name: 'Dabur India', code: 'DABUR', active: true },
-  { id: 'c-colgate', name: 'Colgate-Palmolive', code: 'COLGATE', active: true }
-];
+const SEED_COMPANIES: Company[] = [];
 
-const SEED_SUPPLIERS: Supplier[] = [
-  { id: 's-prashant-medico', name: 'Prashant Medico', gstin: '27PRASH1234M1Z5', address: 'Shop 1, Main Road, Station Area, Indore, MP', active: true, business_id: 'biz-saifee' },
-  { id: 's-johnson-aadesh', name: 'Johnson Aadesh Enterprises', gstin: '27JOHNA5678E1Z2', address: 'Shop 12, Commercial Complex, Wholesale Hub, Indore, MP', active: true, business_id: 'biz-saifee' },
-  { id: 's-abc-pharma', name: 'ABC Pharma', gstin: '27ABCPH9012F1Z3', address: 'Sector 3, Sanwer Road Industrial Area, Indore, MP', active: true, business_id: 'biz-saifee' },
-  { id: 's-xyz-distributors', name: 'XYZ Distributors', gstin: '27XYZDI3456G1Z4', address: 'Plot 88, Transport Nagar, Indore, MP', active: true, business_id: 'biz-saifee' },
-  { id: 's-shree-medical', name: 'Shree Medical', gstin: '27SHREE7890H1Z5', address: 'Dawa Bazaar, RNT Marg, Indore, MP', active: true, business_id: 'biz-saifee' }
-];
+const SEED_SUPPLIERS: Supplier[] = [];
 
-const SEED_RETAILERS: Retailer[] = [
-  { id: 'ret-shree-ganesh', retailer_code: 'RET-00101', shop_name: 'Shree Ganesh Super Market', owner_name: 'Ganesh Patel', address: 'Shop 45, MG Road, Central Market', city: 'Indore', state_code: '27', gstin: '23AABCG1234F1Z1', mobile: '9826110001', credit_limit: 150000, outstanding: 0, active: true, business_id: 'biz-saifee' },
-  { id: 'ret-om-kirana', retailer_code: 'RET-00102', shop_name: 'Om Kirana & General Store', owner_name: 'Om Prakash Gupta', address: '12, Jail Road, Near Tower', city: 'Indore', state_code: '27', gstin: '23BCOPK5678M1Z2', mobile: '9826220002', credit_limit: 100000, outstanding: 0, active: true, business_id: 'biz-saifee' },
-  { id: 'ret-gupta-provision', retailer_code: 'RET-00103', shop_name: 'Gupta Provision Store', owner_name: 'Ramesh Gupta', address: '78, Malwa Mill Chauraha', city: 'Indore', state_code: '27', gstin: '23CGUPR9012N1Z3', mobile: '9826330003', credit_limit: 120000, outstanding: 0, active: true, business_id: 'biz-saifee' },
-  { id: 'ret-apna-bazaar', retailer_code: 'RET-00104', shop_name: 'Apna Bazaar Mart', owner_name: 'Sunil Jain', address: '102, Scheme 54, Vijay Nagar', city: 'Indore', state_code: '27', gstin: '23DSUNJ3456P1Z4', mobile: '9826440004', credit_limit: 200000, outstanding: 0, active: true, business_id: 'biz-saifee' },
-  { id: 'ret-laxmi-traders', retailer_code: 'RET-00105', shop_name: 'Laxmi Trading & Daily Needs', owner_name: 'Mahesh Sharma', address: '24, Rajwada Main Bazaar', city: 'Indore', state_code: '27', gstin: '23EMSHR7890Q1Z5', mobile: '9826550005', credit_limit: 180000, outstanding: 0, active: true, business_id: 'biz-saifee' }
-];
+const SEED_RETAILERS: Retailer[] = [];
 
-const SEED_PROFILES: Profile[] = [
-  { id: 'p-admin-1', email: 'admin@saifee.com', name: 'Saifee Admin Manager', full_name: 'Saifee Admin Manager', mobile: '9826012345', contact_no: '9826012345', password: 'admin', password_hash: 'admin', role: 'admin', profile_type: 'ADMIN', active: true, status: 'ACTIVE' },
-  { id: 'p-dist-sales-1', email: 'rajesh.sales@saifee.com', name: 'Rajesh Kumar (Distributor Sales)', full_name: 'Rajesh Kumar', mobile: '9826011111', contact_no: '9826011111', password: 'sales', password_hash: 'sales', role: 'sales_dist', profile_type: 'SALESPERSON', sales_role_type: 'DISTRIBUTOR', active: true, status: 'ACTIVE' },
-  { id: 'p-dist-sales-2', email: 'amit.sales@saifee.com', name: 'Amit Sharma (Distributor Sales)', full_name: 'Amit Sharma', mobile: '9826012222', contact_no: '9826012222', password: 'sales', password_hash: 'sales', role: 'sales_dist', profile_type: 'SALESPERSON', sales_role_type: 'DISTRIBUTOR', active: true, status: 'ACTIVE' },
-  { id: 'p-co-sales-1', email: 'suresh.parle@parle.com', name: 'Suresh N. (Parle Salesperson)', full_name: 'Suresh N.', mobile: '9826022222', contact_no: '9826022222', password: 'sales', password_hash: 'sales', role: 'sales_co', profile_type: 'SALESPERSON', sales_role_type: 'COMPANY', company_id: 'c-parle', active: true, status: 'ACTIVE' },
-  { id: 'p-co-sales-2', email: 'anil.britannia@britannia.com', name: 'Anil K. (Britannia Salesperson)', full_name: 'Anil K.', mobile: '9826055555', contact_no: '9826055555', password: 'sales', password_hash: 'sales', role: 'sales_co', profile_type: 'SALESPERSON', sales_role_type: 'COMPANY', company_id: 'c-britannia', active: true, status: 'ACTIVE' },
-  { id: 'p-co-sales-3', email: 'vikas.hul@hul.com', name: 'Vikas J. (HUL Salesperson)', full_name: 'Vikas J.', mobile: '9826066666', contact_no: '9826066666', password: 'sales', password_hash: 'sales', role: 'sales_co', profile_type: 'SALESPERSON', sales_role_type: 'COMPANY', company_id: 'c-hul', active: true, status: 'ACTIVE' },
-  { id: 'p-retailer-ganesh', email: 'ganesh.supermarket@gmail.com', name: 'Ganesh Patel (Shree Ganesh Super Market)', full_name: 'Ganesh Patel', mobile: '9826110001', contact_no: '9826110001', password: 'retail', password_hash: 'retail', role: 'retailer', profile_type: 'RETAILER', retailer_id: 'ret-shree-ganesh', active: true, status: 'ACTIVE' },
-  { id: 'p-retailer-om', email: 'om.kirana.indore@gmail.com', name: 'Om Prakash (Om Kirana & General Store)', full_name: 'Om Prakash', mobile: '9826220002', contact_no: '9826220002', password: 'retail', password_hash: 'retail', role: 'retailer', profile_type: 'RETAILER', retailer_id: 'ret-om-kirana', active: true, status: 'ACTIVE' },
-  { id: 'p-retailer-gupta', email: 'gupta.provisions@gmail.com', name: 'Ramesh Gupta (Gupta Provision Store)', full_name: 'Ramesh Gupta', mobile: '9826330003', contact_no: '9826330003', password: 'retail', password_hash: 'retail', role: 'retailer', profile_type: 'RETAILER', retailer_id: 'ret-gupta-provision', active: true, status: 'ACTIVE' },
-  { id: 'p-retailer-apna', email: 'apna.bazaar.indore@gmail.com', name: 'Sunil Jain (Apna Bazaar Mart)', full_name: 'Sunil Jain', mobile: '9826440004', contact_no: '9826440004', password: 'retail', password_hash: 'retail', role: 'retailer', profile_type: 'RETAILER', retailer_id: 'ret-apna-bazaar', active: true, status: 'ACTIVE' },
-  { id: 'p-retailer-laxmi', email: 'laxmi.dailyneeds@gmail.com', name: 'Mahesh Sharma (Laxmi Trading)', full_name: 'Mahesh Sharma', mobile: '9826550005', contact_no: '9826550005', password: 'retail', password_hash: 'retail', role: 'retailer', profile_type: 'RETAILER', retailer_id: 'ret-laxmi-traders', active: true, status: 'ACTIVE' },
-  { id: 'p-staff-packer-1', email: 'ramesh.packer@saifee.local', name: 'Ramesh Solanki', full_name: 'Ramesh Solanki', mobile: '1234567890', contact_no: '1234567890', password: 'packer', password_hash: 'packer', role: 'staff', profile_type: 'STAFF', custom_role: 'Packer', active: true, status: 'ACTIVE' },
-  { id: 'p-staff-biller-1', email: 'deepak.biller@saifee.local', name: 'Deepak Sharma', full_name: 'Deepak Sharma', mobile: '9826770002', contact_no: '9826770002', password: 'staff', password_hash: 'staff', role: 'staff', profile_type: 'STAFF', custom_role: 'Biller', active: true, status: 'ACTIVE' },
-  { id: 'p-staff-loader-1', email: 'mukesh.loader@saifee.local', name: 'Mukesh Yadav', full_name: 'Mukesh Yadav', mobile: '9826880003', contact_no: '9826880003', password: 'staff', password_hash: 'staff', role: 'staff', profile_type: 'STAFF', custom_role: 'Tempo Loader', active: true, status: 'ACTIVE' }
-];
+export const UNAUTHENTICATED_GUEST_PROFILE: Profile = {
+  id: '',
+  email: '',
+  name: 'Not Signed In',
+  full_name: 'Not Signed In',
+  role: 'retailer',
+  profile_type: 'RETAILER',
+  active: false,
+  status: 'INACTIVE',
+};
+
+const SEED_PROFILES: Profile[] = [];
 
 // Clean FMCG Master Categories (Retained for live catalog entry)
-const SEED_CATEGORIES: Category[] = [
-  ...SEED_COMPANIES.map(c => ({
-    id: `cat-${c.id}`,
-    name: c.name,
-    description: `Products manufactured and distributed by ${c.name}`,
-    active: true,
-    business_id: 'biz-saifee',
-    created_at: '2026-01-01T00:00:00.000Z',
-    updated_at: '2026-01-01T00:00:00.000Z'
-  })),
-  { id: 'cat-biscuits', name: 'Biscuits', description: 'Biscuits, cookies, and rusks', active: true, business_id: 'biz-saifee', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'cat-snacks', name: 'Snacks', description: 'Namkeen, chips, wafers, and confectionery', active: true, business_id: 'biz-saifee', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'cat-beverages', name: 'Beverages', description: 'Tea, coffee, soft drinks, juices, and syrups', active: true, business_id: 'biz-saifee', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'cat-personal-care', name: 'Personal Care', description: 'Soaps, shampoos, oral care, and cosmetics', active: true, business_id: 'biz-saifee', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'cat-household-care', name: 'Household Care', description: 'Detergents, dishwash, cleaners, and fabric care', active: true, business_id: 'biz-saifee', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'cat-staples', name: 'Staples', description: 'Atta, salt, spices, pulses, and commodities', active: true, business_id: 'biz-saifee', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'cat-packaged-foods', name: 'Packaged Foods', description: 'Noodles, pasta, sauces, jams, and ready meals', active: true, business_id: 'biz-saifee', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'cat-health-wellness', name: 'Health & Wellness', description: 'Health supplements, ayurvedic, and nutritional items', active: true, business_id: 'biz-saifee', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'cat-trad-grains', name: 'Grains & Rice', description: 'Wholesale rice and food grains', active: true, business_id: 'biz-second-trading', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'cat-trad-sugar', name: 'Sugar & Sweeteners', description: 'Bulk refined sugar and jaggery', active: true, business_id: 'biz-second-trading', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' },
-  { id: 'cat-trad-oils', name: 'Edible Oils', description: 'Bulk edible oils and ghee', active: true, business_id: 'biz-second-trading', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }
-];
+const SEED_CATEGORIES: Category[] = [];
 
 // Clean Purged Datasets (Zero demo items, ready for live wholesale FMCG data entry)
 const SEED_PRODUCTS: Product[] = [];
@@ -2298,64 +2249,30 @@ const SEED_PRODUCT_CATEGORIES: ProductCategory[] = [];
 
 export const SEED_GODOWNS: Godown[] = [
   {
-    id: 'gdn-saifee-main',
+    id: 'gdn-main',
+    business_id: 'biz-saifee',
     company_id: 'biz-saifee',
     name: 'Main Godown',
-    code: 'GD01',
-    address: '124, M.G. Road, Wholesale Market',
-    city: 'Indore',
+    code: 'MAIN',
+    city: 'Khachrod',
     state: 'Madhya Pradesh',
-    pincode: '452001',
-    manager_name: 'Murtaza Saifee',
-    phone: '+91 98260 12345',
     is_default: true,
     status: 'Active',
-    created_at: '2026-01-01T00:00:00.000Z'
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z'
   },
   {
-    id: 'gdn-saifee-secondary',
+    id: 'gdn-secondary',
+    business_id: 'biz-saifee',
     company_id: 'biz-saifee',
     name: 'Secondary Godown',
-    code: 'GD02',
-    address: 'Plot 45, Sector B, Sanwer Road Industrial Area',
-    city: 'Indore',
+    code: 'SECONDARY',
+    city: 'Khachrod',
     state: 'Madhya Pradesh',
-    pincode: '452015',
-    manager_name: 'Huzefa Saifee',
-    phone: '+91 98260 67890',
     is_default: false,
     status: 'Active',
-    created_at: '2026-01-01T00:00:00.000Z'
-  },
-  {
-    id: 'gdn-hub-a',
-    company_id: 'biz-dist-hub',
-    name: 'Godown A (Central Hub)',
-    code: 'GD01',
-    address: 'Bhiwandi Logistics Park, Unit 12',
-    city: 'Bhiwandi',
-    state: 'Maharashtra',
-    pincode: '421302',
-    manager_name: 'Logistics Manager',
-    phone: '+91 98190 11223',
-    is_default: true,
-    status: 'Active',
-    created_at: '2026-01-01T00:00:00.000Z'
-  },
-  {
-    id: 'gdn-hub-b',
-    company_id: 'biz-dist-hub',
-    name: 'Godown B (Express Bay)',
-    code: 'GD02',
-    address: 'Vashi APMC Market, Sector 19',
-    city: 'Navi Mumbai',
-    state: 'Maharashtra',
-    pincode: '400703',
-    manager_name: 'Operations Lead',
-    phone: '+91 98190 44556',
-    is_default: false,
-    status: 'Active',
-    created_at: '2026-01-01T00:00:00.000Z'
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z'
   }
 ];
 
@@ -2378,27 +2295,7 @@ const SEED_COMPANY_OPENING_BALANCES: CompanyOpeningBalance[] = [
     company_id: 'biz-saifee',
     opening_balance: 0,
     as_of_date: '2026-04-01',
-    mode_balances: {
-      'Cash': 0,
-      'UPI': 0,
-      'Bank Transfer': 0,
-      'Cheque': 0,
-      'Other': 0
-    },
-    updated_by: 'Admin',
-    updated_at: '2026-04-01T00:00:00.000Z'
-  },
-  {
-    company_id: 'biz-second-trading',
-    opening_balance: 0,
-    as_of_date: '2026-04-01',
-    mode_balances: {
-      'Cash': 0,
-      'UPI': 0,
-      'Bank Transfer': 0,
-      'Cheque': 0,
-      'Other': 0
-    },
+    mode_balances: { 'Cash': 0, 'UPI': 0, 'Bank Transfer': 0, 'Cheque': 0, 'Other': 0 },
     updated_by: 'Admin',
     updated_at: '2026-04-01T00:00:00.000Z'
   }
@@ -2720,10 +2617,316 @@ class FMCGDatabase {
       // QuotaExceededError is expected for large datasets (6,200 items); IndexedDB has already safely persisted it.
       this.cleanOldStorage();
     }
+
+    // 3. Cloud-only storage: har change turant cloud me bhejne ke liye listener ko batao
+    if (this.storeSaveListener) {
+      try {
+        this.storeSaveListener(key, Array.isArray(data) ? (data as any[]) : []);
+      } catch (err) {
+        console.warn('[FMCGDatabase] Cloud save listener error:', err);
+      }
+    }
+  }
+
+  /**
+   * Company ka asli pata: Khachrod, Dist. Ujjain (M.P.). Purane data me city Indore/Mumbai
+   * (demo default) tha; ek baar company aur uske godowns ka location theek karta hai.
+   * Agar admin ne khud koi aur pata bhara hai to use nahi chhedta.
+   */
+  fixCompanyLocationDefaults(targetBusinessId?: string): boolean {
+    if (typeof window === 'undefined') return false;
+    const bizId = targetBusinessId || this.getActiveBusinessCompanyId();
+    if (bizId !== 'biz-saifee') return false;
+    const flagKey = `fmcg_location_fix_v1_${bizId}`;
+    try { if (localStorage.getItem(flagKey)) return false; } catch {}
+    const demoCities = ['', 'indore', 'mumbai', 'navi mumbai'];
+    const isDemoCity = (c?: string) => demoCities.includes(String(c || '').trim().toLowerCase());
+    let changed = false;
+    const now = new Date().toISOString();
+    const companies = this.getBusinessCompanies().map(c => {
+      if (c.id !== bizId) return c;
+      const addr = String(c.address || '').trim();
+      const addrIsDemo = !addr || /m\.?g\.? road|navi mumbai|kalamboli|indore/i.test(addr);
+      if (!isDemoCity(c.city) && !addrIsDemo && extractStateCode(c.state_code) === '23') return c;
+      changed = true;
+      return {
+        ...c,
+        address: addrIsDemo ? 'Khachrod, Dist. Ujjain' : c.address,
+        city: isDemoCity(c.city) ? DEFAULT_HOME_CITY : c.city,
+        state: 'Madhya Pradesh',
+        state_code: '23',
+        updated_at: now
+      };
+    });
+    if (changed) this.saveBusinessCompanies(companies);
+    const godowns = this.getGodowns(bizId);
+    let gChanged = false;
+    const fixedGodowns = godowns.map(g => {
+      if (!isDemoCity(g.city) && !/maharashtra/i.test(String((g as any).state || ''))) return g;
+      gChanged = true;
+      return { ...g, city: isDemoCity(g.city) ? DEFAULT_HOME_CITY : g.city, state: 'Madhya Pradesh', updated_at: now } as any;
+    });
+    if (gChanged) this.saveGodowns(fixedGodowns, bizId);
+    try { localStorage.setItem(flagKey, now); } catch {}
+    return changed || gChanged;
+  }
+
+  /**
+   * Pehle naye retailer ka default state Maharashtra (27) tha. Madhya Pradesh company ke
+   * liye un retailers ko home state par le aao (GSTIN ho to uske pehle 2 digit se).
+   * Ek company ke liye sirf ek baar chalta hai.
+   */
+  fixLegacyRetailerStateCodes(targetBusinessId?: string): number {
+    if (typeof window === 'undefined') return 0;
+    const bizId = targetBusinessId || this.getActiveBusinessCompanyId();
+    const flagKey = `fmcg_state_code_fix_v1_${bizId}`;
+    try {
+      if (localStorage.getItem(flagKey)) return 0;
+    } catch {}
+    const home = getHomeStateCode();
+    let changed = 0;
+    if (home !== '27') {
+      const now = new Date().toISOString();
+      const list = this.getRetailers(bizId).map(r => {
+        const fromGstin = extractStateCode(r.gstin);
+        if (r.state_code === '27' && fromGstin !== '27') {
+          changed++;
+          return { ...r, state_code: fromGstin || home, updated_at: now };
+        }
+        return r;
+      });
+      if (changed > 0) this.saveRetailers(list, bizId);
+    }
+    try { localStorage.setItem(flagKey, new Date().toISOString()); } catch {}
+    return changed;
+  }
+
+  // ----------------------------------------------------
+  // SIMPLE ORDER FLOW: To Pack -> Ready to Bill -> Billed (+ Backorder)
+  // ----------------------------------------------------
+
+  /**
+   * Packer ne "Packing Done" kiya. packedQty: itemId -> packed pieces (base units).
+   * Rules: whole number, not more than remaining, not more than free stock.
+   * Kuch bhi pack hua to order "Ready to Bill"; baaki quantity order par backorder rehti hai.
+   */
+  flowPackOrder(
+    orderId: string,
+    packedQty: Record<string, number>,
+    user?: { id: string; name: string }
+  ): { order: Order; packedPieces: number; backorderPieces: number } {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const orders = this.getOrders(activeBiz);
+    const order = orders.find(o => o.id === orderId);
+    if (!order) throw new Error('Order not found.');
+    if (order.status === 'Cancelled') throw new Error('This order is cancelled.');
+    if (order.flow_ready_to_bill) throw new Error('This order is already packed and waiting for billing.');
+
+    const products = this.getProducts(activeBiz);
+    const freeStock = computeFreeStockByProduct(this.getBatches(activeBiz), orders, order.id);
+    const usedInThisOrder: Record<string, number> = {};
+    let packedPieces = 0;
+    let backorderPieces = 0;
+
+    for (const item of order.items || []) {
+      const remaining = flowRemainingQty(item);
+      if (remaining <= 0) {
+        item.flow_packed_qty = 0;
+        continue;
+      }
+      const raw = packedQty[item.id];
+      const q = raw === undefined || raw === null || (raw as any) === '' ? 0 : Number(raw);
+      const name = products.find(p => p.id === item.product_id)?.name || 'Item';
+      if (!Number.isInteger(q) || q < 0) throw new Error(`${name}: enter a whole number.`);
+      if (q > remaining) throw new Error(`${name}: only ${remaining} ordered.`);
+      const free = (freeStock[item.product_id] || 0) - (usedInThisOrder[item.product_id] || 0);
+      if (q > free) throw new Error(`${name}: only ${Math.max(0, free)} in stock.`);
+      usedInThisOrder[item.product_id] = (usedInThisOrder[item.product_id] || 0) + q;
+
+      item.flow_packed_qty = q;
+      item.packed_qty = q;
+      item.confirmed_qty = q;
+      item.batch_allocations = []; // billing picks batches FIFO
+      if (q < remaining) {
+        item.backordered = true;
+        item.pending_reason = 'Stock Unavailable';
+      }
+      packedPieces += q;
+      backorderPieces += remaining - q;
+    }
+
+    const now = new Date().toISOString();
+    order.flow_pack_attempted_at = now;
+    order.flow_packed_by = user?.name || this.getCurrentUser()?.name || 'Packer';
+    if (packedPieces > 0) {
+      order.flow_ready_to_bill = true;
+      order.status = 'Packed';
+      order.packed_at = now;
+      (order as any).packed_by = order.flow_packed_by;
+    } else {
+      order.flow_ready_to_bill = false;
+      const anyBilled = (order.items || []).some(it => (it.fulfilled_qty ?? it.dispatched_qty ?? 0) > 0);
+      order.status = anyBilled ? 'Partially Fulfilled' : 'Confirmed';
+    }
+    order.updated_at = now;
+    this.saveOrders(orders, activeBiz);
+    return { order, packedPieces, backorderPieces };
+  }
+
+  /**
+   * Biller ne "Generate Invoice" kiya: sirf packed quantity ka bill, batch stock FIFO se katta hai.
+   * rates: itemId -> rate (sirf badla hua rate). paymentMode Cash/UPI = payment receipt, Credit = udhaar.
+   */
+  flowBillOrder(
+    orderId: string,
+    options: { rates?: Record<string, number>; paymentMode: 'Cash' | 'UPI' | 'Credit'; generateChallan?: boolean },
+    user?: { id: string; name: string }
+  ): { invoice: Invoice; challan?: DeliveryChallan; shortfall: string } {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    let orders = this.getOrders(activeBiz);
+    let order = orders.find(o => o.id === orderId);
+    if (!order) throw new Error('Order not found.');
+    if (!order.flow_ready_to_bill) throw new Error('This order is not packed yet.');
+
+    const billQtyByItem: Record<string, number> = {};
+    (order.items || []).forEach(item => {
+      const q = Math.floor(Number(item.flow_packed_qty) || 0);
+      if (q > 0) billQtyByItem[item.id] = q;
+      const newRate = options.rates?.[item.id];
+      if (newRate !== undefined && newRate !== null && !isNaN(Number(newRate))) {
+        const r = Math.round(Number(newRate) * 100) / 100;
+        if (r < 0) throw new Error('Rate cannot be negative.');
+        if (Math.abs(r - flowItemRate(item, this.getProducts(activeBiz).find(p => p.id === item.product_id))) > 0.001) {
+          item.manual_billing_rate = r;
+          item.manual_rate_applied = true;
+          item.manual_rate_reason = 'Rate set by biller';
+          item.manual_rate_updated_at = new Date().toISOString();
+          (item as any).manual_rate_updated_by = user?.name;
+        }
+      }
+    });
+    if (Object.keys(billQtyByItem).length === 0) throw new Error('Nothing is packed on this order.');
+    this.saveOrders(orders, activeBiz);
+
+    const res = this.dispatchOrder(orderId, {
+      transportMode: 'Counter / Direct Billing',
+      notes: 'Simple flow invoice',
+      generateChallan: options.generateChallan === true,
+      billQtyByItem
+    }, user);
+    const shortfall = describeStockShortfall();
+    if (!res) throw new Error(shortfall || describeDispatchIssue() || 'Invoice could not be generated.');
+
+    // Packing session khatam: baaki quantity backorder/To Pack me apne aap dikhegi
+    orders = this.getOrders(activeBiz);
+    order = orders.find(o => o.id === orderId);
+    if (order) {
+      order.flow_ready_to_bill = false;
+      (order.items || []).forEach(it => { it.flow_packed_qty = 0; });
+      order.updated_at = new Date().toISOString();
+      this.saveOrders(orders, activeBiz);
+    }
+
+    this.recordOrderPayment(
+      orderId,
+      res.invoice.id,
+      res.invoice.grand_total,
+      options.paymentMode as any,
+      undefined,
+      options.paymentMode === 'Credit' ? 'Credit (pay later)' : `${options.paymentMode} received at billing`,
+      user
+    );
+    const allInvoices = this.getInvoices(activeBiz);
+    const stored = allInvoices.find(i => i.id === res.invoice.id);
+    if (stored) {
+      stored.payment_mode = options.paymentMode;
+      this.saveInvoices(allInvoices, activeBiz);
+    }
+    const invoice = stored || { ...res.invoice, payment_mode: options.paymentMode };
+    return { invoice, challan: res.challan, shortfall };
+  }
+
+  // ----------------------------------------------------
+  // CLOUD-ONLY STORAGE HOOKS (used by cloudWriteThrough.ts)
+  // ----------------------------------------------------
+  /** Pichle dispatch/bill me jin items ka stock kam tha (bill nahi hua, backorder me gaye). */
+  lastStockShortfall: { product_id: string; product_name: string; requested_qty: number; billed_qty: number }[] = [];
+
+  getLastStockShortfall() {
+    return [...this.lastStockShortfall];
+  }
+
+  /** Pichla dispatch kyun fail hua (English, UI me dikhane ke liye). */
+  lastDispatchIssue = '';
+
+  private storeSaveListener: ((key: string, data: any[]) => void) | null = null;
+
+  /** Registers the function that receives every store save (one listener only). */
+  setStoreSaveListener(fn: ((key: string, data: any[]) => void) | null): void {
+    this.storeSaveListener = fn;
+  }
+
+  private getSeedForStore(key: string): any[] {
+    switch (key) {
+      case 'fmcg_business_companies': return SEED_BUSINESS_COMPANIES;
+      case 'fmcg_company_members': return SEED_COMPANY_MEMBERS;
+      case 'fmcg_godowns': return SEED_GODOWNS;
+      case 'fmcg_company_opening_balances': return SEED_COMPANY_OPENING_BALANCES;
+      default: return [];
+    }
+  }
+
+  /** Full raw contents of a store (all companies), exactly as saved. */
+  getRawStore(key: string): any[] {
+    const items = this.getStore<any>(key, this.getSeedForStore(key));
+    return Array.isArray(items) ? items : [];
+  }
+
+  /** Store keys (without the _v4 suffix) that currently hold data on this device. */
+  listLoadedStoreKeys(): string[] {
+    const keys = new Set<string>();
+    Object.keys(this.memoryStore).forEach(k => {
+      if (k.startsWith('fmcg_') && k.endsWith('_v4')) keys.add(k.slice(0, -3));
+    });
+    return Array.from(keys);
+  }
+
+  /**
+   * Cloud se aaye records local store me lagata hai (insert/update/delete by ID).
+   * Saves via saveStore, so the cloud listener sees the new state (and skips re-upload).
+   */
+  applyCloudRecords(key: string, upserts: any[], deletedIds: string[]): void {
+    const current = this.getRawStore(key);
+    const index = new Map<string, number>();
+    current.forEach((it: any, i: number) => {
+      const id = resolveRecordId(key, it);
+      if (id) index.set(id, i);
+    });
+    const next = [...current];
+    const removed = new Set<string>(deletedIds);
+    upserts.forEach((rec: any) => {
+      const id = resolveRecordId(key, rec);
+      if (!id) return;
+      removed.delete(id);
+      const at = index.get(id);
+      if (at !== undefined) {
+        next[at] = rec;
+      } else {
+        index.set(id, next.length);
+        next.push(rec);
+      }
+    });
+    const finalList = removed.size > 0
+      ? next.filter((it: any) => {
+          const id = resolveRecordId(key, it);
+          return !id || !removed.has(id);
+        })
+      : next;
+    this.saveStore(key, finalList);
   }
 
   // SSR & Hydration safe Initial State Getters
-  getInitialCurrentUser(): Profile { return SEED_PROFILES[0]; }
+  getInitialCurrentUser(): Profile { return UNAUTHENTICATED_GUEST_PROFILE; }
   getInitialProfiles(): Profile[] { return SEED_PROFILES; }
   getInitialBusinessCompanies(): BusinessCompany[] { return SEED_BUSINESS_COMPANIES; }
   getInitialActiveBusinessCompanyId(): string { return 'biz-saifee'; }
@@ -2821,8 +3024,8 @@ class FMCGDatabase {
       phone: data.phone?.trim(),
       email: data.email?.trim(),
       address: data.address?.trim(),
-      city: data.city?.trim() || 'Mumbai',
-      state_code: data.state_code?.trim() || '27',
+      city: data.city?.trim() || DEFAULT_HOME_CITY,
+      state_code: extractStateCode(data.state_code) || extractStateCode(data.gstin) || DEFAULT_HOME_STATE_CODE,
       pincode: data.pincode?.trim(),
       currency: data.currency || 'INR',
       is_active: true,
@@ -2882,12 +3085,15 @@ class FMCGDatabase {
     return filtered.length > 0 ? filtered : allCompanies;
   }
 
-  // Active User session in Mock DB (Defaults to Admin for easy initial testing)
-  private currentUserId = 'p-admin-1';
+  // Active User session in DB (Defaults to unauthenticated guest)
+  private currentUserId = '';
 
   getCurrentUser(): Profile {
+    if (!this.currentUserId) {
+      return UNAUTHENTICATED_GUEST_PROFILE;
+    }
     const users = this.getProfiles();
-    return users.find(u => u.id === this.currentUserId) || users[0];
+    return users.find(u => u.id === this.currentUserId) || UNAUTHENTICATED_GUEST_PROFILE;
   }
 
   setCurrentUser(id: string): void {
@@ -3047,8 +3253,8 @@ class FMCGDatabase {
       owner_name,
       mobile: cleanMobile,
       address,
-      city: data.city || 'Indore',
-      state_code: data.state_code || '27',
+      city: data.city || DEFAULT_HOME_CITY,
+      state_code: extractStateCode(data.state_code) || extractStateCode(data.gstin) || getHomeStateCode(),
       gstin: data.gstin,
       credit_limit: data.credit_limit || 50000,
       active: true,
@@ -3767,8 +3973,8 @@ class FMCGDatabase {
     const ownerName = (data.owner_name || '').trim();
     const mobile = (data.mobile || '').trim();
     const address = (data.address || '').trim();
-    const city = (data.city || 'Mumbai').trim();
-    const stateCode = (data.state_code || '27').trim();
+    const city = (data.city || DEFAULT_HOME_CITY).trim();
+    const stateCode = extractStateCode(data.state_code) || extractStateCode((data as any).gstin) || getHomeStateCode();
     const gstin = data.gstin?.trim() ? data.gstin.trim().toUpperCase() : undefined;
     const creditLimit = typeof data.credit_limit === 'number' && !isNaN(data.credit_limit) ? Math.max(0, data.credit_limit) : 50000;
     const active = data.active !== undefined ? Boolean(data.active) : true;
@@ -3804,8 +4010,8 @@ class FMCGDatabase {
       shop_name: shopName,
       owner_name: ownerName,
       address,
-      city: city || 'Mumbai',
-      state_code: stateCode || '27',
+      city: city || DEFAULT_HOME_CITY,
+      state_code: stateCode || getHomeStateCode(),
       gstin,
       mobile,
       credit_limit: creditLimit,
@@ -3863,6 +4069,29 @@ class FMCGDatabase {
         p.id?.startsWith('prd-trad-');
       const itemBiz = isSecondBizItem ? 'biz-second-trading' : (p.business_id || 'biz-saifee');
       return itemBiz === activeBiz;
+    }).map(p => {
+      const parseNum = (v: any, fallback = 0) => {
+        if (v === null || v === undefined) return fallback;
+        const n = Number(v);
+        return isNaN(n) ? fallback : n;
+      };
+      const parseOpt = (v: any) => {
+        if (v === null || v === undefined) return undefined;
+        const n = Number(v);
+        return isNaN(n) ? undefined : n;
+      };
+      return {
+        ...p,
+        selling_price: parseNum(p.selling_price, 0),
+        purchase_price: parseNum(p.purchase_price, 0),
+        mrp: parseNum(p.mrp, 0),
+        units_per_box_carton: parseNum(p.units_per_box_carton, 1),
+        pieces_per_carton: parseOpt(p.pieces_per_carton),
+        loose_selling_price: parseOpt(p.loose_selling_price),
+        loose_purchase_price: parseOpt(p.loose_purchase_price),
+        loose_mrp: parseOpt(p.loose_mrp),
+        dealer_price: parseOpt(p.dealer_price),
+      };
     });
   }
 
@@ -3874,7 +4103,29 @@ class FMCGDatabase {
     const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
     const all = this.getStore<Product>('fmcg_products', SEED_PRODUCTS);
     const otherBiz = all.filter(p => (p.business_id || 'biz-saifee') !== activeBiz);
-    const tagged = products.map(p => ({ ...p, business_id: p.business_id || activeBiz }));
+    const parseNum = (v: any, fallback = 0) => {
+      if (v === null || v === undefined) return fallback;
+      const n = Number(v);
+      return isNaN(n) ? fallback : n;
+    };
+    const parseOpt = (v: any) => {
+      if (v === null || v === undefined) return undefined;
+      const n = Number(v);
+      return isNaN(n) ? undefined : n;
+    };
+    const tagged = products.map(p => ({
+      ...p,
+      business_id: p.business_id || activeBiz,
+      selling_price: parseNum(p.selling_price, 0),
+      purchase_price: parseNum(p.purchase_price, 0),
+      mrp: parseNum(p.mrp, 0),
+      units_per_box_carton: parseNum(p.units_per_box_carton, 1),
+      pieces_per_carton: parseOpt(p.pieces_per_carton),
+      loose_selling_price: parseOpt(p.loose_selling_price),
+      loose_purchase_price: parseOpt(p.loose_purchase_price),
+      loose_mrp: parseOpt(p.loose_mrp),
+      dealer_price: parseOpt(p.dealer_price),
+    }));
     this.saveStore('fmcg_products', [...otherBiz, ...tagged]);
   }
 
@@ -5119,8 +5370,8 @@ class FMCGDatabase {
       dealer_price: productData.dealer_price,
       gst_percent: productData.gst_percent,
       hsn: productData.hsn.trim(),
-      min_stock_level: productData.min_stock_level || 5,
-      reorder_level: productData.reorder_level || 10,
+      min_stock_level: productData.min_stock_level ?? 5,
+      reorder_level: productData.reorder_level ?? 10,
       batch_tracking_enabled: productData.batch_tracking_enabled !== false,
       expiry_tracking_enabled: productData.expiry_tracking_enabled !== false,
       image_url: productData.image_url,
@@ -5181,7 +5432,7 @@ class FMCGDatabase {
       const purchaseDate = productData.initial_purchase_date || new Date().toISOString().split('T')[0];
       const batchNumber = productData.initial_batch_number?.trim() || `BCH-${new Date().getFullYear()}-01`;
       const expiryDate = productData.initial_expiry_date || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      const godown = productData.initial_godown || 'Central Godown (Indore Hub)';
+      const godown = productData.initial_godown || (this.getGodowns().find(g => g.is_default)?.name) || 'Main Godown';
       const invoiceNumber = `OPENING-${newProd.product_code}`;
       const totalAmount = Math.round(((initialCartonQty * initialPurchaseRate) + (initialLooseQty * initialLoosePurchaseRate)) * 100) / 100;
 
@@ -5357,8 +5608,8 @@ class FMCGDatabase {
       dealer_price: variantData.dealer_price,
       gst_percent: variantData.gst_percent !== undefined ? variantData.gst_percent : parent.gst_percent,
       hsn: variantData.hsn?.trim() || parent.hsn,
-      min_stock_level: parent.min_stock_level || 5,
-      reorder_level: parent.reorder_level || 10,
+      min_stock_level: parent.min_stock_level ?? 5,
+      reorder_level: parent.reorder_level ?? 10,
       batch_tracking_enabled: parent.batch_tracking_enabled !== false,
       expiry_tracking_enabled: parent.expiry_tracking_enabled !== false,
       parent_product_id: parentProductId,
@@ -5420,7 +5671,7 @@ class FMCGDatabase {
   getGodowns(targetBusinessId?: string): Godown[] {
     const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
     const all = this.getStore<Godown>('fmcg_godowns', SEED_GODOWNS);
-    return all.filter(g => (g.company_id || 'biz-saifee') === activeBiz);
+    return all.filter(g => (g.business_id || g.company_id || 'biz-saifee') === activeBiz);
   }
 
   getAllGodowns(): Godown[] {
@@ -5430,8 +5681,12 @@ class FMCGDatabase {
   saveGodowns(godowns: Godown[], targetBusinessId?: string): void {
     const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
     const all = this.getStore<Godown>('fmcg_godowns', SEED_GODOWNS);
-    const otherBiz = all.filter(g => (g.company_id || 'biz-saifee') !== activeBiz);
-    const tagged = godowns.map(g => ({ ...g, company_id: g.company_id || activeBiz }));
+    const otherBiz = all.filter(g => (g.business_id || g.company_id || 'biz-saifee') !== activeBiz);
+    const tagged = godowns.map(g => ({
+      ...g,
+      business_id: g.business_id || activeBiz,
+      company_id: g.company_id || g.business_id || activeBiz
+    }));
     this.saveStore('fmcg_godowns', [...otherBiz, ...tagged]);
   }
 
@@ -5457,6 +5712,7 @@ class FMCGDatabase {
 
     const newGodown: Godown = {
       id: `gdn-${activeBiz}-${Date.now()}`,
+      business_id: activeBiz,
       company_id: activeBiz,
       name: data.name.trim(),
       code,
@@ -6395,7 +6651,7 @@ class FMCGDatabase {
     const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
     this.syncAutomaticCashFlowEntries(activeBiz);
     const all = this.getStore<CashFlowTransaction>('fmcg_cash_flow_transactions', SEED_CASH_FLOW_TRANSACTIONS);
-    return all.filter(cf => (cf.company_id || 'biz-saifee') === activeBiz);
+    return all.filter(cf => (cf.business_id || cf.company_id || 'biz-saifee') === activeBiz);
   }
 
   getAllCashFlowTransactions(): CashFlowTransaction[] {
@@ -6405,8 +6661,12 @@ class FMCGDatabase {
   saveCashFlowTransactions(transactions: CashFlowTransaction[], targetBusinessId?: string): void {
     const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
     const all = this.getStore<CashFlowTransaction>('fmcg_cash_flow_transactions', SEED_CASH_FLOW_TRANSACTIONS);
-    const otherBiz = all.filter(cf => (cf.company_id || 'biz-saifee') !== activeBiz);
-    const tagged = transactions.map(cf => ({ ...cf, company_id: cf.company_id || activeBiz }));
+    const otherBiz = all.filter(cf => (cf.business_id || cf.company_id || 'biz-saifee') !== activeBiz);
+    const tagged = transactions.map(cf => ({
+      ...cf,
+      business_id: cf.business_id || activeBiz,
+      company_id: cf.company_id || cf.business_id || activeBiz
+    }));
     this.saveStore('fmcg_cash_flow_transactions', [...otherBiz, ...tagged]);
   }
 
@@ -6417,9 +6677,10 @@ class FMCGDatabase {
   getCompanyOpeningBalance(targetBusinessId?: string): CompanyOpeningBalance {
     const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
     const all = this.getCompanyOpeningBalances();
-    const found = all.find(b => b.company_id === activeBiz);
+    const found = all.find(b => (b.business_id || b.company_id) === activeBiz);
     if (found) return found;
     return {
+      business_id: activeBiz,
       company_id: activeBiz,
       opening_balance: 150000,
       as_of_date: '2026-04-01',
@@ -6438,13 +6699,14 @@ class FMCGDatabase {
   saveCompanyOpeningBalance(balance: CompanyOpeningBalance, targetBusinessId?: string): void {
     const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
     const all = this.getCompanyOpeningBalances();
-    const otherBiz = all.filter(b => b.company_id !== activeBiz);
-    const updated: CompanyOpeningBalance = {
+    const filtered = all.filter(b => (b.business_id || b.company_id) !== activeBiz);
+    const tagged: CompanyOpeningBalance = {
       ...balance,
-      company_id: activeBiz,
-      updated_at: new Date().toISOString()
+      business_id: balance.business_id || activeBiz,
+      company_id: balance.company_id || balance.business_id || activeBiz
     };
-    this.saveStore('fmcg_company_opening_balances', [...otherBiz, updated]);
+    filtered.push(tagged);
+    this.saveStore('fmcg_company_opening_balances', filtered);
   }
 
   createCashFlowTransaction(
@@ -6462,6 +6724,7 @@ class FMCGDatabase {
       ...data,
       id: `cf-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       transaction_number: nextNum,
+      business_id: activeBiz,
       company_id: activeBiz,
       time: timeStr,
       status: 'Active',
@@ -6675,7 +6938,7 @@ class FMCGDatabase {
     const fulfilments = this.getFulfilments();
     const challans = this.getDeliveryChallans();
 
-    const isLocalState = (ret.state_code || '27') === '27';
+    const isLocalState = isIntraStateSupply(ret.state_code);
 
     let subtotal = 0;
     let discountTotal = 0;
@@ -7531,6 +7794,7 @@ class FMCGDatabase {
    * creates the invoice with tax breakdown, and posts the customer debit ledger.
    */
   postSalesInvoiceAtomic(payload: {
+    business_id?: string;
     business_company_id?: string;
     retailer_id: string;
     order_id?: string;
@@ -7568,7 +7832,7 @@ class FMCGDatabase {
     creditProfile: CustomerCreditProfile;
     newOutstanding: number;
   } {
-    const activeBiz = payload.business_company_id || this.getActiveBusinessCompanyId();
+    const activeBiz = payload.business_id || payload.business_company_id || this.getActiveBusinessCompanyId();
     const retailers = this.getRetailers(activeBiz);
     const ret = retailers.find(r => r.id === payload.retailer_id);
     if (!ret) throw new Error(`Customer with ID ${payload.retailer_id} not found`);
@@ -7582,7 +7846,7 @@ class FMCGDatabase {
     const invoiceId = `inv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const invoicePrefix = 'INV';
     const invoiceNumber = `INV/2026-27/${String(invoices.length + 1).padStart(5, '0')}`;
-    const placeOfSupply = payload.place_of_supply || ret.state_code || '27';
+    const placeOfSupply = payload.place_of_supply || ret.state_code || getHomeStateCode();
     const paidAmount = Math.max(0, payload.paid_amount || 0);
 
     let subtotal = 0;
@@ -7629,7 +7893,7 @@ class FMCGDatabase {
       let lineSgst = 0;
       let lineIgst = 0;
 
-      if (placeOfSupply === '27' || placeOfSupply.includes('27')) {
+      if (isIntraStateSupply(placeOfSupply)) {
         lineCgst = Math.round((lineGst / 2) * 100) / 100;
         lineSgst = lineGst - lineCgst;
       } else {
@@ -8057,13 +8321,13 @@ class FMCGDatabase {
 
       const oldInvoice = invoices[linkedInvoiceIndex];
       const retailers = this.getRetailers();
-      const ret = retailers.find(r => r.id === (order.retailer_id || oldInvoice.retailer_id)) || retailers[0];
+      const ret = retailers.find(r => r.id === (order.retailer_id || oldInvoice.retailer_id)) || addWalkInToList(retailers, ensureWalkInRetailer(order.retailer_id || oldInvoice.retailer_id));
       const products = this.getProducts();
       const inventory = this.getInventory();
       const batches = this.getBatches();
       const ledgers = this.getLedger();
       const challans = this.getDeliveryChallans();
-      const isLocalState = (ret?.state_code || '27') === '27';
+      const isLocalState = isIntraStateSupply(ret?.state_code);
 
       // If multi-order consolidated invoice, collect all contributing orders
       const allOrders = this.getOrders();
@@ -8091,8 +8355,31 @@ class FMCGDatabase {
       let igstTotal = 0;
       let hasManualRates = false;
 
-      const processedItems: InvoiceItem[] = sourceOrderItems.map(orderItem => {
+      // STOCK RULE: invoice me sirf wahi quantity rahegi jo asli me bill/dispatch hui thi.
+      // Order edit (rate, discount, confirm) se invoice ki quantity kabhi nahi badhegi, aur jo
+      // item backorder me hai (invoice par nahi tha) wo invoice me nahi judega.
+      const invoicedRemaining: { [prodId: string]: number } = {};
+      (oldInvoice.items || []).forEach(ii => {
+        invoicedRemaining[ii.product_id] = (invoicedRemaining[ii.product_id] || 0) + (ii.base_qty ?? ii.quantity ?? 0);
+      });
+
+      const processedItems: InvoiceItem[] = sourceOrderItems.map((orderItemRaw): InvoiceItem | null => {
+        let orderItem = orderItemRaw;
         const prod = products.find(p => p.id === orderItem.product_id);
+        const lineUnitsPerPack = orderItem.units_per_trading_unit || orderItem.units_per_box_carton || prod?.units_per_box_carton || 1;
+        const alreadyInvoiced = invoicedRemaining[orderItem.product_id] || 0;
+        const fulfilledForItem = orderItem.fulfilled_qty ?? orderItem.dispatched_qty ?? alreadyInvoiced;
+        const billedBase = Math.max(0, Math.min(alreadyInvoiced, fulfilledForItem));
+        invoicedRemaining[orderItem.product_id] = alreadyInvoiced - billedBase;
+        if (billedBase <= 0) return null;
+        const billedSplit = splitBaseQuantity(billedBase, lineUnitsPerPack);
+        orderItem = {
+          ...orderItem,
+          base_qty: billedBase,
+          quantity: billedBase,
+          carton_qty: billedSplit.cartonQty,
+          loose_qty: billedSplit.looseQty
+        };
         const unitsPerPack = orderItem.units_per_trading_unit || orderItem.units_per_box_carton || prod?.units_per_box_carton || 1;
         const tradingUnit = orderItem.trading_unit || prod?.trading_unit || 'Carton';
         const baseUnit = orderItem.base_unit || prod?.base_unit || 'Piece';
@@ -8185,8 +8472,8 @@ class FMCGDatabase {
           manual_rate_applied: orderItem.manual_rate_applied,
           manual_rate_reason: orderItem.manual_rate_reason,
           override_reason: orderItem.manual_rate_reason
-        };
-      });
+        } as InvoiceItem;
+      }).filter((it): it is InvoiceItem => it !== null);
 
       const grandTotal = Math.round(taxableTotal + cgstTotal + sgstTotal + igstTotal);
       const roundOff = Math.round((grandTotal - (taxableTotal + cgstTotal + sgstTotal + igstTotal)) * 100) / 100;
@@ -9818,7 +10105,7 @@ class FMCGDatabase {
         let itemSGST = 0;
         let itemIGST = 0;
 
-        if (ret.state_code === '27') { // Local sale: CGST/SGST (Half each)
+        if (isIntraStateSupply(ret.state_code)) { // Local sale: CGST/SGST (Half each)
           itemCGST = amounts.gstAmount / 2;
           itemSGST = amounts.gstAmount / 2;
         } else { // Interstate sale: IGST
@@ -9930,7 +10217,7 @@ class FMCGDatabase {
       source_order_numbers: sourceOrderNumbers,
       fulfilment_number: ful.fulfilment_number,
       date: dispatchInfo.dispatchDate ? new Date(dispatchInfo.dispatchDate).toISOString() : new Date().toISOString(),
-      place_of_supply: ret.state_code === '27' ? 'Maharashtra (27)' : `Out of State (${ret.state_code})`,
+      place_of_supply: formatPlaceOfSupply(ret.state_code),
       subtotal,
       discount_amount: discountTotal,
       taxable_value: taxableTotal,
@@ -10215,7 +10502,7 @@ class FMCGDatabase {
     paymentMethod: 'Cash' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Credit' | 'Other' = 'UPI'
   ): Invoice {
     const retailers = this.getRetailers();
-    const ret = retailers.find(r => r.id === retailerId) || retailers[0];
+    const ret = retailers.find(r => r.id === retailerId) || addWalkInToList(retailers, ensureWalkInRetailer(retailerId));
 
     const products = this.getProducts();
     const inventory = this.getInventory();
@@ -10264,7 +10551,7 @@ class FMCGDatabase {
       const amounts = calculateItemAmounts(cQty, lQty, cRate, lRate, cDisc, lDisc, prod.gst_percent);
 
       let cgst = 0, sgst = 0, igst = 0;
-      if (ret.state_code === '27') {
+      if (isIntraStateSupply(ret.state_code)) {
         cgst = amounts.gstAmount / 2;
         sgst = amounts.gstAmount / 2;
       } else {
@@ -10344,7 +10631,7 @@ class FMCGDatabase {
       invoice_number: invNum,
       retailer_id: ret.id,
       date: new Date().toISOString(),
-      place_of_supply: ret.state_code === '27' ? 'Maharashtra (27)' : `Out of State (${ret.state_code})`,
+      place_of_supply: formatPlaceOfSupply(ret.state_code),
       subtotal,
       discount_amount: discountTotal,
       taxable_value: taxableTotal,
@@ -11008,8 +11295,8 @@ class FMCGDatabase {
       const lineGst = (lineTaxable * gstPercent) / 100;
       const lineTotal = lineTaxable + lineGst;
 
-      const retStateCode = retProfile?.state_code || '27';
-      const isInterState = retStateCode !== '27' && retStateCode !== '23';
+      const retStateCode = retProfile?.state_code || getHomeStateCode();
+      const isInterState = !isIntraStateSupply(retStateCode);
       const lineCgst = isInterState ? 0 : lineGst / 2;
       const lineSgst = isInterState ? 0 : lineGst / 2;
       const lineIgst = isInterState ? lineGst : 0;
@@ -11888,16 +12175,24 @@ class FMCGDatabase {
       dispatchDate?: string;
       dispatchGodown?: string;
       generateChallan?: boolean;
+      /** Bill only these items, at most this quantity each (simple flow: what the packer packed) */
+      billQtyByItem?: Record<string, number>;
     } = {},
     adminUser?: { id: string; name: string }
   ): { order: Order; invoice: Invoice; challan?: DeliveryChallan } | null {
+    this.lastStockShortfall = [];
+    this.lastDispatchIssue = '';
     const orders = this.getOrders();
     const order = orders.find(o => o.id === orderId);
-    if (!order) return null;
+    if (!order) {
+      this.lastDispatchIssue = 'Order not found in the active company.';
+      return null;
+    }
 
     // Mandatory Workflow Rule: Order must be confirmed before entering Dispatched state
     if (order.status === 'Submitted' || order.status === 'Draft' || order.status === 'Under Review') {
       console.warn(`Cannot dispatch unconfirmed order ${order.order_number}. Order must be confirmed first.`);
+      this.lastDispatchIssue = `Order ${order.order_number} must be confirmed before it can be dispatched.`;
       return null;
     }
 
@@ -11921,7 +12216,7 @@ class FMCGDatabase {
 
     const shouldGenerateChallan = dispatchInfo.generateChallan !== false;
     const retailers = this.getRetailers();
-    const ret = retailers.find(r => r.id === order.retailer_id) || retailers[0];
+    const ret = retailers.find(r => r.id === order.retailer_id) || addWalkInToList(retailers, ensureWalkInRetailer(order.retailer_id));
     const products = this.getProducts();
     const inventory = this.getInventory();
     const batches = this.getBatches();
@@ -11974,8 +12269,11 @@ class FMCGDatabase {
       if (qtyToDispatch <= 0) {
         qtyToDispatch = remainingUnfulfilled;
       }
-
-      totalDispatchedUnits += qtyToDispatch;
+      if (dispatchInfo.billQtyByItem) {
+        const wanted = Math.floor(Number(dispatchInfo.billQtyByItem[item.id]) || 0);
+        if (wanted <= 0) return; // packer ne ye item pack nahi kiya: is bill me nahi
+        qtyToDispatch = Math.min(remainingUnfulfilled, wanted);
+      }
 
       // Rate Priority: Manual billing rate > Order-time rate > Default Selling Price
       const cartonRate = item.manual_rate_applied && item.manual_billing_rate 
@@ -11986,7 +12284,16 @@ class FMCGDatabase {
       const looseDisc = item.loose_discount ?? 0;
 
       // Allocations resolution (in base units)
-      let allocations = (item.batch_allocations || []).filter(a => (a.allocated_qty || 0) > 0);
+      // STOCK RULE: jitna asli batch stock hai utna hi bill hoga. Packing me jo allocation
+      // hua tha use bhi batch ke current stock tak seemit karte hain (kisi aur bill ne
+      // beech me stock le liya ho to).
+      let allocations = (item.batch_allocations || [])
+        .filter(a => (a.allocated_qty || 0) > 0)
+        .map(a => {
+          const b = batches.find(bt => bt.id === a.batch_id);
+          return { ...a, allocated_qty: b ? Math.min(a.allocated_qty || 0, Math.max(0, b.quantity)) : 0 };
+        })
+        .filter(a => a.allocated_qty > 0);
       if (allocations.length === 0) {
         const prodBatches = batches.filter(b => b.product_id === item.product_id && b.quantity > 0)
           .sort((a, b) => new Date(a.expiry_date || 0).getTime() - new Date(b.expiry_date || 0).getTime());
@@ -12010,19 +12317,42 @@ class FMCGDatabase {
             rem -= take;
           }
         }
-        if (rem > 0) {
-          allocations.push({
-            batch_id: 'bch-default',
-            batch_number: (order.order_number ? `LOT-${order.order_number}` : 'LOT-2026'),
-            allocated_qty: rem,
-            mrp: item.selected_mrp ?? prod?.mrp ?? 0,
-            purchase_rate: item.purchase_rate ?? prod?.purchase_price ?? 0,
-            selling_price: cartonRate,
-            loose_selling_price: looseRate,
-            expiry_date: ''
-          });
-        }
+        // Stock nahi hai to fake "bch-default" batch se bill NAHI banate: baaki qty backorder me rehti hai
       }
+
+      const billableQty = Math.min(qtyToDispatch, allocations.reduce((sum, a) => sum + (a.allocated_qty || 0), 0));
+      if (billableQty < qtyToDispatch) {
+        this.lastStockShortfall.push({
+          product_id: item.product_id,
+          product_name: prodName,
+          requested_qty: qtyToDispatch,
+          billed_qty: billableQty
+        });
+      }
+      if (billableQty <= 0) {
+        // Stock zero: ye item is bill me nahi. Fields saaf likh do taaki har screen "backorder" dikhaye.
+        const prevFul = item.fulfilled_qty ?? item.dispatched_qty ?? 0;
+        item.fulfilled_qty = prevFul;
+        item.dispatched_qty = prevFul;
+        item.ordered_qty = ordBase;
+        item.remaining_qty = Math.max(0, ordBase - prevFul - canBase);
+        item.pending_qty = item.remaining_qty;
+        item.status = 'WAITING_STOCK' as any;
+        return;
+      }
+      if (billableQty < qtyToDispatch) {
+        // Allocation ko billable qty tak kaato
+        let left = billableQty;
+        allocations = allocations
+          .map(a => {
+            const take = Math.min(a.allocated_qty || 0, left);
+            left -= take;
+            return { ...a, allocated_qty: take };
+          })
+          .filter(a => a.allocated_qty > 0);
+      }
+      qtyToDispatch = billableQty;
+      totalDispatchedUnits += qtyToDispatch;
 
       item.batch_allocations = allocations;
       
@@ -12067,7 +12397,7 @@ class FMCGDatabase {
         );
 
         let cgst = 0, sgst = 0, igst = 0;
-        if (ret.state_code === '27') {
+        if (isIntraStateSupply(ret.state_code)) {
           cgst = amounts.gstAmount / 2;
           sgst = amounts.gstAmount / 2;
         } else {
@@ -12165,6 +12495,25 @@ class FMCGDatabase {
       }
     });
 
+    // Kisi bhi item ka stock nahi: koi bill nahi banega, order backorder/pending me hi rahega
+    if (invoiceItems.length === 0) {
+      if (!this.lastDispatchIssue && this.lastStockShortfall.length === 0) {
+        this.lastDispatchIssue = `Nothing left to dispatch on order ${order.order_number}: every item is already dispatched or cancelled.`;
+      }
+      console.warn('[dispatchOrder] No invoice generated', {
+        order: order.order_number,
+        issue: this.lastDispatchIssue,
+        shortfall: this.lastStockShortfall,
+        items: (order.items || []).map(it => ({
+          product_id: it.product_id, ordered: it.ordered_qty, base: it.base_qty, qty: it.quantity,
+          confirmed: it.confirmed_qty, packed: it.packed_qty, fulfilled: it.fulfilled_qty,
+          dispatched: it.dispatched_qty, cancelled: it.cancelled_qty, remaining: it.remaining_qty,
+          allocations: it.batch_allocations
+        }))
+      });
+      return null;
+    }
+
     const grandTotal = Math.round(taxableTotal + cgstTotal + sgstTotal + igstTotal);
     const roundOff = grandTotal - (taxableTotal + cgstTotal + sgstTotal + igstTotal);
 
@@ -12174,7 +12523,7 @@ class FMCGDatabase {
       retailer_id: ret.id,
       order_ref_id: order.id,
       date: dispatchInfo.dispatchDate || new Date().toISOString(),
-      place_of_supply: ret.state_code === '27' ? 'Maharashtra (27)' : `Out of State (${ret.state_code})`,
+      place_of_supply: formatPlaceOfSupply(ret.state_code),
       subtotal,
       discount_amount: discountTotal,
       taxable_value: taxableTotal,
@@ -12570,7 +12919,7 @@ class FMCGDatabase {
     if (sourceOrders.length === 0 && lotData.sourceOrderIds.length > 0) return null;
 
     const retailers = this.getRetailers(activeBiz);
-    const ret = retailers.find(r => r.id === lotData.retailerId) || retailers[0];
+    const ret = retailers.find(r => r.id === lotData.retailerId) || addWalkInToList(retailers, ensureWalkInRetailer(lotData.retailerId));
     const products = this.getProducts();
     const inventory = this.getInventory();
     const batches = this.getBatches();
@@ -12594,6 +12943,7 @@ class FMCGDatabase {
     const challanItems: DeliveryChallanItem[] = [];
 
     // Filter items that have at least 1 carton or loose unit packed
+    this.lastStockShortfall = [];
     const activePackedItems = lotData.items.filter(it => ((it.packedCartons || 0) > 0 || (it.packedLoose || 0) > 0 || ((it as any).packedPieces || 0) > 0));
     if (activePackedItems.length === 0) return null;
 
@@ -12602,9 +12952,35 @@ class FMCGDatabase {
       const unitsPerPack = lotItem.unitsPerPack || prod?.units_per_box_carton || 1;
       const tradingUnit = lotItem.tradingUnit || prod?.trading_unit || 'Carton';
       const baseUnit = lotItem.baseUnit || prod?.base_unit || 'Piece';
-      const packedCartons = Math.max(0, lotItem.packedCartons || 0);
-      const packedLoose = Math.max(0, lotItem.packedLoose || 0);
-      const packedBaseUnits = (packedCartons * unitsPerPack) + packedLoose;
+      const requestedCartons = Math.max(0, lotItem.packedCartons || 0);
+      const requestedLoose = Math.max(0, lotItem.packedLoose || 0);
+      const requestedBaseUnits = (requestedCartons * unitsPerPack) + requestedLoose;
+
+      // STOCK RULE: jitna batch stock hai utna hi bill. Zero stock = bill nahi, order me backorder.
+      const availableStock = batches
+        .filter(b => b.product_id === lotItem.productId && b.quantity > 0)
+        .reduce((sum, b) => sum + b.quantity, 0);
+      const packedBaseUnits = Math.min(requestedBaseUnits, availableStock);
+      if (packedBaseUnits < requestedBaseUnits) {
+        this.lastStockShortfall.push({
+          product_id: lotItem.productId,
+          product_name: lotItem.productName || prod?.name || 'Item',
+          requested_qty: requestedBaseUnits,
+          billed_qty: packedBaseUnits
+        });
+      }
+      if (packedBaseUnits <= 0) {
+        // Order item ko "stock ka intezaar" par rakho
+        const srcOrder = sourceOrders.find(o => o.id === lotItem.originOrderId);
+        const srcItem = srcOrder?.items?.find(i => i.id === lotItem.originItemId || i.product_id === lotItem.productId);
+        if (srcItem && !(srcItem.fulfilled_qty && srcItem.fulfilled_qty > 0)) {
+          srcItem.status = 'WAITING_STOCK' as any;
+        }
+        return;
+      }
+      const { cartonQty: packedCartons, looseQty: packedLoose } = packedBaseUnits === requestedBaseUnits
+        ? { cartonQty: requestedCartons, looseQty: requestedLoose }
+        : splitBaseQuantity(packedBaseUnits, unitsPerPack);
       const effectiveCartonQty = packedCartons + (packedLoose / unitsPerPack);
       const unitRate = lotItem.unitRate;
       const unitLooseRate = Math.round((unitRate / unitsPerPack) * 100) / 100;
@@ -12623,7 +12999,7 @@ class FMCGDatabase {
       const gstAmount = Math.round(lineTaxable * (gstPercent / 100) * 100) / 100;
 
       let cgst = 0, sgst = 0, igst = 0;
-      if (ret.state_code === '27') {
+      if (isIntraStateSupply(ret.state_code)) {
         cgst = Math.round((gstAmount / 2) * 100) / 100;
         sgst = Math.round((gstAmount / 2) * 100) / 100;
       } else {
@@ -12795,6 +13171,9 @@ class FMCGDatabase {
       }
     });
 
+    // Kisi bhi item ka stock nahi: bill nahi banega, order pending/backorder me rahega
+    if (invoiceItems.length === 0) return null;
+
     // Also ensure any items in the source orders that were packed with 0 have their ordered_qty and remaining_qty initialized
     lotData.items.filter(it => (it.packedCartons <= 0 && (it.packedLoose || 0) <= 0)).forEach(lotItem => {
       const srcOrder = orders.find(o => o.id === lotItem.originOrderId);
@@ -12877,7 +13256,7 @@ class FMCGDatabase {
       source_order_numbers: sourceOrders.map(o => o.order_number),
       order_numbers: sourceOrders.map(o => o.order_number),
       date: dispatchInfo.dispatchDate || new Date().toISOString(),
-      place_of_supply: ret.state_code === '27' ? 'Maharashtra (27)' : `Out of State (${ret.state_code})`,
+      place_of_supply: formatPlaceOfSupply(ret.state_code),
       subtotal,
       discount_amount: 0,
       taxable_value: taxableTotal,
@@ -13158,6 +13537,7 @@ class FMCGDatabase {
         company_name?: string;
         brand?: string;
         category?: string;
+        subcategory?: string;
         sku?: string;
         barcode?: string;
         pack_size?: string;
@@ -13173,7 +13553,18 @@ class FMCGDatabase {
         stock_qty?: number;
         stock_qty_is_base?: boolean;
         batch_number?: string;
+        mfg_date?: string;
         expiry_date?: string;
+        parent_sku?: string;
+        variant_attribute?: string;
+        variant_value?: string;
+        dealer_price?: number;
+        trade_mode?: 'PIECES' | 'CARTONS' | 'BOTH';
+        min_stock_level?: number;
+        reorder_level?: number;
+        loose_mrp?: number;
+        loose_selling_price?: number;
+        loose_purchase_price?: number;
         supplier_name?: string;
         image_url?: string;
       };
@@ -13181,25 +13572,60 @@ class FMCGDatabase {
     meta: {
       file_name: string;
       file_size?: number;
-      column_mapping: Record<string, string>;
+      column_mapping?: Record<string, string>;
       user_id?: string;
       user_name?: string;
+      business_id?: string;
+      import_opening_stock?: boolean;
+      idempotency_key?: string;
     }
   ): { importId: string; batch: VyaparImportBatch } {
-    const activeBiz = this.getActiveBusinessCompanyId();
+    const activeBiz = meta.business_id || this.getActiveBusinessCompanyId();
+    const vyaparImports = this.getVyaparImports(activeBiz);
+
+    // 1. Idempotency Check: Return existing batch if idempotency_key matches completed import
+    if (meta.idempotency_key) {
+      const existingBatch = vyaparImports.find(
+        b => (b as any).idempotency_key === meta.idempotency_key && b.status === 'Completed'
+      );
+      if (existingBatch) {
+        return { importId: existingBatch.id, batch: existingBatch };
+      }
+    }
+
+    // 2. Pre-import Snapshots for Strict In-Memory & Storage Atomicity
+    const preProducts = JSON.parse(JSON.stringify(this.getProducts(activeBiz)));
+    const preCompanies = JSON.parse(JSON.stringify(this.getCompanies()));
+    const preCategories = JSON.parse(JSON.stringify(this.getCategories(activeBiz)));
+    const preProductCategories = JSON.parse(JSON.stringify(this.getProductCategories(activeBiz)));
+    const preInventory = JSON.parse(JSON.stringify(this.getInventory(activeBiz)));
+    const preBatches = JSON.parse(JSON.stringify(this.getBatches(activeBiz)));
+    const preLedgers = JSON.parse(JSON.stringify(this.getLedger(activeBiz)));
+    const prePurchases = JSON.parse(JSON.stringify(this.getPurchases(activeBiz)));
+    const preActivityLogs = JSON.parse(JSON.stringify(this.getItemActivityLogs(undefined, activeBiz)));
+    const preVyaparImports = JSON.parse(JSON.stringify(vyaparImports));
+
     const products = this.getProducts(activeBiz);
     const companies = this.getCompanies();
+    const categories = this.getCategories(activeBiz);
+    const productCategories = this.getProductCategories(activeBiz);
     const inventory = this.getInventory(activeBiz);
     const batches = this.getBatches(activeBiz);
     const ledgers = this.getLedger(activeBiz);
     const purchases = this.getPurchases(activeBiz);
     const activityLogs = this.getItemActivityLogs(undefined, activeBiz);
-    const vyaparImports = this.getVyaparImports(activeBiz);
+
+    // Build comprehensive set of existing product codes across entire system
+    const allExistingProducts = this.getAllProducts();
+    const existingProductCodes = new Set(
+      allExistingProducts.map(p => p.product_code?.toUpperCase()).filter(Boolean)
+    );
 
     const importId = `IMP-VYAPAR-${Date.now()}`;
     const timestamp = new Date().toISOString();
     const userName = meta.user_name || 'Admin';
     const userId = meta.user_id || 'p-admin-1';
+    const shouldImportStock = Boolean(meta.import_opening_stock);
 
     const createdProductIds: string[] = [];
     const updatedSnapshots: VyaparImportSnapshot[] = [];
@@ -13210,8 +13636,11 @@ class FMCGDatabase {
 
     let totalStockInward = 0;
     let totalPurchaseVal = 0;
+    let itemIndex = 0;
 
-    for (const item of rowsToImport) {
+    try {
+      for (const item of rowsToImport) {
+        itemIndex++;
       if (item.action === 'SKIP') {
         rowLogs.push({
           row_number: item.rowNumber,
@@ -13223,22 +13652,45 @@ class FMCGDatabase {
         continue;
       }
 
-      // Find or create Company
+      // Find or create Company (reuse existing by name or code)
       const compName = (item.data.company_name?.trim() || item.data.brand?.trim() || 'General FMCG');
-      let comp = companies.find(c => c.name.toLowerCase() === compName.toLowerCase());
+      let comp = companies.find(c => 
+        c.name.toLowerCase() === compName.toLowerCase() || 
+        (c.code && c.code.toLowerCase() === compName.toLowerCase())
+      );
       if (!comp) {
         const newCompId = `comp-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
         const newComp: Company = {
           id: newCompId,
           name: compName,
           code: compName.slice(0, 4).toUpperCase().replace(/[^A-Z]/g, '') || 'FMCG',
-          active: true
+          active: true,
+          business_id: activeBiz
         };
         companies.push(newComp);
         comp = newComp;
       }
       const companyId = comp.id;
       const companyName = comp.name;
+
+      // Category resolution and reuse (normalized master & junction table)
+      const rawCatName = (item.data.category?.trim() || item.data.subcategory?.trim() || companyName || 'General FMCG');
+      let cat = categories.find(c => c.name.toLowerCase() === rawCatName.toLowerCase());
+      if (!cat) {
+        const newCatId = `cat-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+        cat = {
+          id: newCatId,
+          business_id: activeBiz,
+          name: rawCatName,
+          description: `Imported Category from ${meta.file_name}`,
+          active: true,
+          created_at: timestamp,
+          updated_at: timestamp
+        };
+        categories.push(cat);
+      }
+      const categoryId = cat.id;
+      const categoryName = cat.name;
 
       const unitsPerPack = Math.max(1, item.data.units_per_box_carton || parseInt(item.data.pack_size?.match(/\d+/)?.[0] || '1', 10));
       const packSizeStr = item.data.pack_size?.trim() || `${unitsPerPack} units/${item.data.trading_unit || 'Carton'}`;
@@ -13247,40 +13699,95 @@ class FMCGDatabase {
       const gstPercent = item.data.gst_percent !== undefined ? Number(item.data.gst_percent) : 18;
       const hsnCode = item.data.hsn?.trim() || '19053100';
 
-      // Determine stock quantity in base units
-      const rawStock = Math.max(0, item.data.stock_qty || 0);
+      // Determine stock quantity in base units ONLY if opening stock import is enabled
+      const rawStock = shouldImportStock ? Math.max(0, item.data.stock_qty || 0) : 0;
       const baseQty = item.data.stock_qty_is_base ? Math.floor(rawStock) : Math.floor(rawStock * unitsPerPack);
       const batchNum = item.data.batch_number?.trim() || `VYP-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
       const expDate = item.data.expiry_date?.trim() || '2027-12-31';
 
+      // Retry & Idempotency safety: Check if product with exact SKU or product_code already exists in activeBiz
       if (item.action === 'CREATE_NEW') {
-        const newProdId = `prd-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-        const newSku = item.data.sku?.trim() || `SKU-${Date.now().toString().slice(-6)}`;
-        const newBarcode = item.data.barcode?.trim() || `BC-${Date.now().toString().slice(-8)}`;
+        const normalizedSku = item.data.sku?.trim().toLowerCase();
+        if (normalizedSku) {
+          const existingDup = products.find(p => 
+            (p.product_code && p.product_code.trim().toLowerCase() === normalizedSku) ||
+            (p.sku && p.sku.trim().toLowerCase() === normalizedSku)
+          );
+
+          if (existingDup) {
+            // SAFETY ENFORCEMENT: Never automatically update an existing product when a product code matches!
+            // Require explicit approval before overwriting existing product details.
+            rowLogs.push({
+              row_number: item.rowNumber || itemIndex,
+              product_name: item.data.name,
+              sku: item.data.sku,
+              action_taken: 'SKIPPED',
+              error: `Existing product "${existingDup.name}" with code "${item.data.sku}" found. Automatic overwrite prohibited; explicit approval (action: UPDATE_EXISTING) required.`
+            });
+            continue;
+          }
+        }
+      }
+
+      // For UPDATE_EXISTING without existingProductId, resolve by SKU/product_code
+      if (item.action === 'UPDATE_EXISTING' && !item.existingProductId) {
+        const normalizedSku = item.data.sku?.trim().toLowerCase();
+        if (normalizedSku) {
+          const match = products.find(p => 
+            (p.product_code && p.product_code.trim().toLowerCase() === normalizedSku) ||
+            (p.sku && p.sku.trim().toLowerCase() === normalizedSku)
+          );
+          if (match) item.existingProductId = match.id;
+        }
+      }
+
+      if (item.action === 'CREATE_NEW') {
+        const newProdId = `prd-${Date.now()}-${itemIndex}-${Math.random().toString(36).substr(2, 5)}`;
+        const newSku = item.data.sku?.trim() || `SKU-${Date.now().toString().slice(-6)}-${String(itemIndex).padStart(4, '0')}`;
+        const newBarcode = item.data.barcode?.trim() || '';
+
+        // Guaranteed unique, collision-free product_code
+        let prodCodeCandidate = `PRD-${Date.now().toString().slice(-7)}-${String(itemIndex).padStart(4, '0')}`;
+        let codeCounter = 1;
+        while (existingProductCodes.has(prodCodeCandidate.toUpperCase())) {
+          prodCodeCandidate = `PRD-${Date.now().toString().slice(-7)}-${String(itemIndex).padStart(4, '0')}-${codeCounter++}`;
+        }
+        existingProductCodes.add(prodCodeCandidate.toUpperCase());
+
+        // Resolve parent product id if parent_sku is provided
+        let parentProdId: string | undefined;
+        if (item.data.parent_sku) {
+          const parentMatch = products.find(p => p.sku && p.sku.toLowerCase() === item.data.parent_sku?.toLowerCase());
+          if (parentMatch) {
+            parentProdId = parentMatch.id;
+          }
+        }
 
         const newProd: Product = {
           id: newProdId,
           business_id: activeBiz,
-          product_code: `PRD-${Date.now().toString().slice(-6)}`,
+          product_code: prodCodeCandidate,
           name: item.data.name.trim(),
           company_id: companyId,
           brand: item.data.brand?.trim() || companyName,
-          category: item.data.category?.trim() || companyName,
-          subcategory: 'General',
+          category: categoryName,
+          subcategory: item.data.subcategory?.trim() || 'General',
           description: item.data.description?.trim() || '',
           sku: newSku,
           barcode: newBarcode,
           pack_size: packSizeStr,
           trading_unit: tradingUnit,
           base_unit: baseUnit,
+          trade_mode: item.data.trade_mode || 'BOTH',
           packing_display: packSizeStr,
           units_per_box_carton: unitsPerPack,
           units_per_trading_unit: unitsPerPack,
           allow_loose_sale: true,
           loose_price_mode: 'auto',
-          loose_selling_price: Math.round((item.data.selling_price / unitsPerPack) * 100) / 100,
-          loose_mrp: Math.round((item.data.mrp / unitsPerPack) * 100) / 100,
-          loose_purchase_price: Math.round((item.data.purchase_price / unitsPerPack) * 100) / 100,
+          loose_selling_price: item.data.loose_selling_price || Math.round((item.data.selling_price / unitsPerPack) * 100) / 100,
+          loose_mrp: item.data.loose_mrp || Math.round((item.data.mrp / unitsPerPack) * 100) / 100,
+          loose_purchase_price: item.data.loose_purchase_price || Math.round((item.data.purchase_price / unitsPerPack) * 100) / 100,
+          dealer_price: item.data.dealer_price,
           carton_discount: 0,
           loose_discount: 0,
           mrp: item.data.mrp,
@@ -13288,10 +13795,13 @@ class FMCGDatabase {
           purchase_price: item.data.purchase_price,
           gst_percent: gstPercent,
           hsn: hsnCode,
-          min_stock_level: 5,
-          reorder_level: 10,
+          min_stock_level: item.data.min_stock_level ?? 5,
+          reorder_level: item.data.reorder_level ?? 10,
           batch_tracking_enabled: true,
           expiry_tracking_enabled: true,
+          parent_product_id: parentProdId,
+          variant_attribute: item.data.variant_attribute,
+          variant_value: item.data.variant_value,
           image_url: item.data.image_url,
           active: true,
           created_at: timestamp,
@@ -13301,7 +13811,20 @@ class FMCGDatabase {
         products.push(newProd);
         createdProductIds.push(newProdId);
 
-        // Inventory balance
+        // Link product to category in product_categories junction table
+        const pcExists = productCategories.some(pc => pc.product_id === newProdId && pc.category_id === categoryId);
+        if (!pcExists) {
+          productCategories.push({
+            id: `pc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            business_id: activeBiz,
+            product_id: newProdId,
+            category_id: categoryId,
+            created_at: timestamp,
+            updated_at: timestamp
+          });
+        }
+
+        // Inventory balance record
         inventory.push({
           id: `inv-${newProdId}`,
           business_id: activeBiz,
@@ -13314,7 +13837,7 @@ class FMCGDatabase {
           updated_at: timestamp
         });
 
-        if (baseQty > 0) {
+        if (shouldImportStock && baseQty > 0) {
           totalStockInward += baseQty;
           
           // Batch
@@ -13334,20 +13857,22 @@ class FMCGDatabase {
           });
           createdBatchIds.push(bchId);
 
-          // Ledger Entry
-          const ledId = `led-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
-          ledgers.push({
-            id: ledId,
-            business_id: activeBiz,
-            product_id: newProdId,
-            change_qty: baseQty,
-            reason: 'Opening Stock / Vyapar Import',
-            direction: 'IN',
-            reference_id: importId,
-            user_id: userId,
-            created_at: timestamp
-          });
-          createdLedgerIds.push(ledId);
+            // Ledger Entry
+            const ledId = `led-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+            ledgers.push({
+              id: ledId,
+              business_id: activeBiz,
+              product_id: newProdId,
+              change_qty: baseQty,
+              reason: 'Opening Stock / Vyapar Import',
+              direction: 'IN',
+              reference_id: importId,
+              user_id: userId,
+              batch_id: bchId,
+              batch_number: batchNum,
+              created_at: timestamp
+            });
+            createdLedgerIds.push(ledId);
 
           // Purchase line item
           const ctnQty = Math.floor(baseQty / unitsPerPack);
@@ -13442,10 +13967,48 @@ class FMCGDatabase {
             existing.barcode = item.data.barcode;
           }
 
+          if (item.data.dealer_price !== undefined && item.data.dealer_price !== existing.dealer_price) {
+            fieldChanges.push({ field: 'Dealer Rate', old_value: existing.dealer_price, new_value: item.data.dealer_price });
+            existing.dealer_price = item.data.dealer_price;
+          }
+          if (item.data.trade_mode && item.data.trade_mode !== existing.trade_mode) {
+            existing.trade_mode = item.data.trade_mode;
+          }
+          if (item.data.min_stock_level !== undefined && item.data.min_stock_level !== existing.min_stock_level) {
+            existing.min_stock_level = item.data.min_stock_level;
+          }
+          if (item.data.reorder_level !== undefined && item.data.reorder_level !== existing.reorder_level) {
+            existing.reorder_level = item.data.reorder_level;
+          }
+          if (item.data.variant_attribute && item.data.variant_attribute !== existing.variant_attribute) {
+            existing.variant_attribute = item.data.variant_attribute;
+          }
+          if (item.data.category && existing.category !== categoryName) {
+            fieldChanges.push({ field: 'Category', old_value: existing.category, new_value: categoryName });
+            existing.category = categoryName;
+            const pcExists = productCategories.some(pc => pc.product_id === existing.id && pc.category_id === categoryId);
+            if (!pcExists) {
+              productCategories.push({
+                id: `pc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                business_id: activeBiz,
+                product_id: existing.id,
+                category_id: categoryId,
+                created_at: timestamp,
+                updated_at: timestamp
+              });
+            }
+          }
+          if (item.data.parent_sku) {
+            const parentMatch = products.find(p => p.sku && p.sku.toLowerCase() === item.data.parent_sku?.toLowerCase());
+            if (parentMatch && existing.parent_product_id !== parentMatch.id) {
+              existing.parent_product_id = parentMatch.id;
+            }
+          }
+
           existing.updated_at = timestamp;
 
-          // Inward stock if specified
-          if (baseQty > 0) {
+          // Inward stock ONLY if explicitly enabled
+          if (shouldImportStock && baseQty > 0) {
             totalStockInward += baseQty;
             const inv = inventory.find(i => i.product_id === existing.id);
             if (inv) {
@@ -13466,21 +14029,25 @@ class FMCGDatabase {
               });
             }
 
-            const bchId = `bch-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
-            batches.push({
-              id: bchId,
-              business_id: activeBiz,
-              product_id: existing.id,
-              batch_number: batchNum,
-              expiry_date: expDate,
-              purchase_rate: item.data.purchase_price,
-              mrp: item.data.mrp,
-              selling_price: item.data.selling_price,
-              quantity: baseQty,
-              godown: 'Main Godown',
-              cost_layer: importId
-            });
-            createdBatchIds.push(bchId);
+            // Check if batch already exists in this import
+            const batchExists = batches.some(b => b.product_id === existing.id && b.batch_number === batchNum && b.cost_layer === importId);
+            if (!batchExists) {
+              const bchId = `bch-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+              batches.push({
+                id: bchId,
+                business_id: activeBiz,
+                product_id: existing.id,
+                batch_number: batchNum,
+                expiry_date: expDate,
+                purchase_rate: item.data.purchase_price,
+                mrp: item.data.mrp,
+                selling_price: item.data.selling_price,
+                quantity: baseQty,
+                godown: 'Main Godown',
+                cost_layer: importId
+              });
+              createdBatchIds.push(bchId);
+            }
 
             const ledId = `led-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
             ledgers.push({
@@ -13492,6 +14059,7 @@ class FMCGDatabase {
               direction: 'IN',
               reference_id: importId,
               user_id: userId,
+              batch_number: batchNum,
               created_at: timestamp
             });
             createdLedgerIds.push(ledId);
@@ -13584,7 +14152,7 @@ class FMCGDatabase {
       total_rows: rowsToImport.length,
       created_count: createdProductIds.length,
       updated_count: updatedSnapshots.length,
-      skipped_count: rowsToImport.filter(r => r.action === 'SKIP').length,
+      skipped_count: rowLogs.filter(r => r.action_taken === 'SKIPPED').length,
       failed_count: 0,
       stock_units_imported: totalStockInward,
       status: 'Completed',
@@ -13599,18 +14167,38 @@ class FMCGDatabase {
       row_logs: rowLogs
     };
 
-    vyaparImports.unshift(batchRecord);
+      if (meta.idempotency_key) {
+        (batchRecord as any).idempotency_key = meta.idempotency_key;
+      }
 
-    // Save all stores
-    this.saveProducts(products, activeBiz);
-    this.saveCompanies(companies);
-    this.saveInventory(inventory, activeBiz);
-    this.saveBatches(batches, activeBiz);
-    this.saveLedger(ledgers, activeBiz);
-    this.saveItemActivityLogs(activityLogs, activeBiz);
-    this.saveVyaparImports(vyaparImports, activeBiz);
+      vyaparImports.unshift(batchRecord);
 
-    return { importId, batch: batchRecord };
+      // Save all stores atomically
+      this.saveProducts(products, activeBiz);
+      this.saveCompanies(companies);
+      this.saveCategories(categories, activeBiz);
+      this.saveProductCategories(productCategories, activeBiz);
+      this.saveInventory(inventory, activeBiz);
+      this.saveBatches(batches, activeBiz);
+      this.saveLedger(ledgers, activeBiz);
+      this.saveItemActivityLogs(activityLogs, activeBiz);
+      this.saveVyaparImports(vyaparImports, activeBiz);
+
+      return { importId, batch: batchRecord };
+    } catch (importErr: any) {
+      // ATOMIC ROLLBACK: Restore pre-import state completely
+      this.saveProducts(preProducts, activeBiz);
+      this.saveCompanies(preCompanies);
+      this.saveCategories(preCategories, activeBiz);
+      this.saveProductCategories(preProductCategories, activeBiz);
+      this.saveInventory(preInventory, activeBiz);
+      this.saveBatches(preBatches, activeBiz);
+      this.saveLedger(preLedgers, activeBiz);
+      this.savePurchases(prePurchases, activeBiz);
+      this.saveItemActivityLogs(preActivityLogs, activeBiz);
+      this.saveVyaparImports(preVyaparImports, activeBiz);
+      throw new Error(`Batch import failed and was atomically rolled back: ${importErr?.message || importErr}`);
+    }
   }
 
   getInitialVyaparImports(): VyaparImportBatch[] {
@@ -13633,85 +14221,427 @@ class FMCGDatabase {
 
   /**
    * Rolls back an imported Vyapar batch safely, preserving unrelated transactions.
+   * Hardened against:
+   * 1. Overwriting subsequent administrative edits on updated products.
+   * 2. Reversing products or batches used in subsequent orders or invoices.
+   * 3. Inventory quantity desynchronization on updated products.
    */
-  rollbackVyaparImport(importId: string, reason?: string, userName?: string): { success: boolean; message: string } {
-    const activeBiz = this.getActiveBusinessCompanyId();
-    const vyaparImports = this.getVyaparImports(activeBiz);
-    const batch = vyaparImports.find(b => b.id === importId);
+  rollbackVyaparImport(importId: string, reason?: string, userName?: string, targetBusinessId?: string): { success: boolean; message: string } {
+    const allImports = this.getStore<VyaparImportBatch>('fmcg_vyapar_imports', []);
+    const batch = allImports.find(b => b.id === importId);
     if (!batch) {
       return { success: false, message: 'Import batch not found.' };
     }
+    const activeBiz = batch.business_id || targetBusinessId || this.getActiveBusinessCompanyId();
+    const vyaparImports = this.getVyaparImports(activeBiz);
     if (batch.status === 'Rolled Back') {
       return { success: false, message: 'This import batch has already been rolled back.' };
     }
 
-    // Check safety: Ensure none of the created products are used in Invoices or Orders
     const invoices = this.getInvoices(activeBiz);
     const orders = this.getOrders(activeBiz);
-    const createdSet = new Set(batch.created_product_ids);
+    const createdSet = new Set(batch.created_product_ids || []);
+    const batchSet = new Set(batch.created_batch_ids || []);
+    const updatedProdIds = new Set(batch.updated_snapshots?.map(s => s.product_id) || []);
 
-    const usedInvoices = invoices.filter(inv => inv.items?.some(i => createdSet.has(i.product_id)));
-    const usedOrders = orders.filter(ord => ord.items?.some(i => createdSet.has(i.product_id)));
-
-    if (usedInvoices.length > 0 || usedOrders.length > 0) {
+    // 1. Dependency Check: Ensure none of the created products are used in Invoices or Orders
+    const createdInvoices = invoices.filter(inv => inv.items?.some(i => createdSet.has(i.product_id)));
+    const createdOrders = orders.filter(ord => ord.items?.some(i => createdSet.has(i.product_id)));
+    if (createdInvoices.length > 0 || createdOrders.length > 0) {
       return {
         success: false,
-        message: `Cannot rollback: Products from this import are linked to ${usedInvoices.length} existing invoice(s) and ${usedOrders.length} order(s). Reversal would corrupt financial ledgers.`
+        message: `Cannot rollback: Created products from this import are linked to ${createdInvoices.length} existing invoice(s) and ${createdOrders.length} order(s). Reversal would corrupt financial ledgers.`
       };
     }
 
-    // Safe to rollback
+    // 2. Dependency Check: Ensure opening batches have not been allocated or sold
+    const batchInvoices = invoices.filter(inv => inv.items?.some(i => i.batch_id && batchSet.has(i.batch_id)));
+    const batchOrders = orders.filter(ord => ord.items?.some(i => (i as any).batch_allocations?.some((ba: any) => batchSet.has(ba.batch_id))));
+    if (batchInvoices.length > 0 || batchOrders.length > 0) {
+      return {
+        success: false,
+        message: `Cannot rollback: Opening stock batches from this import have already been allocated/sold in ${batchInvoices.length} invoice(s) and ${batchOrders.length} order(s).`
+      };
+    }
+
+    // 3. Dependency Check: Ensure updated products were not used in transactions created AFTER the import
+    const batchImportTime = new Date(batch.imported_at).getTime();
+    const postImportInvoices = invoices.filter(inv => {
+      const invTime = new Date(inv.date || inv.created_at || '').getTime();
+      return invTime >= batchImportTime && inv.items?.some(i => updatedProdIds.has(i.product_id));
+    });
+    const postImportOrders = orders.filter(ord => {
+      const ordTime = new Date(ord.order_date || ord.created_at || '').getTime();
+      return ordTime >= batchImportTime && ord.items?.some(i => updatedProdIds.has(i.product_id));
+    });
+    if (postImportInvoices.length > 0 || postImportOrders.length > 0) {
+      return {
+        success: false,
+        message: `Cannot rollback: Updated products from this import have subsequent transactions (${postImportInvoices.length} invoice(s), ${postImportOrders.length} order(s)) created after the import.`
+      };
+    }
+
     let products = this.getProducts(activeBiz);
     let inventory = this.getInventory(activeBiz);
     let batches = this.getBatches(activeBiz);
     let ledgers = this.getLedger(activeBiz);
     let purchases = this.getPurchases(activeBiz);
-    const activityLogs = this.getItemActivityLogs(undefined, activeBiz);
+    let productCategories = this.getProductCategories(activeBiz);
 
-    // 1. Remove created products and their inventory
-    products = products.filter(p => !createdSet.has(p.id));
-    inventory = inventory.filter(inv => !createdSet.has(inv.product_id));
-
-    // 2. Restore updated products to pre-import snapshots
-    batch.updated_snapshots?.forEach(snap => {
-      const idx = products.findIndex(p => p.id === snap.product_id);
-      if (idx !== -1) {
-        products[idx] = snap.previous_product;
+    // 4. Overwrite Protection: Check if any updated products have later modifications
+    for (const snap of (batch.updated_snapshots || [])) {
+      const currentProd = products.find(p => p.id === snap.product_id);
+      if (currentProd && currentProd.updated_at) {
+        const prodUpdateTime = new Date(currentProd.updated_at).getTime();
+        // Allow up to 5 seconds tolerance between import start and finish
+        if (prodUpdateTime > batchImportTime + 5000) {
+          return {
+            success: false,
+            message: `Cannot rollback: Product "${currentProd.name}" (${currentProd.sku || currentProd.id}) has been modified after this import (last modified: ${currentProd.updated_at}). Reversal would overwrite subsequent administrative edits.`
+          };
+        }
       }
-    });
-
-    // 3. Remove created opening batches
-    const batchSet = new Set(batch.created_batch_ids || []);
-    batches = batches.filter(b => !batchSet.has(b.id));
-
-    // 4. Remove created ledger entries
-    const ledgerSet = new Set(batch.created_ledger_ids || []);
-    ledgers = ledgers.filter(l => !ledgerSet.has(l.id));
-
-    // 5. Remove opening purchase record
-    if (batch.created_purchase_id) {
-      purchases = purchases.filter(pur => pur.id !== batch.created_purchase_id);
     }
 
-    // 6. Update batch status
-    batch.status = 'Rolled Back';
-    batch.rollback_at = new Date().toISOString();
-    batch.rollback_by_name = userName || 'Admin';
-    batch.rollback_reason = reason || 'Admin requested rollback';
+    // Pre-rollback snapshot for atomic safety
+    const preRollbackProducts = JSON.parse(JSON.stringify(products));
+    const preRollbackInventory = JSON.parse(JSON.stringify(inventory));
+    const preRollbackBatches = JSON.parse(JSON.stringify(batches));
+    const preRollbackLedgers = JSON.parse(JSON.stringify(ledgers));
+    const preRollbackPurchases = JSON.parse(JSON.stringify(purchases));
+    const preRollbackProductCategories = JSON.parse(JSON.stringify(productCategories));
+    const preRollbackVyaparImports = JSON.parse(JSON.stringify(vyaparImports));
 
-    // Save all stores
-    this.saveProducts(products, activeBiz);
-    this.saveInventory(inventory, activeBiz);
-    this.saveBatches(batches, activeBiz);
-    this.saveLedger(ledgers, activeBiz);
-    this.savePurchases(purchases, activeBiz);
-    this.saveVyaparImports(vyaparImports, activeBiz);
+    try {
+      // 5. Remove created products and their inventory & product_categories links
+      products = products.filter(p => !createdSet.has(p.id));
+      inventory = inventory.filter(inv => !createdSet.has(inv.product_id));
+      productCategories = productCategories.filter(pc => !createdSet.has(pc.product_id));
 
-    return {
-      success: true,
-      message: `Successfully rolled back batch ${importId}. Removed ${batch.created_product_ids.length} created products and restored ${batch.updated_snapshots.length} updated products.`
-    };
+      // 6. Revert inventory quantities for updated products that received opening stock
+      const stockInwardByProd = new Map<string, number>();
+      batch.row_logs?.forEach(log => {
+        if (log.action_taken === 'UPDATED' && log.product_id && log.stock_inward_qty) {
+          stockInwardByProd.set(log.product_id, (stockInwardByProd.get(log.product_id) || 0) + log.stock_inward_qty);
+        }
+      });
+
+      for (const [prodId, inwardQty] of stockInwardByProd.entries()) {
+        const inv = inventory.find(i => i.product_id === prodId);
+        if (inv) {
+          if (inv.physical_qty < inwardQty) {
+            throw new Error(`Cannot rollback opening stock for product: stock has already been consumed (available: ${inv.physical_qty}, rollback requires: ${inwardQty}).`);
+          }
+          inv.physical_qty = Math.max(0, inv.physical_qty - inwardQty);
+          inv.available_qty = Math.max(0, inv.available_qty - inwardQty);
+          inv.updated_at = new Date().toISOString();
+        }
+      }
+
+      // 7. Restore updated products to pre-import snapshots
+      batch.updated_snapshots?.forEach(snap => {
+        const idx = products.findIndex(p => p.id === snap.product_id);
+        if (idx !== -1) {
+          products[idx] = snap.previous_product;
+        }
+      });
+
+      // 8. Remove created opening batches
+      batches = batches.filter(b => !batchSet.has(b.id));
+
+      // 9. Remove created ledger entries
+      const ledgerSet = new Set(batch.created_ledger_ids || []);
+      ledgers = ledgers.filter(l => !ledgerSet.has(l.id));
+
+      // 10. Remove opening purchase record
+      if (batch.created_purchase_id) {
+        purchases = purchases.filter(pur => pur.id !== batch.created_purchase_id);
+      }
+
+      // 11. Update batch status
+      batch.status = 'Rolled Back';
+      batch.rollback_at = new Date().toISOString();
+      batch.rollback_by_name = userName || 'Admin';
+      batch.rollback_reason = reason || 'Admin requested rollback';
+
+      // Save all stores atomically
+      this.saveProducts(products, activeBiz);
+      this.saveProductCategories(productCategories, activeBiz);
+      this.saveInventory(inventory, activeBiz);
+      this.saveBatches(batches, activeBiz);
+      this.saveLedger(ledgers, activeBiz);
+      this.savePurchases(purchases, activeBiz);
+      this.saveVyaparImports(vyaparImports, activeBiz);
+
+      return {
+        success: true,
+        message: `Successfully rolled back batch "${batch.file_name}" (${importId}). Removed ${batch.created_product_ids.length} created product(s) and restored ${batch.updated_snapshots.length} updated product(s).`
+      };
+    } catch (err: any) {
+      // Revert stores to pre-rollback state if any failure occurred
+      this.saveProducts(preRollbackProducts, activeBiz);
+      this.saveProductCategories(preRollbackProductCategories, activeBiz);
+      this.saveInventory(preRollbackInventory, activeBiz);
+      this.saveBatches(preRollbackBatches, activeBiz);
+      this.saveLedger(preRollbackLedgers, activeBiz);
+      this.savePurchases(preRollbackPurchases, activeBiz);
+      this.saveVyaparImports(preRollbackVyaparImports, activeBiz);
+      return {
+        success: false,
+        message: `Rollback failed and state was preserved: ${err?.message || err}`
+      };
+    }
   }
 }
 
 export const db = new FMCGDatabase();
+
+// ----------------------------------------------------------------------------
+// GST STATE HELPERS
+// Pehle har jagah Maharashtra (27) hardcoded tha. Saifee Wholesale Mart Madhya Pradesh (23)
+// me hai, isliye local customer ko bhi IGST lag raha tha. Ab "home state" company ke
+// state_code se aata hai: same state = CGST + SGST, doosra state = IGST.
+// ----------------------------------------------------------------------------
+
+export const INDIAN_STATE_NAMES: Record<string, string> = {
+  '01': 'Jammu and Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh',
+  '05': 'Uttarakhand', '06': 'Haryana', '07': 'Delhi', '08': 'Rajasthan', '09': 'Uttar Pradesh',
+  '10': 'Bihar', '11': 'Sikkim', '12': 'Arunachal Pradesh', '13': 'Nagaland', '14': 'Manipur',
+  '15': 'Mizoram', '16': 'Tripura', '17': 'Meghalaya', '18': 'Assam', '19': 'West Bengal',
+  '20': 'Jharkhand', '21': 'Odisha', '22': 'Chhattisgarh', '23': 'Madhya Pradesh', '24': 'Gujarat',
+  '26': 'Dadra and Nagar Haveli and Daman and Diu', '27': 'Maharashtra', '29': 'Karnataka',
+  '30': 'Goa', '31': 'Lakshadweep', '32': 'Kerala', '33': 'Tamil Nadu', '34': 'Puducherry',
+  '35': 'Andaman and Nicobar Islands', '36': 'Telangana', '37': 'Andhra Pradesh', '38': 'Ladakh'
+};
+
+export const DEFAULT_HOME_STATE_CODE = '23';
+/** Saifee Wholesale Mart: Khachrod, Dist. Ujjain (M.P.) */
+export const DEFAULT_HOME_CITY = 'Khachrod';
+
+/** 2-digit state code nikalta hai: "23", "Madhya Pradesh (23)", ya GSTIN "23ABCDE1234F1Z5" se. */
+export function extractStateCode(value?: string | null): string {
+  const m = String(value || '').match(/\d{2}/);
+  return m ? m[0] : '';
+}
+
+/** Company (active business) ka GST state code. */
+export function getHomeStateCode(): string {
+  try {
+    const biz = db.getActiveBusinessCompany() as any;
+    return extractStateCode(biz?.state_code) || extractStateCode(biz?.gstin) || DEFAULT_HOME_STATE_CODE;
+  } catch {
+    return DEFAULT_HOME_STATE_CODE;
+  }
+}
+
+/** true = same state (CGST + SGST). Khaali state code = local maana jaata hai. */
+export function isIntraStateSupply(customerStateCode?: string | null): boolean {
+  const code = extractStateCode(customerStateCode);
+  return !code || code === getHomeStateCode();
+}
+
+/** "Madhya Pradesh (23)" jaisa label. */
+export function formatPlaceOfSupply(customerStateCode?: string | null): string {
+  const code = extractStateCode(customerStateCode) || getHomeStateCode();
+  const name = INDIAN_STATE_NAMES[code];
+  return name ? `${name} (${code})` : `State (${code})`;
+}
+
+// ----------------------------------------------------------------------------
+// WALK-IN / COUNTER CUSTOMER
+// Counter sale me koi retailer select nahi hota. Pehle aise order ka bill galti se
+// pehle retailer (retailers[0]) ke naam ban jaata tha. Ab har company ka ek asli
+// "Counter / Walk-in Customer" record hota hai.
+// ----------------------------------------------------------------------------
+
+export const LEGACY_WALKIN_RETAILER_ID = 'ret-walkin-counter';
+
+export function isWalkInRetailerId(id?: string | null): boolean {
+  return !!id && (id === LEGACY_WALKIN_RETAILER_ID || id.startsWith('ret-walkin-'));
+}
+
+/** Jis list ko baad me saveRetailers() se save karna hai, usme walk-in record bhi rakho. */
+export function addWalkInToList(list: Retailer[], walkIn: Retailer): Retailer {
+  const existing = list.find(r => r.id === walkIn.id);
+  if (existing) return existing;
+  list.push(walkIn);
+  return walkIn;
+}
+
+/** Walk-in retailer record bana deta hai (agar nahi hai) aur return karta hai. */
+export function ensureWalkInRetailer(retailerId?: string, targetBusinessId?: string): Retailer {
+  const bizId = targetBusinessId || db.getActiveBusinessCompanyId();
+  const id = retailerId || `ret-walkin-${bizId}`;
+  const all = db.getRetailers(bizId);
+  const found = all.find(r => r.id === id);
+  if (found) return found;
+  const now = new Date().toISOString();
+  const walkIn: Retailer = {
+    id,
+    retailer_code: 'WALK-IN',
+    shop_name: 'Counter / Walk-in Customer',
+    owner_name: 'Walk-in Customer',
+    address: '',
+    city: '',
+    state_code: getHomeStateCode(),
+    mobile: '',
+    credit_limit: 0,
+    outstanding: 0,
+    active: true,
+    business_id: bizId,
+    created_at: now,
+    updated_at: now
+  };
+  db.saveRetailers([...all, walkIn], bizId);
+  return walkIn;
+}
+
+/**
+ * Pichle dispatch/bill me jo items stock na hone se bill nahi hue (backorder me gaye),
+ * unka seedha message. Kuch kam na ho to khaali string.
+ */
+export function describeStockShortfall(): string {
+  const list = db.getLastStockShortfall();
+  if (list.length === 0) return '';
+  const parts = list.map(s =>
+    s.billed_qty > 0
+      ? `${s.product_name}: ${s.billed_qty} invoiced, ${s.requested_qty - s.billed_qty} on backorder`
+      : `${s.product_name}: out of stock, full quantity on backorder`
+  );
+  return `Insufficient stock. The following quantities were not invoiced and remain on the order as a backorder: ${parts.join('; ')}.`;
+}
+
+/** Reason the last dispatch produced no invoice (other than stock shortfall). */
+export function describeDispatchIssue(): string {
+  return db.lastDispatchIssue || '';
+}
+
+// ----------------------------------------------------------------------------
+// SELLER (OWN COMPANY) DETAILS FOR INVOICES / RECEIPTS
+// Pehle invoices par demo data chhap raha tha (Navi Mumbai address, nakli GSTIN,
+// nakli HDFC bank account). Ab sirf company ki asli details aati hain; jo detail
+// nahi bhari, wo chhapti hi nahi.
+// ----------------------------------------------------------------------------
+
+export interface SellerDetails {
+  name: string;
+  address: string;
+  gstin: string;          // '' when not registered / not filled
+  gstinLabel: string;     // 'GSTIN: 23ABC...' or 'GSTIN: Not provided'
+  stateLabel: string;     // 'Madhya Pradesh (23)'
+  phone: string;
+  bank: {
+    bankName: string;
+    accountNumber: string;
+    ifsc: string;
+    branch: string;
+    upiId: string;
+  } | null;
+}
+
+export function getSellerDetails(company?: Partial<BusinessCompany> | null): SellerDetails {
+  const c: any = company || (() => { try { return db.getActiveBusinessCompany(); } catch { return null; } })() || {};
+  const settings: any = c.settings || {};
+  const gstin = String(c.gstin || '').trim().toUpperCase();
+  const stateCode = extractStateCode(c.state_code) || extractStateCode(gstin) || DEFAULT_HOME_STATE_CODE;
+  const addrText = String(c.address || '').trim();
+  const cityText = String(c.city || '').trim();
+  const pinText = String(c.pincode || '').trim();
+  const address = [
+    addrText,
+    cityText && !addrText.toLowerCase().includes(cityText.toLowerCase()) ? cityText : '',
+    pinText && !addrText.includes(pinText) ? pinText : ''
+  ].filter(Boolean).join(', ');
+  const bankName = String(settings.bank_name || '').trim();
+  const accountNumber = String(settings.bank_account_number || settings.bank_account || '').trim();
+  const ifsc = String(settings.bank_ifsc || '').trim();
+  const branch = String(settings.bank_branch || '').trim();
+  const upiId = String(settings.upi_id || '').trim();
+  return {
+    name: String(c.legal_name || c.name || 'Company').trim(),
+    address,
+    gstin,
+    gstinLabel: gstin ? `GSTIN: ${gstin}` : 'GSTIN: Not provided',
+    stateLabel: formatPlaceOfSupply(stateCode),
+    phone: String(c.phone || '').trim(),
+    bank: bankName || accountNumber || upiId ? { bankName, accountNumber, ifsc, branch, upiId } : null
+  };
+}
+
+
+// ----------------------------------------------------------------------------
+// SIMPLE ORDER FLOW HELPERS (pure: used by screens and by the db methods)
+// ----------------------------------------------------------------------------
+
+export type FlowStage = 'to_pack' | 'ready_to_bill' | 'billed' | 'backorder' | 'cancelled';
+
+export function flowOrderedQty(item: Partial<OrderItem>): number {
+  return Math.max(0, Math.floor(Number(item.ordered_qty ?? item.base_qty ?? item.quantity ?? 0) || 0));
+}
+
+/** Quantity still to be billed on this item (ordered - billed - cancelled). */
+export function flowRemainingQty(item: Partial<OrderItem>): number {
+  const billed = Number(item.fulfilled_qty ?? item.dispatched_qty ?? 0) || 0;
+  const cancelled = Number(item.cancelled_qty ?? 0) || 0;
+  return Math.max(0, flowOrderedQty(item) - billed - cancelled);
+}
+
+/**
+ * Stock free for packing: batch stock minus what is already packed (not yet billed)
+ * on other orders waiting for the biller.
+ */
+export function computeFreeStockByProduct(batches: InventoryBatch[], orders: Order[], excludeOrderId?: string): Record<string, number> {
+  const free: Record<string, number> = {};
+  batches.forEach(b => {
+    if ((b.quantity || 0) > 0) free[b.product_id] = (free[b.product_id] || 0) + b.quantity;
+  });
+  orders.forEach(o => {
+    if (o.id === excludeOrderId || !o.flow_ready_to_bill) return;
+    (o.items || []).forEach(it => {
+      const q = Number(it.flow_packed_qty) || 0;
+      if (q > 0) free[it.product_id] = (free[it.product_id] || 0) - q;
+    });
+  });
+  Object.keys(free).forEach(k => { if (free[k] < 0) free[k] = 0; });
+  return free;
+}
+
+export function flowOrderStage(order: Order, freeStock: Record<string, number>): FlowStage {
+  if (order.status === 'Cancelled') return 'cancelled';
+  if (order.flow_ready_to_bill) return 'ready_to_bill';
+  const items = order.items || [];
+  const remainingItems = items.filter(it => flowRemainingQty(it) > 0);
+  if (remainingItems.length === 0) {
+    const anyBilled = items.some(it => (Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0) > 0);
+    return anyBilled ? 'billed' : 'cancelled';
+  }
+  const anyBilled = items.some(it => (Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0) > 0);
+  const triedBefore = !!order.flow_pack_attempted_at || anyBilled;
+  if (!triedBefore) return 'to_pack';
+  // Backorder: stock aate hi wapas packer ke paas
+  const stockArrived = remainingItems.some(it => (freeStock[it.product_id] || 0) > 0);
+  return stockArrived ? 'to_pack' : 'backorder';
+}
+
+/** Rate the invoice will use for this item (per unit as ordered). */
+export function flowItemRate(item: Partial<OrderItem>, product?: Partial<Product> | null): number {
+  if (item.manual_rate_applied && item.manual_billing_rate) return Number(item.manual_billing_rate) || 0;
+  return Number(item.carton_rate ?? item.order_time_rate ?? item.base_price ?? product?.selling_price ?? 0) || 0;
+}
+
+/** Same maths as the invoice (dispatchOrder), for the biller preview. */
+export function flowLineAmounts(item: Partial<OrderItem>, product: Partial<Product> | null | undefined, qty: number, rate: number, intraState: boolean) {
+  const unitsPerPack = item.units_per_trading_unit || product?.units_per_box_carton || 1;
+  const { cartonQty, looseQty } = splitBaseQuantity(qty, unitsPerPack);
+  const looseRate = item.loose_rate ?? product?.loose_selling_price ?? (Math.round((rate / Math.max(1, unitsPerPack)) * 100) / 100);
+  const gst = (item.gst_percent !== undefined && item.gst_percent !== null) ? Number(item.gst_percent) : (Number(product?.gst_percent) || 0);
+  const a = calculateItemAmounts(cartonQty, looseQty, rate, looseRate, item.carton_discount ?? item.discount ?? 0, item.loose_discount ?? 0, gst);
+  return {
+    taxable: a.taxableAmount,
+    gstPercent: gst,
+    cgst: intraState ? a.gstAmount / 2 : 0,
+    sgst: intraState ? a.gstAmount / 2 : 0,
+    igst: intraState ? 0 : a.gstAmount,
+    total: a.totalAmount
+  };
+}

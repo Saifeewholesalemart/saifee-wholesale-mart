@@ -200,7 +200,11 @@ export default function RetailerEcommerce() {
   const handlePlaceOrderClick = () => {
     if (cartItemKeys.length === 0) return;
     if (!isRetailerLoggedIn) {
-      setShowLoginModal(true);
+      if (process.env.NODE_ENV === 'production') {
+        router.push('/');
+      } else {
+        setShowLoginModal(true);
+      }
     } else {
       setActiveView('checkout');
     }
@@ -979,7 +983,7 @@ export default function RetailerEcommerce() {
 
             <div className="space-y-1">
               <label className="text-xs font-bold text-slate-600 uppercase block">Select Retailer Shop Profile</label>
-              <p className="text-xs text-slate-500 leading-normal">Choose one of the demo retailer accounts in Indore, Bhopal, Dewas, Ujjain, or Mumbai to authenticate.</p>
+              <p className="text-xs text-slate-500 leading-normal">Choose a retailer account to sign in.</p>
             </div>
 
             {/* List of profiles belonging to role retailer */}

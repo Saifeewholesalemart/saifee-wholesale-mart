@@ -1,53 +1,56 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/authSession';
 
 /**
  * GET /api/salesperson/orders
- * Returns orders scoped to the salesperson role & brand/category assignment.
- * Query parameters:
- *  - salesperson_id (optional, defaults to current session user or header)
- *  - retailer_id (optional, filter orders for a specific retailer)
+ * Returns orders scoped to the authenticated salesperson role & brand/category assignment.
+ * Session verification enforced: client-supplied salesperson ID is NEVER trusted for non-admins.
  */
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const salespersonId = 
-      searchParams.get('salesperson_id') || 
-      req.headers.get('x-salesperson-id') || 
-      db.getCurrentUser()?.id;
-    const retailerId = searchParams.get('retailer_id') || undefined;
-
-    if (!salespersonId) {
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
       return NextResponse.json({
         success: false,
-        error: 'Authentication Required: salesperson_id must be provided in query parameters or x-salesperson-id header.'
+        error: 'Authentication Required: Please log in to view scoped orders.'
       }, { status: 401 });
     }
 
-    const profile = db.getProfiles().find(p => p.id === salespersonId);
-    if (!profile) {
+    const { session, profile: authProfile } = auth;
+    const isAdmin = session.role === 'admin' || session.profileType === 'ADMIN';
+    const isSalesperson = 
+      session.role === 'sales_dist' || 
+      session.role === 'sales_co' || 
+      session.profileType === 'SALESPERSON';
+
+    if (!isAdmin && !isSalesperson) {
       return NextResponse.json({
         success: false,
-        error: `Salesperson profile not found with ID: ${salespersonId}`
-      }, { status: 404 });
-    }
-
-    // Verify profile belongs to salesperson or admin
-    const isValidSalesRole = 
-      profile.role === 'sales_dist' || 
-      profile.role === 'sales_co' || 
-      profile.role === 'admin' ||
-      profile.profile_type === 'SALESPERSON';
-
-    if (!isValidSalesRole) {
-      return NextResponse.json({
-        success: false,
-        error: `Unauthorized: User role '${profile.role}' is not authorized for salesperson order APIs.`
+        error: `Unauthorized: User role '${session.role}' is not authorized for salesperson order APIs.`
       }, { status: 403 });
     }
 
+    const { searchParams } = new URL(req.url);
+    const retailerId = searchParams.get('retailer_id') || undefined;
+
+    // Strict Authorization: Salespersons CANNOT spoof another salesperson ID.
+    // Only verified Administrators can query on behalf of another salesperson ID.
+    let targetSalespersonId = session.userId;
+    if (isAdmin && searchParams.get('salesperson_id')) {
+      targetSalespersonId = searchParams.get('salesperson_id')!;
+    }
+
+    const profile = db.getProfiles().find(p => p.id === targetSalespersonId);
+    if (!profile) {
+      return NextResponse.json({
+        success: false,
+        error: `Salesperson profile not found with ID: ${targetSalespersonId}`
+      }, { status: 404 });
+    }
+
     // Query scoped orders strictly enforcing brand/category isolation
-    const orders = db.getScopedOrdersForSalesperson(salespersonId, { retailerId });
+    const orders = db.getScopedOrdersForSalesperson(targetSalespersonId, { retailerId });
 
     const isRestricted = profile.role === 'sales_co' || profile.sales_role_type === 'COMPANY' || profile.trade_scope === 'RESTRICTED';
     const companies = db.getCompanies();

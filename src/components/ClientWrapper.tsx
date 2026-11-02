@@ -4,6 +4,7 @@ import React, { useEffect } from 'react';
 import { DbProvider } from '@/context/DbContext';
 import RoleSwitcher from './RoleSwitcher';
 import ErrorBoundary from './ErrorBoundary';
+import CloudGate from './CloudGate';
 
 export default function ClientWrapper({ children }: { children: React.ReactNode }) {
   useEffect(() => {
@@ -31,6 +32,7 @@ export default function ClientWrapper({ children }: { children: React.ReactNode 
           {children}
           <RoleSwitcher />
         </div>
+        <CloudGate />
       </DbProvider>
     </ErrorBoundary>
   );

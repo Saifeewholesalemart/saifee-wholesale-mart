@@ -270,7 +270,7 @@ export default function AdminRetailers() {
                         <div className="flex items-center gap-2 text-xs text-slate-500 font-medium mt-0.5">
                           <span>Mob: <strong className="text-slate-700 font-mono">{ret.mobile}</strong></span>
                           <span>&bull;</span>
-                          <span className="text-indigo-600 font-semibold">{ret.city || 'Mumbai'}</span>
+                          <span className="text-indigo-600 font-semibold">{ret.city || ''}</span>
                         </div>
                         <span className="text-[11px] text-slate-400 block truncate max-w-xs">{ret.address}</span>
                       </td>

@@ -636,7 +636,7 @@ export default function AdminReturns() {
                       <option value="">-- Choose Retailer Account --</option>
                       {filteredRetailers.map(r => (
                         <option key={r.id} value={r.id}>
-                          {r.shop_name} ({r.retailer_code || 'CODE'}) &bull; {r.city || 'Indore'} &bull; Dues: ₹{(r.outstanding || 0).toLocaleString('en-IN')}
+                          {r.shop_name} ({r.retailer_code || 'CODE'}) &bull; {r.city || ''} &bull; Dues: ₹{(r.outstanding || 0).toLocaleString('en-IN')}
                         </option>
                       ))}
                     </select>

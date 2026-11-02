@@ -139,6 +139,22 @@ export function saveSnapshotToServer(payload: any, isNightly = false): ServerSna
   const fileName = `${prefix}_${year}-${month}-${day}_${hours}${minutes}.json`;
   const fullPath = path.join(dir, fileName);
 
+  // Defense-in-depth: Ensure credentials never touch snapshot files on disk
+  if (payload && typeof payload === 'object' && payload.tables) {
+    if (payload.tables.profiles && Array.isArray(payload.tables.profiles)) {
+      payload.tables.profiles = payload.tables.profiles.map((p: any) => {
+        const { password, password_hash, ...rest } = p;
+        return rest;
+      });
+    }
+    if (payload.tables.retailers && Array.isArray(payload.tables.retailers)) {
+      payload.tables.retailers = payload.tables.retailers.map((r: any) => {
+        const { password, password_hash, ...rest } = r;
+        return rest;
+      });
+    }
+  }
+
   const jsonContent = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
   fs.writeFileSync(fullPath, jsonContent, 'utf-8');
 

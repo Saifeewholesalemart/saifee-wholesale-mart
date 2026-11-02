@@ -325,7 +325,7 @@ export default function ReportFilterBar({
                 >
                   <option value="">All Retailers</option>
                   {dbState.retailers.map(r => (
-                    <option key={r.id} value={r.id}>{r.shop_name} ({r.city || 'Indore'})</option>
+                    <option key={r.id} value={r.id}>{r.shop_name} {r.city ? `(${r.city})` : ''}</option>
                   ))}
                 </select>
               </div>
@@ -633,7 +633,7 @@ export default function ReportFilterBar({
                   >
                     <option value="">All Retailers</option>
                     {dbState.retailers.map(r => (
-                      <option key={r.id} value={r.id}>{r.shop_name} ({r.city || 'Indore'})</option>
+                      <option key={r.id} value={r.id}>{r.shop_name} {r.city ? `(${r.city})` : ''}</option>
                     ))}
                   </select>
                 </div>

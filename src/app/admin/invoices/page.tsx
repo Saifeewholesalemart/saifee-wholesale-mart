@@ -1,5 +1,7 @@
 'use client';
 
+import { getSellerDetails } from '@/lib/db';
+import { isIntraStateSupply, formatPlaceOfSupply } from '@/lib/db';
 import React, { useState, useMemo, useEffect, Suspense } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useSearchParams } from 'next/navigation';
@@ -183,7 +185,7 @@ function AdminInvoicesContent() {
   const rawSelectedInvoiceItems = useMemo(() => {
     if (!selectedInvoice) return [];
     const ret = retailers.find(r => r.id === selectedInvoice.retailer_id);
-    const isLocal = (ret?.state_code || '27') === '27';
+    const isLocal = isIntraStateSupply(ret?.state_code);
     const aggregatedItemsMap = new Map<string, any>();
 
     const linkedOrderIds = new Set<string>();
@@ -337,7 +339,7 @@ function AdminInvoicesContent() {
   const computedInvoiceTotals = useMemo(() => {
     if (!selectedInvoice) return null;
     const ret = retailers.find(r => r.id === selectedInvoice.retailer_id);
-    const isLocal = (ret?.state_code || '27') === '27';
+    const isLocal = isIntraStateSupply(ret?.state_code);
 
     let totalTaxable = 0;
     let totalCgst = 0;
@@ -1019,12 +1021,10 @@ function AdminInvoicesContent() {
 
               {/* Top Compact Header: Firm & Invoice Metadata */}
               {(() => {
-                const firmName = activeCompany?.name?.toUpperCase() || 'SAIFEE GENERAL STORES';
+                const seller = getSellerDetails(activeCompany);
+                const firmName = seller.name.toUpperCase();
                 const firmFirstLetter = firmName.charAt(0) || 'S';
-                const firmAddress = activeCompany?.address 
-                  ? `${activeCompany.address}${activeCompany.city ? `, ${activeCompany.city}` : ''}` 
-                  : 'FMCG Warehouse Distributors, Sector 15, Kalamboli Logistics Zone, Navi Mumbai, MH';
-                const firmGstin = activeCompany?.gstin || '27SAIFE1234A1Z5';
+                const firmAddress = seller.address;
                 const isPaid = selectedInvoice.outstanding_amount <= 0;
                 const isPartiallyPaid = selectedInvoice.paid_amount > 0 && selectedInvoice.outstanding_amount > 0;
                 const orderInfos = getInvoiceOrderInfo(selectedInvoice);
@@ -1043,7 +1043,7 @@ function AdminInvoicesContent() {
                       <p className="text-[11px] text-slate-600 mt-0.5 leading-snug max-w-sm">
                         {firmAddress}
                       </p>
-                      <p className="text-[11px] text-slate-900 font-bold">GSTIN: {firmGstin} <span className="text-slate-500 font-normal">| State: 27 (MH)</span></p>
+                      <p className="text-[11px] text-slate-900 font-bold">{seller.gstinLabel} <span className="text-slate-500 font-normal">| State: {seller.stateLabel}</span></p>
                     </div>
                     
                     <div className="text-right flex flex-col items-end gap-1">
@@ -1068,7 +1068,7 @@ function AdminInvoicesContent() {
                       <div className="text-[11px] text-slate-700 text-right space-y-0.5">
                         <p><span className="text-slate-500">Invoice No:</span> <strong className="text-slate-900 font-bold font-mono">{selectedInvoice.invoice_number}</strong></p>
                         <p><span className="text-slate-500">Date:</span> <strong className="text-slate-900 font-bold">{formatDate(selectedInvoice.date)}</strong></p>
-                        <p><span className="text-slate-500">Place of Supply:</span> <strong className="text-slate-900 font-semibold">{selectedInvoice.place_of_supply || 'Maharashtra (27)'}</strong></p>
+                        <p><span className="text-slate-500">Place of Supply:</span> <strong className="text-slate-900 font-semibold">{selectedInvoice.place_of_supply || formatPlaceOfSupply()}</strong></p>
                         {orderInfos.length > 0 && (
                           <p><span className="text-slate-500">{orderInfos.length > 1 ? 'Orders:' : 'Order Ref:'}</span> <strong className="text-indigo-900 font-bold font-mono">{orderInfos.map(o => o.orderNumber).join(', ')}</strong></p>
                         )}

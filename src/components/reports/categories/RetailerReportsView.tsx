@@ -226,7 +226,7 @@ export default function RetailerReportsView({
                 <div>
                   <h3 className="text-sm font-bold">{selectedRetailer?.shop_name}</h3>
                   <p className="text-xs text-slate-400">
-                    Code: {selectedRetailer?.retailer_code} &bull; Owner: {selectedRetailer?.owner_name} &bull; City: {selectedRetailer?.city || 'Indore'}
+                    Code: {selectedRetailer?.retailer_code} &bull; Owner: {selectedRetailer?.owner_name} &bull; City: {selectedRetailer?.city || '-'}
                   </p>
                 </div>
               </div>
@@ -239,7 +239,7 @@ export default function RetailerReportsView({
                   className="bg-slate-800 text-white border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-semibold outline-none"
                 >
                   {dbState.retailers.map(r => (
-                    <option key={r.id} value={r.id}>{r.shop_name} ({r.city || 'Indore'})</option>
+                    <option key={r.id} value={r.id}>{r.shop_name} {r.city ? `(${r.city})` : ''}</option>
                   ))}
                 </select>
               </div>

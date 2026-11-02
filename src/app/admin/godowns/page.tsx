@@ -31,7 +31,7 @@ export default function GodownsPage() {
   const [code, setCode] = useState('');
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
-  const [state, setState] = useState('Maharashtra');
+  const [state, setState] = useState('Madhya Pradesh');
   const [pincode, setPincode] = useState('');
   const [managerName, setManagerName] = useState('');
   const [phone, setPhone] = useState('');
@@ -75,7 +75,7 @@ export default function GodownsPage() {
     const nextNum = godowns.length + 1;
     setCode(`GD${String(nextNum).padStart(2, '0')}`);
     setAddress('');
-    setCity('Indore');
+    setCity('Khachrod');
     setState('Madhya Pradesh');
     setPincode('');
     setManagerName('');
@@ -276,7 +276,7 @@ export default function GodownsPage() {
               {/* Card Header */}
               <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
-                  <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-black text-sm shadow-xs ${
+                  <div className={`min-w-11 h-11 px-1.5 shrink-0 rounded-xl flex items-center justify-center text-center font-black shadow-xs ${g.code.length > 5 ? 'text-[9px] leading-tight' : 'text-sm'} ${
                     isPrimary 
                       ? 'bg-indigo-600 text-white shadow-indigo-200' 
                       : 'bg-slate-100 text-slate-700'
@@ -475,7 +475,7 @@ export default function GodownsPage() {
                   <label className="text-xs font-bold text-slate-700">City</label>
                   <input
                     type="text"
-                    placeholder="Indore"
+                    placeholder="Khachrod"
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"

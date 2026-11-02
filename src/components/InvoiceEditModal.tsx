@@ -1,5 +1,6 @@
 'use client';
 
+import { isIntraStateSupply, formatPlaceOfSupply } from '@/lib/db';
 import React, { useState, useEffect, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -67,7 +68,7 @@ export default function InvoiceEditModal({
   useEffect(() => {
     if (invoice && isOpen) {
       setDate(invoice.date ? invoice.date.slice(0, 10) : new Date().toISOString().slice(0, 10));
-      setPlaceOfSupply(invoice.place_of_supply || (retailer?.state_code === '27' ? 'Maharashtra (27)' : 'Out of State'));
+      setPlaceOfSupply(invoice.place_of_supply || formatPlaceOfSupply(retailer?.state_code));
       setPaidAmount(invoice.paid_amount || 0);
       setReason('');
       setErrorMsg('');
@@ -131,7 +132,7 @@ export default function InvoiceEditModal({
     let sgstTotal = 0;
     let igstTotal = 0;
 
-    const isLocal = (retailer?.state_code || '27') === '27';
+    const isLocal = isIntraStateSupply(retailer?.state_code);
 
     const calculatedItems = lineItems.map(item => {
       const amounts = calculateItemAmounts(
@@ -441,7 +442,7 @@ export default function InvoiceEditModal({
                 type="text"
                 value={placeOfSupply}
                 onChange={(e) => setPlaceOfSupply(e.target.value)}
-                placeholder="e.g. Maharashtra (27)"
+                placeholder="e.g. Madhya Pradesh (23)"
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 font-semibold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/30 text-xs"
               />
             </div>

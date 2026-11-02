@@ -122,7 +122,7 @@ export const TARGET_PRODUCT_FIELDS: TargetFieldDef[] = [
     type: 'number',
     description: 'Maximum printed retail price per trading unit or package',
     sample: '1280.00',
-    autoDetectKeywords: ['mrp', 'max retail price', 'm.r.p.', 'retail price', 'printed mrp', 'mrp (₹)']
+    autoDetectKeywords: ['mrp', 'default mrp', 'max retail price', 'm.r.p.', 'retail price', 'printed mrp', 'mrp (₹)']
   },
   {
     key: 'purchase_price',
@@ -213,6 +213,78 @@ export const TARGET_PRODUCT_FIELDS: TargetFieldDef[] = [
     description: 'Direct HTTPS URL link to product packaging photograph',
     sample: 'https://images.unsplash.com/photo-1586201375761-83865001e31c',
     autoDetectKeywords: ['image', 'image url', 'product image', 'photo', 'picture', 'img url']
+  },
+  {
+    key: 'dealer_price',
+    label: 'Dealer Rate / Sub-distributor Price',
+    required: false,
+    type: 'number',
+    description: 'Special wholesale rate for dealers or bulk buyers',
+    sample: '1100.00',
+    autoDetectKeywords: ['dealer price', 'dealer rate', 'sub distributor rate', 'bulk price', 'special rate']
+  },
+  {
+    key: 'trade_mode',
+    label: 'Trade Mode (Carton/Pieces)',
+    required: false,
+    type: 'string',
+    description: 'Allow sale mode: BOTH, PIECES, or CARTONS',
+    sample: 'BOTH',
+    autoDetectKeywords: ['trade mode', 'sale mode', 'order mode', 'allowed mode']
+  },
+  {
+    key: 'min_stock_level',
+    label: 'Minimum Stock Level',
+    required: false,
+    type: 'number',
+    description: 'Minimum stock threshold for reorder alerts',
+    sample: '10',
+    autoDetectKeywords: ['min stock', 'minimum stock', 'safety stock', 'min level', 'min_stock']
+  },
+  {
+    key: 'reorder_level',
+    label: 'Reorder Level',
+    required: false,
+    type: 'number',
+    description: 'Reorder trigger quantity in warehouse',
+    sample: '20',
+    autoDetectKeywords: ['reorder level', 'reorder qty', 'reorder point', 'reorder_level']
+  },
+  {
+    key: 'mfg_date',
+    label: 'Manufacturing Date',
+    required: false,
+    type: 'date',
+    description: 'Manufacturing date of the opening stock (YYYY-MM-DD or DD/MM/YYYY)',
+    sample: '2026-01-15',
+    autoDetectKeywords: ['mfg date', 'manufacturing date', 'mfg', 'mfg_date', 'prod date']
+  },
+  {
+    key: 'parent_sku',
+    label: 'Parent Product SKU / Code',
+    required: false,
+    type: 'string',
+    description: 'SKU of the parent master product for item variants',
+    sample: 'SKU-AASH-MASTER',
+    autoDetectKeywords: ['parent sku', 'parent code', 'parent item', 'parent product', 'master sku']
+  },
+  {
+    key: 'variant_attribute',
+    label: 'Variant Attribute Type',
+    required: false,
+    type: 'string',
+    description: 'Type of variant distinction (e.g. Size, Flavor, Pack, Shade)',
+    sample: 'Weight',
+    autoDetectKeywords: ['variant attribute', 'attribute', 'variant type', 'option name']
+  },
+  {
+    key: 'variant_value',
+    label: 'Variant Value',
+    required: false,
+    type: 'string',
+    description: 'Specific variant value (e.g. 500g, 1kg, 5kg, Chocolate, Blue)',
+    sample: '5kg',
+    autoDetectKeywords: ['variant value', 'option value', 'variant', 'flavor', 'flavour', 'shade']
   }
 ];
 
@@ -228,29 +300,41 @@ export interface ProcessedImportRow {
     company_name?: string;
     brand?: string;
     category?: string;
+    subcategory?: string;
     sku?: string;
     barcode?: string;
     pack_size?: string;
     trading_unit?: string;
     base_unit?: BaseUnit;
+    trade_mode?: 'PIECES' | 'CARTONS' | 'BOTH';
     units_per_box_carton?: number;
     mrp: number;
+    loose_mrp?: number;
     purchase_price: number;
+    loose_purchase_price?: number;
     selling_price: number;
+    loose_selling_price?: number;
+    dealer_price?: number;
     gst_percent?: number;
     hsn?: string;
+    min_stock_level?: number;
+    reorder_level?: number;
     description?: string;
     stock_qty?: number;
     stock_qty_is_base?: boolean;
     batch_number?: string;
+    mfg_date?: string;
     expiry_date?: string;
+    parent_sku?: string;
+    variant_attribute?: string;
+    variant_value?: string;
     supplier_name?: string;
     image_url?: string;
   };
   isValid: boolean;
   errors: string[];
   warnings: string[];
-  matchType: 'NEW' | 'EXACT_MATCH' | 'FUZZY_MATCH' | 'INVALID';
+  matchType: 'NEW' | 'EXACT_MATCH' | 'FUZZY_MATCH' | 'DUPLICATE_IN_FILE' | 'INVALID';
   matchedProduct?: Product;
   matchCriteria?: string;
   matchDifferences?: string[];
@@ -356,7 +440,27 @@ export function autoDetectVyaparColumnMapping(rawHeaders: string[]): Record<stri
   const mapping: Record<string, string> = {};
   const usedHeaders = new Set<string>();
 
+  // Pass 1: Prioritize exact matches across all fields
   TARGET_PRODUCT_FIELDS.forEach(targetField => {
+    for (const header of rawHeaders) {
+      if (usedHeaders.has(header)) continue;
+      const cleanHeader = header.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
+      const hasExactMatch = targetField.autoDetectKeywords.some(keyword => {
+        const cleanKeyword = keyword.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
+        return cleanHeader === cleanKeyword;
+      });
+      if (hasExactMatch) {
+        mapping[targetField.key] = header;
+        usedHeaders.add(header);
+        break;
+      }
+    }
+  });
+
+  // Pass 2: Substring / partial matching for unassigned fields
+  TARGET_PRODUCT_FIELDS.forEach(targetField => {
+    if (mapping[targetField.key]) return; // Already matched in Pass 1
+
     let bestMatchHeader = '';
     let highestScore = 0;
 
@@ -367,15 +471,8 @@ export function autoDetectVyaparColumnMapping(rawHeaders: string[]): Record<stri
       targetField.autoDetectKeywords.forEach(keyword => {
         const cleanKeyword = keyword.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
         
-        // Exact match
-        if (cleanHeader === cleanKeyword) {
-          if (highestScore < 100) {
-            highestScore = 100;
-            bestMatchHeader = header;
-          }
-        }
         // Header contains keyword
-        else if (cleanHeader.includes(cleanKeyword) && cleanKeyword.length > 3) {
+        if (cleanHeader.includes(cleanKeyword) && cleanKeyword.length > 3) {
           const score = 80 + (cleanKeyword.length / cleanHeader.length) * 10;
           if (score > highestScore) {
             highestScore = score;
@@ -427,13 +524,12 @@ export function calculateProductSimilarity(nameA: string, nameB: string): number
   const union = new Set([...tokensA, ...tokensB]);
   const jaccardScore = union.size > 0 ? intersection.size / union.size : 0;
 
-  // Substring containment boost
-  let containmentBonus = 0;
+  // Substring containment boost (e.g. base brand name contained inside extended variant title)
   if (normA.includes(normB) || normB.includes(normA)) {
-    containmentBonus = 0.25;
+    return Math.min(1.0, Math.max(jaccardScore, 0.80));
   }
 
-  return Math.min(1.0, jaccardScore * 0.75 + containmentBonus);
+  return jaccardScore;
 }
 
 // ----------------------------------------------------
@@ -451,16 +547,38 @@ export function validateAndMatchVyaparRows(
 ): ProcessedImportRow[] {
   const processedRows: ProcessedImportRow[] = [];
 
-  // Lookup indexes for fast matching
+  // 1. Fast Lookup Indexes for Existing Catalog
   const skuMap = new Map<string, Product>();
   const barcodeMap = new Map<string, Product>();
   const exactNameMap = new Map<string, Product>();
+
+  // Inverted token index for sub-millisecond candidate retrieval across 6,200+ products
+  const tokenIndex = new Map<string, Product[]>();
 
   existingProducts.forEach(p => {
     if (p.sku) skuMap.set(normalizeString(p.sku), p);
     if (p.barcode) barcodeMap.set(normalizeString(p.barcode), p);
     if (p.name) exactNameMap.set(normalizeString(p.name), p);
+
+    const tokens = normalizeString(p.name).split(' ');
+    const seenInThisProd = new Set<string>();
+    tokens.forEach(tok => {
+      if (tok.length >= 3 && !seenInThisProd.has(tok)) {
+        seenInThisProd.add(tok);
+        let list = tokenIndex.get(tok);
+        if (!list) {
+          list = [];
+          tokenIndex.set(tok, list);
+        }
+        list.push(p);
+      }
+    });
   });
+
+  // Intra-file duplicate tracking maps
+  const seenFileSkus = new Map<string, number>(); // sku -> first rowNumber
+  const seenFileBarcodes = new Map<string, number>(); // barcode -> first rowNumber
+  const seenFileExactNames = new Map<string, number>(); // name -> first rowNumber
 
   rawRows.forEach((raw, idx) => {
     const rowNum = idx + 2; // 1-indexed including header row
@@ -478,21 +596,30 @@ export function validateAndMatchVyaparRows(
     const rawCompany = getVal('company_name');
     const rawBrand = getVal('brand');
     const rawCategory = getVal('category');
+    const rawSubcategory = getVal('subcategory');
     const rawSku = getVal('sku');
     const rawBarcode = getVal('barcode');
     const rawPackSize = getVal('pack_size');
     const rawTradingUnit = getVal('trading_unit') || 'Carton';
     const rawBaseUnit = (getVal('base_unit') || 'Packet') as BaseUnit;
+    const rawTradeMode = (getVal('trade_mode') || ((getVal('units_per_box_carton') || getVal('trading_unit')) ? 'BOTH' : 'PIECES')) as 'PIECES' | 'CARTONS' | 'BOTH'; // no carton info in file => sold per piece
     const rawUnitsPerPackStr = getVal('units_per_box_carton');
     const rawMrpStr = getVal('mrp');
     const rawPurchaseStr = getVal('purchase_price');
     const rawSellingStr = getVal('selling_price');
+    const rawDealerStr = getVal('dealer_price');
     const rawGstStr = getVal('gst_percent');
     const rawHsn = getVal('hsn');
+    const rawMinStockStr = getVal('min_stock_level');
+    const rawReorderStr = getVal('reorder_level');
     const rawDesc = getVal('description');
     const rawStockStr = getVal('stock_qty');
     const rawBatch = getVal('batch_number');
+    const rawMfg = getVal('mfg_date');
     const rawExpiry = getVal('expiry_date');
+    const rawParentSku = getVal('parent_sku');
+    const rawVariantAttr = getVal('variant_attribute');
+    const rawVariantVal = getVal('variant_value');
     const rawSupplier = getVal('supplier_name');
     const rawImageUrl = getVal('image_url');
 
@@ -516,6 +643,10 @@ export function validateAndMatchVyaparRows(
       errors.push(`Invalid or missing Selling Price: "${rawSellingStr}"`);
     }
 
+    const dealerPrice = rawDealerStr ? parseFloat(rawDealerStr.replace(/[^0-9.]/g, '')) : undefined;
+    const minStockLevel = rawMinStockStr ? parseInt(rawMinStockStr.replace(/[^0-9]/g, ''), 10) : 5;
+    const reorderLevel = rawReorderStr ? parseInt(rawReorderStr.replace(/[^0-9]/g, ''), 10) : 10;
+
     // Units per box/carton
     let unitsPerPack = parseInt(rawUnitsPerPackStr.replace(/[^0-9]/g, ''), 10);
     if (isNaN(unitsPerPack) || unitsPerPack <= 0) {
@@ -527,11 +658,10 @@ export function validateAndMatchVyaparRows(
     // GST %
     let gstPercent = parseFloat(rawGstStr.replace(/[^0-9.]/g, ''));
     if (isNaN(gstPercent)) {
-      gstPercent = 18; // default standard FMCG GST
+      gstPercent = 0; // GST not known at import; entered later at purchase time
     } else {
       const standardRates = [0, 5, 12, 18, 28];
       if (!standardRates.includes(gstPercent)) {
-        // Map to nearest standard rate
         const closest = standardRates.reduce((prev, curr) => 
           Math.abs(curr - gstPercent) < Math.abs(prev - gstPercent) ? curr : prev
         );
@@ -541,13 +671,12 @@ export function validateAndMatchVyaparRows(
     }
 
     // Stock Quantity
-    const stockQty = parseFloat(rawStockStr.replace(/[^0-9.]/g, ''));
+    const stockQty = parseFloat(rawStockStr.replace(/[^0-9.-]/g, '')); // keep minus sign so negative stock becomes 0, not positive
     const safeStockQty = !isNaN(stockQty) && stockQty > 0 ? stockQty : 0;
 
-    // Normalised Expiry Date
+    // Normalized Expiry & Mfg Dates
     let cleanExpiry = rawExpiry;
     if (cleanExpiry) {
-      // Check if format is DD/MM/YYYY or DD-MM-YYYY
       const dmyMatch = cleanExpiry.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
       if (dmyMatch) {
         cleanExpiry = `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
@@ -559,6 +688,14 @@ export function validateAndMatchVyaparRows(
       }
     }
 
+    let cleanMfg = rawMfg;
+    if (cleanMfg) {
+      const dmyMatch = cleanMfg.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+      if (dmyMatch) {
+        cleanMfg = `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
+      }
+    }
+
     // Commercial logic checks
     if (!isNaN(mrp) && !isNaN(sellingPrice) && sellingPrice > mrp) {
       warnings.push(`Selling Price (₹${sellingPrice}) is higher than MRP (₹${mrp}).`);
@@ -567,20 +704,52 @@ export function validateAndMatchVyaparRows(
       warnings.push(`Purchase Price (₹${purchasePrice}) exceeds Selling Price (₹${sellingPrice}). Negative margin!`);
     }
 
+    // 2. Intra-File Duplicate Detection
+    let isDuplicateInFile = false;
+    const normSku = normalizeString(rawSku);
+    const normBarcode = normalizeString(rawBarcode);
+    const normName = normalizeString(rawName);
+
+    if (normSku) {
+      if (seenFileSkus.has(normSku)) {
+        warnings.push(`Duplicate SKU "${rawSku}" already appeared in Row ${seenFileSkus.get(normSku)} of this file.`);
+        isDuplicateInFile = true;
+      } else {
+        seenFileSkus.set(normSku, rowNum);
+      }
+    }
+
+    if (normBarcode) {
+      if (seenFileBarcodes.has(normBarcode)) {
+        warnings.push(`Duplicate Barcode "${rawBarcode}" already appeared in Row ${seenFileBarcodes.get(normBarcode)} of this file.`);
+        isDuplicateInFile = true;
+      } else {
+        seenFileBarcodes.set(normBarcode, rowNum);
+      }
+    }
+
+    if (normName && !normSku && !normBarcode) {
+      if (seenFileExactNames.has(normName)) {
+        warnings.push(`Identical Product Name "${rawName}" already appeared in Row ${seenFileExactNames.get(normName)} of this file.`);
+        isDuplicateInFile = true;
+      } else {
+        seenFileExactNames.set(normName, rowNum);
+      }
+    }
+
     const isValid = errors.length === 0;
 
-    // 2. Product Matching Logic
+    // 3. Product Matching Logic
     let matchedProduct: Product | undefined;
-    let matchType: 'NEW' | 'EXACT_MATCH' | 'FUZZY_MATCH' | 'INVALID' = isValid ? 'NEW' : 'INVALID';
+    let matchType: 'NEW' | 'EXACT_MATCH' | 'FUZZY_MATCH' | 'DUPLICATE_IN_FILE' | 'INVALID' = isValid ? 'NEW' : 'INVALID';
     let matchCriteria: string | undefined;
     const matchDifferences: string[] = [];
     let similarityScore: number | undefined;
 
-    if (isValid) {
-      const normSku = normalizeString(rawSku);
-      const normBarcode = normalizeString(rawBarcode);
-      const normName = normalizeString(rawName);
-
+    if (isDuplicateInFile) {
+      matchType = 'DUPLICATE_IN_FILE';
+      matchCriteria = 'Duplicate Entry Within Uploaded File';
+    } else if (isValid) {
       // Match 1: SKU
       if (normSku && skuMap.has(normSku)) {
         matchedProduct = skuMap.get(normSku);
@@ -614,16 +783,36 @@ export function validateAndMatchVyaparRows(
         }
       }
 
-      // Match 5: Fuzzy Similarity Match (if no exact match found)
+      // Match 5: High-Performance Token-Indexed Fuzzy Match (Only if no exact match found)
       if (!matchedProduct && rawName) {
+        const FMCG_STOP_WORDS = new Set(['product', 'item', 'brand', 'pack', 'variant', 'line', 'with', 'from', 'best', 'size', 'pure', 'fresh', 'super', 'regular']);
+        const queryTokens = normalizeString(rawName)
+          .split(' ')
+          .filter(t => t.length >= 3 && !FMCG_STOP_WORDS.has(t));
+
+        // Sort posting lists by length ascending (rarest / most specific words first)
+        const tokenLists = queryTokens
+          .map(t => tokenIndex.get(t) || [])
+          .filter(list => list.length > 0)
+          .sort((a, b) => a.length - b.length);
+
+        const candidateSet = new Set<Product>();
+        for (const list of tokenLists) {
+          for (const m of list) {
+            candidateSet.add(m);
+            if (candidateSet.size >= 80) break;
+          }
+          if (candidateSet.size >= 80) break;
+        }
+
         let highestSim = 0;
         let candidate: Product | undefined;
 
-        for (const existing of existingProducts) {
-          const sim = calculateProductSimilarity(rawName, existing.name);
+        for (const cand of candidateSet) {
+          const sim = calculateProductSimilarity(rawName, cand.name);
           if (sim > highestSim) {
             highestSim = sim;
-            candidate = existing;
+            candidate = cand;
           }
         }
 
@@ -631,7 +820,7 @@ export function validateAndMatchVyaparRows(
           matchedProduct = candidate;
           matchType = 'FUZZY_MATCH';
           similarityScore = Math.round(highestSim * 100);
-          matchCriteria = `Fuzzy Name Match (${similarityScore}% similar to "${candidate.name}")`;
+          matchCriteria = `Fuzzy Name Match (${similarityScore}% similar to "${candidate.name}") - Requires Review`;
         }
       }
 
@@ -655,14 +844,18 @@ export function validateAndMatchVyaparRows(
       }
     }
 
-    // Default action assignment
+    // Default Action Assignment (Strict Safety Rules)
     let defaultAction: 'CREATE_NEW' | 'UPDATE_EXISTING' | 'SKIP' = 'CREATE_NEW';
-    if (!isValid) {
+    if (!isValid || matchType === 'DUPLICATE_IN_FILE') {
       defaultAction = 'SKIP';
     } else if (matchType === 'EXACT_MATCH') {
-      defaultAction = 'UPDATE_EXISTING';
+      // STRICT SAFETY: Never automatically update an existing product when a product code matches.
+      // Require explicit approval before overwriting existing product details. Default to SKIP.
+      defaultAction = 'SKIP';
+      matchCriteria = `${matchCriteria || 'Matching product found'} - Overwrite requires explicit approval (defaulted to SKIP)`;
     } else if (matchType === 'FUZZY_MATCH') {
-      defaultAction = 'SKIP'; // require explicit review
+      // NEVER auto-update on fuzzy match: Default to SKIP for explicit manual review
+      defaultAction = 'SKIP';
     }
 
     processedRows.push({
@@ -673,22 +866,34 @@ export function validateAndMatchVyaparRows(
         company_name: rawCompany,
         brand: rawBrand,
         category: rawCategory,
+        subcategory: rawSubcategory,
         sku: rawSku,
         barcode: rawBarcode,
         pack_size: rawPackSize || `${unitsPerPack} units/${rawTradingUnit}`,
         trading_unit: rawTradingUnit,
         base_unit: rawBaseUnit,
+        trade_mode: rawTradeMode,
         units_per_box_carton: unitsPerPack,
         mrp: isNaN(mrp) ? 0 : mrp,
+        loose_mrp: Math.round((mrp / unitsPerPack) * 100) / 100,
         purchase_price: isNaN(purchasePrice) ? 0 : purchasePrice,
+        loose_purchase_price: Math.round((purchasePrice / unitsPerPack) * 100) / 100,
         selling_price: isNaN(sellingPrice) ? 0 : sellingPrice,
+        loose_selling_price: Math.round((sellingPrice / unitsPerPack) * 100) / 100,
+        dealer_price: dealerPrice,
         gst_percent: gstPercent,
         hsn: rawHsn,
+        min_stock_level: minStockLevel,
+        reorder_level: reorderLevel,
         description: rawDesc,
         stock_qty: safeStockQty,
         stock_qty_is_base: false,
         batch_number: rawBatch,
+        mfg_date: cleanMfg,
         expiry_date: cleanExpiry,
+        parent_sku: rawParentSku,
+        variant_attribute: rawVariantAttr,
+        variant_value: rawVariantVal,
         supplier_name: rawSupplier,
         image_url: rawImageUrl
       },
@@ -703,6 +908,366 @@ export function validateAndMatchVyaparRows(
       action: defaultAction
     });
   });
+
+  return processedRows;
+}
+
+/**
+ * Asynchronously validates, normalizes, and compares uploaded rows against existing catalog.
+ * Yields periodically to the browser event loop in chunks of 200 rows, reporting progress
+ * and preventing UI freezes when processing files with 6,200+ products.
+ */
+export async function validateAndMatchVyaparRowsAsync(
+  rawRows: Record<string, any>[],
+  columnMapping: Record<string, string>,
+  existingProducts: Product[],
+  companies: Company[],
+  onProgress?: (processed: number, total: number) => void
+): Promise<ProcessedImportRow[]> {
+  const processedRows: ProcessedImportRow[] = [];
+  const total = rawRows.length;
+  const CHUNK_SIZE = 200;
+
+  // 1. Fast Lookup Indexes for Existing Catalog (built once in sub-millisecond)
+  const skuMap = new Map<string, Product>();
+  const barcodeMap = new Map<string, Product>();
+  const exactNameMap = new Map<string, Product>();
+  const tokenIndex = new Map<string, Product[]>();
+
+  existingProducts.forEach(p => {
+    if (p.sku) skuMap.set(normalizeString(p.sku), p);
+    if (p.barcode) barcodeMap.set(normalizeString(p.barcode), p);
+    if (p.name) exactNameMap.set(normalizeString(p.name), p);
+
+    const tokens = normalizeString(p.name).split(' ');
+    const seenInThisProd = new Set<string>();
+    tokens.forEach(tok => {
+      if (tok.length >= 3 && !seenInThisProd.has(tok)) {
+        seenInThisProd.add(tok);
+        let list = tokenIndex.get(tok);
+        if (!list) {
+          list = [];
+          tokenIndex.set(tok, list);
+        }
+        list.push(p);
+      }
+    });
+  });
+
+  // Intra-file duplicate tracking maps
+  const seenFileSkus = new Map<string, number>();
+  const seenFileBarcodes = new Map<string, number>();
+  const seenFileExactNames = new Map<string, number>();
+
+  for (let i = 0; i < total; i += CHUNK_SIZE) {
+    const chunk = rawRows.slice(i, i + CHUNK_SIZE);
+
+    for (let c = 0; c < chunk.length; c++) {
+      const idx = i + c;
+      const raw = chunk[c];
+      const rowNum = idx + 2;
+      const errors: string[] = [];
+      const warnings: string[] = [];
+
+      const getVal = (targetKey: string): string => {
+        const header = columnMapping[targetKey];
+        if (!header || raw[header] === undefined || raw[header] === null) return '';
+        return String(raw[header]).trim();
+      };
+
+      const rawName = getVal('name');
+      const rawCompany = getVal('company_name');
+      const rawBrand = getVal('brand');
+      const rawCategory = getVal('category');
+      const rawSubcategory = getVal('subcategory');
+      const rawSku = getVal('sku');
+      const rawBarcode = getVal('barcode');
+      const rawPackSize = getVal('pack_size');
+      const rawTradingUnit = getVal('trading_unit') || 'Carton';
+      const rawBaseUnit = (getVal('base_unit') || 'Packet') as BaseUnit;
+      const rawTradeMode = (getVal('trade_mode') || ((getVal('units_per_box_carton') || getVal('trading_unit')) ? 'BOTH' : 'PIECES')) as 'PIECES' | 'CARTONS' | 'BOTH'; // no carton info in file => sold per piece
+      const rawUnitsPerPackStr = getVal('units_per_box_carton');
+      const rawMrpStr = getVal('mrp');
+      const rawPurchaseStr = getVal('purchase_price');
+      const rawSellingStr = getVal('selling_price');
+      const rawDealerStr = getVal('dealer_price');
+      const rawGstStr = getVal('gst_percent');
+      const rawHsn = getVal('hsn');
+      const rawMinStockStr = getVal('min_stock_level');
+      const rawReorderStr = getVal('reorder_level');
+      const rawDesc = getVal('description');
+      const rawStockStr = getVal('stock_qty');
+      const rawBatch = getVal('batch_number');
+      const rawMfg = getVal('mfg_date');
+      const rawExpiry = getVal('expiry_date');
+      const rawParentSku = getVal('parent_sku');
+      const rawVariantAttr = getVal('variant_attribute');
+      const rawVariantVal = getVal('variant_value');
+      const rawSupplier = getVal('supplier_name');
+      const rawImageUrl = getVal('image_url');
+
+      if (!rawName) {
+        errors.push('Product Name is missing.');
+      }
+
+      const mrp = parseFloat(rawMrpStr.replace(/[^0-9.]/g, ''));
+      if (isNaN(mrp) || mrp <= 0) {
+        errors.push(`Invalid or missing MRP: "${rawMrpStr}"`);
+      }
+
+      const purchasePrice = parseFloat(rawPurchaseStr.replace(/[^0-9.]/g, ''));
+      if (isNaN(purchasePrice) || purchasePrice < 0) {
+        errors.push(`Invalid or missing Purchase Price: "${rawPurchaseStr}"`);
+      }
+
+      const sellingPrice = parseFloat(rawSellingStr.replace(/[^0-9.]/g, ''));
+      if (isNaN(sellingPrice) || sellingPrice <= 0) {
+        errors.push(`Invalid or missing Selling Price: "${rawSellingStr}"`);
+      }
+
+      const dealerPrice = rawDealerStr ? parseFloat(rawDealerStr.replace(/[^0-9.]/g, '')) : undefined;
+      const minStockLevel = rawMinStockStr ? parseInt(rawMinStockStr.replace(/[^0-9]/g, ''), 10) : 5;
+      const reorderLevel = rawReorderStr ? parseInt(rawReorderStr.replace(/[^0-9]/g, ''), 10) : 10;
+
+      let unitsPerPack = parseInt(rawUnitsPerPackStr.replace(/[^0-9]/g, ''), 10);
+      if (isNaN(unitsPerPack) || unitsPerPack <= 0) {
+        const matchNumber = rawPackSize.match(/\d+/);
+        unitsPerPack = matchNumber ? parseInt(matchNumber[0], 10) : 1;
+      }
+      if (unitsPerPack <= 0) unitsPerPack = 1;
+
+      let gstPercent = parseFloat(rawGstStr.replace(/[^0-9.]/g, ''));
+      if (isNaN(gstPercent)) {
+        gstPercent = 0; // GST not known at import; entered later at purchase time
+      } else {
+        const standardRates = [0, 5, 12, 18, 28];
+        if (!standardRates.includes(gstPercent)) {
+          const closest = standardRates.reduce((prev, curr) =>
+            Math.abs(curr - gstPercent) < Math.abs(prev - gstPercent) ? curr : prev
+          );
+          warnings.push(`Non-standard GST rate (${gstPercent}%). Adjusted to closest statutory slab (${closest}%).`);
+          gstPercent = closest;
+        }
+      }
+
+      const stockQty = parseFloat(rawStockStr.replace(/[^0-9.-]/g, '')); // keep minus sign so negative stock becomes 0, not positive
+      const safeStockQty = !isNaN(stockQty) && stockQty > 0 ? stockQty : 0;
+
+      let cleanExpiry = rawExpiry;
+      if (cleanExpiry) {
+        const dmyMatch = cleanExpiry.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+        if (dmyMatch) {
+          cleanExpiry = `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
+        }
+        const testDate = new Date(cleanExpiry);
+        if (isNaN(testDate.getTime())) {
+          warnings.push(`Invalid Expiry Date "${rawExpiry}". Defaulted to 2027-12-31.`);
+          cleanExpiry = '2027-12-31';
+        }
+      }
+
+      let cleanMfg = rawMfg;
+      if (cleanMfg) {
+        const dmyMatch = cleanMfg.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+        if (dmyMatch) {
+          cleanMfg = `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
+        }
+      }
+
+      if (!isNaN(mrp) && !isNaN(sellingPrice) && sellingPrice > mrp) {
+        warnings.push(`Selling Price (₹${sellingPrice}) is higher than MRP (₹${mrp}).`);
+      }
+      if (!isNaN(purchasePrice) && !isNaN(sellingPrice) && purchasePrice > sellingPrice) {
+        warnings.push(`Purchase Price (₹${purchasePrice}) exceeds Selling Price (₹${sellingPrice}). Negative margin!`);
+      }
+
+      let isDuplicateInFile = false;
+      const normSku = normalizeString(rawSku);
+      const normBarcode = normalizeString(rawBarcode);
+      const normName = normalizeString(rawName);
+
+      if (normSku) {
+        if (seenFileSkus.has(normSku)) {
+          warnings.push(`Duplicate SKU "${rawSku}" already appeared in Row ${seenFileSkus.get(normSku)} of this file.`);
+          isDuplicateInFile = true;
+        } else {
+          seenFileSkus.set(normSku, rowNum);
+        }
+      }
+
+      if (normBarcode) {
+        if (seenFileBarcodes.has(normBarcode)) {
+          warnings.push(`Duplicate Barcode "${rawBarcode}" already appeared in Row ${seenFileBarcodes.get(normBarcode)} of this file.`);
+          isDuplicateInFile = true;
+        } else {
+          seenFileBarcodes.set(normBarcode, rowNum);
+        }
+      }
+
+      if (normName && !normSku && !normBarcode) {
+        if (seenFileExactNames.has(normName)) {
+          warnings.push(`Identical Product Name "${rawName}" already appeared in Row ${seenFileExactNames.get(normName)} of this file.`);
+          isDuplicateInFile = true;
+        } else {
+          seenFileExactNames.set(normName, rowNum);
+        }
+      }
+
+      const isValid = errors.length === 0;
+
+      let matchedProduct: Product | undefined;
+      let matchType: 'NEW' | 'EXACT_MATCH' | 'FUZZY_MATCH' | 'DUPLICATE_IN_FILE' | 'INVALID' = isValid ? 'NEW' : 'INVALID';
+      let matchCriteria: string | undefined;
+      const matchDifferences: string[] = [];
+      let similarityScore: number | undefined;
+
+      if (isDuplicateInFile) {
+        matchType = 'DUPLICATE_IN_FILE';
+        matchCriteria = 'Duplicate Entry Within Uploaded File';
+      } else if (isValid) {
+        if (normSku && skuMap.has(normSku)) {
+          matchedProduct = skuMap.get(normSku);
+          matchType = 'EXACT_MATCH';
+          matchCriteria = `Exact SKU Match (${matchedProduct?.sku})`;
+        } else if (normBarcode && barcodeMap.has(normBarcode)) {
+          matchedProduct = barcodeMap.get(normBarcode);
+          matchType = 'EXACT_MATCH';
+          matchCriteria = `Exact Barcode Match (${matchedProduct?.barcode})`;
+        } else if (normName && exactNameMap.has(normName)) {
+          matchedProduct = exactNameMap.get(normName);
+          matchType = 'EXACT_MATCH';
+          matchCriteria = `Exact Name Match ("${matchedProduct?.name}")`;
+        } else if (!matchedProduct && rawName) {
+          const FMCG_STOP_WORDS = new Set([
+            'product', 'item', 'brand', 'pack', 'variant', 'line', 'with', 'from',
+            'best', 'size', 'pure', 'fresh', 'super', 'regular', 'premium', 'deluxe'
+          ]);
+
+          const queryTokens = normalizeString(rawName)
+            .split(' ')
+            .filter(t => t.length >= 3 && !FMCG_STOP_WORDS.has(t));
+
+          const tokenLists = queryTokens
+            .map(t => tokenIndex.get(t) || [])
+            .filter(list => list.length > 0)
+            .sort((a, b) => a.length - b.length);
+
+          const candidateSet = new Set<Product>();
+          for (const list of tokenLists) {
+            for (const m of list) {
+              candidateSet.add(m);
+              if (candidateSet.size >= 80) break;
+            }
+            if (candidateSet.size >= 80) break;
+          }
+
+          let highestSim = 0;
+          let candidate: Product | undefined;
+
+          for (const cand of candidateSet) {
+            const sim = calculateProductSimilarity(rawName, cand.name);
+            if (sim > highestSim) {
+              highestSim = sim;
+              candidate = cand;
+            }
+          }
+
+          if (candidate && highestSim >= 0.70) {
+            matchedProduct = candidate;
+            matchType = 'FUZZY_MATCH';
+            similarityScore = Math.round(highestSim * 100);
+            matchCriteria = `Fuzzy Name Match (${similarityScore}% similar to "${candidate.name}") - Requires Review`;
+          }
+        }
+
+        if (matchedProduct) {
+          if (matchedProduct.mrp !== mrp) {
+            matchDifferences.push(`MRP: ₹${matchedProduct.mrp} (Existing) vs ₹${mrp} (Uploaded)`);
+          }
+          if (matchedProduct.selling_price !== sellingPrice) {
+            matchDifferences.push(`Selling Price: ₹${matchedProduct.selling_price} (Existing) vs ₹${sellingPrice} (Uploaded)`);
+          }
+          if (matchedProduct.purchase_price !== purchasePrice) {
+            matchDifferences.push(`Purchase Price: ₹${matchedProduct.purchase_price} (Existing) vs ₹${purchasePrice} (Uploaded)`);
+          }
+          if (matchedProduct.gst_percent !== gstPercent) {
+            matchDifferences.push(`GST: ${matchedProduct.gst_percent}% (Existing) vs ${gstPercent}% (Uploaded)`);
+          }
+          if (matchedProduct.pack_size !== rawPackSize && rawPackSize) {
+            matchDifferences.push(`Packing: "${matchedProduct.pack_size}" (Existing) vs "${rawPackSize}" (Uploaded)`);
+          }
+        }
+      }
+
+      let defaultAction: 'CREATE_NEW' | 'UPDATE_EXISTING' | 'SKIP' = 'CREATE_NEW';
+      if (!isValid || matchType === 'DUPLICATE_IN_FILE') {
+        defaultAction = 'SKIP';
+      } else if (matchType === 'EXACT_MATCH') {
+        // STRICT SAFETY: Never automatically update an existing product when a product code matches.
+        // Require explicit approval before overwriting existing product details. Default to SKIP.
+        defaultAction = 'SKIP';
+        matchCriteria = `${matchCriteria || 'Matching product found'} - Overwrite requires explicit approval (defaulted to SKIP)`;
+      } else if (matchType === 'FUZZY_MATCH') {
+        defaultAction = 'SKIP'; // STRICT SAFETY: Never auto-overwrite on fuzzy match!
+      }
+
+      processedRows.push({
+        rowNumber: rowNum,
+        rawValues: raw,
+        normalizedData: {
+          name: rawName,
+          company_name: rawCompany,
+          brand: rawBrand,
+          category: rawCategory,
+          subcategory: rawSubcategory,
+          sku: rawSku,
+          barcode: rawBarcode,
+          pack_size: rawPackSize || `${unitsPerPack} units/${rawTradingUnit}`,
+          trading_unit: rawTradingUnit,
+          base_unit: rawBaseUnit,
+          trade_mode: rawTradeMode,
+          units_per_box_carton: unitsPerPack,
+          mrp: isNaN(mrp) ? 0 : mrp,
+          loose_mrp: Math.round((mrp / unitsPerPack) * 100) / 100,
+          purchase_price: isNaN(purchasePrice) ? 0 : purchasePrice,
+          loose_purchase_price: Math.round((purchasePrice / unitsPerPack) * 100) / 100,
+          selling_price: isNaN(sellingPrice) ? 0 : sellingPrice,
+          loose_selling_price: Math.round((sellingPrice / unitsPerPack) * 100) / 100,
+          dealer_price: dealerPrice,
+          gst_percent: gstPercent,
+          hsn: rawHsn,
+          min_stock_level: minStockLevel,
+          reorder_level: reorderLevel,
+          description: rawDesc,
+          stock_qty: safeStockQty,
+          stock_qty_is_base: false,
+          batch_number: rawBatch,
+          mfg_date: cleanMfg,
+          expiry_date: cleanExpiry,
+          parent_sku: rawParentSku,
+          variant_attribute: rawVariantAttr,
+          variant_value: rawVariantVal,
+          supplier_name: rawSupplier,
+          image_url: rawImageUrl
+        },
+        isValid,
+        errors,
+        warnings,
+        matchType,
+        matchedProduct,
+        matchCriteria,
+        matchDifferences,
+        matchSimilarityScore: similarityScore,
+        action: defaultAction
+      });
+    }
+
+    if (onProgress) {
+      onProgress(Math.min(i + CHUNK_SIZE, total), total);
+    }
+    // Yield to the UI thread every chunk
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
 
   return processedRows;
 }

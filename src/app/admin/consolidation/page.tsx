@@ -24,7 +24,7 @@ function ConsolidationWorkspaceContent() {
     getOrCreateActiveFulfilment, consolidateOrders, confirmConsolidation, packConsolidation, 
     dispatchConsolidation, deliverConsolidation, cancelConsolidation, updateFulfilmentItemManualRate,
     getFifoBatchSuggestions
-  } = useDb();
+  , godowns } = useDb();
   
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -78,7 +78,7 @@ function ConsolidationWorkspaceContent() {
     deliveryPerson: 'Ramesh Sawant (Van Staff)',
     notes: 'Consolidated commercial cartons. Handle with care.',
     dispatchDate: new Date().toISOString().split('T')[0],
-    dispatchGodown: 'Main Godown - Bhiwandi Bay 1'
+    dispatchGodown: 'Main Godown'
   });
 
   const initializedKeyRef = React.useRef<string>('');
@@ -534,7 +534,7 @@ function ConsolidationWorkspaceContent() {
       const prodBatches = batches.filter(b => b.product_id === fItem.product_id && b.quantity > 0);
       const godownMap: { [godown: string]: { baseQty: number; display: string } } = {};
       prodBatches.forEach(b => {
-        const gName = b.godown || 'Main Godown - Bhiwandi Bay 1';
+        const gName = b.godown || 'Main Godown';
         if (!godownMap[gName]) {
           godownMap[gName] = { baseQty: 0, display: '' };
         }
@@ -1349,9 +1349,9 @@ function ConsolidationWorkspaceContent() {
                       className="border border-slate-300 rounded-lg px-2 py-1 bg-white text-xs font-semibold text-slate-700 outline-none"
                     >
                       <option value="all">All Warehouse Godowns</option>
-                      <option value="Main Godown - Bhiwandi Bay 1">Main Godown - Bhiwandi Bay 1</option>
-                      <option value="Central Godown - Indore Hub">Central Godown - Indore Hub</option>
-                      <option value="City Godown - South Bay 2">City Godown - South Bay 2</option>
+                      {(godowns || []).map((g: any) => (
+                        <option key={g.id} value={g.name}>{g.name}</option>
+                      ))}
                     </select>
                   </div>
                   <span className="text-xs text-slate-500 font-medium">FIFO automatically prioritizes older stock entry &amp; cost layers</span>
@@ -1579,9 +1579,9 @@ function ConsolidationWorkspaceContent() {
                       onChange={(e) => setDispatchInfo({ ...dispatchInfo, dispatchGodown: e.target.value })}
                       className="w-full border border-slate-300 rounded-lg p-2 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 bg-white"
                     >
-                      <option value="Main Godown - Bhiwandi Bay 1">Main Godown - Bhiwandi Bay 1</option>
-                      <option value="Central Godown - Indore Hub">Central Godown - Indore Hub</option>
-                      <option value="City Godown - South Bay 2">City Godown - South Bay 2</option>
+                      {(godowns || []).map((g: any) => (
+                        <option key={g.id} value={g.name}>{g.name}</option>
+                      ))}
                     </select>
                   </div>
                   <div className="space-y-1">

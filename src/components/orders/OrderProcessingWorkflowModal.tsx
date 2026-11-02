@@ -1,5 +1,6 @@
 'use client';
 
+import { isIntraStateSupply, formatPlaceOfSupply, getHomeStateCode, describeStockShortfall, describeDispatchIssue, getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -37,11 +38,36 @@ export default function OrderProcessingWorkflowModal({
     orders, retailers, products, inventory, batches, invoices, deliveryChallans, payments, profiles,
     updateOrderStatus, confirmOrderQuantities, allocateAndPackOrder, dispatchOrder, recordOrderPayment,
     getFifoBatchSuggestions, updateOrderItemRate, fullyConfirmOrder, confirmOrder, cancelOrderItemQuantity,
-    completeOrder, currentUser, updateOrderItemQuantity, removeOrderItem
+    completeOrder, currentUser, updateOrderItemQuantity, removeOrderItem, activeCompany, godowns
   } = useDb();
 
   const order = orders.find(o => o.id === orderId);
-  const retailer = order ? retailers.find(r => r.id === order.retailer_id) : undefined;
+  // Counter / walk-in sale ka koi retailer record nahi hota (retailer_id = 'ret-walkin-counter').
+  // Pehle aise orders par Pack/Fulfil/Invoice window khulti hi nahi thi; ab walk-in customer ko
+  // order notes se naam/phone lekar dikhate hain.
+  const retailer = useMemo<Retailer | undefined>(() => {
+    if (!order) return undefined;
+    const found = retailers.find(r => r.id === order.retailer_id);
+    if (found) return found;
+    const notes = String((order as any).admin_notes || (order as any).notes || (order as any).order_notes || '');
+    const m = notes.match(/Walk-in:\s*([^(|]+?)\s*\(([^)]*)\)/);
+    const name = (m?.[1] || '').trim() || 'Counter / Walk-in Customer';
+    const phone = m?.[2] && m[2] !== 'No Phone' ? m[2].trim() : '';
+    return {
+      id: order.retailer_id || 'ret-walkin-counter',
+      retailer_code: 'WALK-IN',
+      shop_name: name,
+      owner_name: name,
+      address: '',
+      city: '',
+      state_code: getHomeStateCode(),
+      mobile: phone,
+      credit_limit: 0,
+      outstanding: 0,
+      active: true,
+      business_id: (order as any).business_id
+    } as Retailer;
+  }, [order, retailers, activeCompany]);
   const salesperson = order?.created_by ? profiles.find(p => p.id === order.created_by) : undefined;
 
   const otherOrdersForRetailer = useMemo(() => {
@@ -119,11 +145,11 @@ export default function OrderProcessingWorkflowModal({
 
   // Stage 4: Dispatch Form State
   const [transportMode, setTransportMode] = useState(order?.dispatch_transport_mode || 'Distributor Delivery Van');
-  const [vehicleNumber, setVehicleNumber] = useState(order?.dispatch_vehicle_number || 'MH-04-AZ-4592');
-  const [deliveryPerson, setDeliveryPerson] = useState(order?.dispatch_delivery_person || 'Ramesh Sawant (Van Staff)');
-  const [dispatchNotes, setDispatchNotes] = useState(order?.dispatch_notes || 'Packed in corrugated cartons. Handle with care.');
+  const [vehicleNumber, setVehicleNumber] = useState(order?.dispatch_vehicle_number || '');
+  const [deliveryPerson, setDeliveryPerson] = useState(order?.dispatch_delivery_person || '');
+  const [dispatchNotes, setDispatchNotes] = useState(order?.dispatch_notes || '');
   const [dispatchDate, setDispatchDate] = useState(order?.dispatched_at ? order.dispatched_at.split('T')[0] : new Date().toISOString().split('T')[0]);
-  const [dispatchGodown, setDispatchGodown] = useState(order?.dispatch_godown || 'Main Godown - Bhiwandi Bay 1');
+  const [dispatchGodown, setDispatchGodown] = useState(order?.dispatch_godown || '');
 
   // Stage 6: Payment Recording Form State
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
@@ -236,7 +262,7 @@ export default function OrderProcessingWorkflowModal({
         item.loose_discount || 0,
         prodGst
       );
-      const isLocal = (retailer?.state_code || '27') === '27';
+      const isLocal = isIntraStateSupply(retailer?.state_code);
       const cgst = isLocal ? amounts.gstAmount / 2 : 0;
       const sgst = isLocal ? amounts.gstAmount / 2 : 0;
       const igst = !isLocal ? amounts.gstAmount : 0;
@@ -444,14 +470,17 @@ export default function OrderProcessingWorkflowModal({
       generateChallan: true
     });
 
+    const shortMsg = describeStockShortfall();
     if (res) {
       setFeedbackMsg({ 
-        type: 'success', 
-        text: res.challan 
+        type: shortMsg ? 'info' : 'success', 
+        text: (res.challan 
           ? `Order dispatched with Delivery Challan ${res.challan.challan_number}! Tax Invoice ${res.invoice.invoice_number} generated.`
-          : `Order dispatched! Tax Invoice ${res.invoice.invoice_number} generated.`
+          : `Order dispatched! Tax Invoice ${res.invoice.invoice_number} generated.`) + (shortMsg ? ` ${shortMsg}` : '')
       });
       setActiveStage('invoice');
+    } else {
+      setFeedbackMsg({ type: 'error', text: shortMsg || describeDispatchIssue() || 'Dispatch failed. Please check the order status and stock.' });
     }
   };
 
@@ -471,12 +500,15 @@ export default function OrderProcessingWorkflowModal({
       generateChallan: false
     });
 
+    const shortMsg = describeStockShortfall();
     if (res) {
       setFeedbackMsg({ 
-        type: 'success', 
-        text: `Order dispatched directly! Tax Invoice ${res.invoice.invoice_number} generated without Delivery Challan.` 
+        type: shortMsg ? 'info' : 'success', 
+        text: `Order dispatched directly! Tax Invoice ${res.invoice.invoice_number} generated without Delivery Challan.` + (shortMsg ? ` ${shortMsg}` : '')
       });
       setActiveStage('invoice');
+    } else {
+      setFeedbackMsg({ type: 'error', text: shortMsg || describeDispatchIssue() || 'Dispatch failed. Please check the order status and stock.' });
     }
   };
 
@@ -1347,9 +1379,10 @@ export default function OrderProcessingWorkflowModal({
                     className="border border-purple-200 bg-white rounded-lg px-2.5 py-1.5 text-xs font-bold text-purple-900 outline-none w-full sm:w-auto"
                   >
                     <option value="all">All Warehouse Godowns</option>
-                    <option value="Main Godown - Bhiwandi Bay 1">Main Godown - Bhiwandi Bay 1</option>
-                    <option value="Central Godown - Indore Hub">Central Godown - Indore Hub</option>
-                    <option value="City Godown - South Bay 2">City Godown - South Bay 2</option>
+                    <option value="">Select godown</option>
+                    {(godowns || []).filter((g: any) => g.status !== 'inactive' && g.status !== 'Inactive').map((g: any) => (
+                      <option key={g.id} value={g.name}>{g.name}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -1609,9 +1642,10 @@ export default function OrderProcessingWorkflowModal({
                       onChange={(e) => setDispatchGodown(e.target.value)}
                       className="w-full border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 bg-white"
                     >
-                      <option value="Main Godown - Bhiwandi Bay 1">Main Godown - Bhiwandi Bay 1</option>
-                      <option value="Central Godown - Indore Hub">Central Godown - Indore Hub</option>
-                      <option value="City Godown - South Bay 2">City Godown - South Bay 2</option>
+                      <option value="">Select godown</option>
+                      {(godowns || []).filter((g: any) => g.status !== 'inactive' && g.status !== 'Inactive').map((g: any) => (
+                        <option key={g.id} value={g.name}>{g.name}</option>
+                      ))}
                     </select>
                   </div>
                   <div className="space-y-1">
@@ -1634,7 +1668,7 @@ export default function OrderProcessingWorkflowModal({
                       type="text"
                       value={vehicleNumber}
                       onChange={(e) => setVehicleNumber(e.target.value)}
-                      placeholder="e.g. MH-04-AZ-4592"
+                      placeholder="e.g. MP-09-AB-1234"
                       className="w-full border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500"
                     />
                   </div>
@@ -1644,7 +1678,7 @@ export default function OrderProcessingWorkflowModal({
                       type="text"
                       value={deliveryPerson}
                       onChange={(e) => setDeliveryPerson(e.target.value)}
-                      placeholder="e.g. Ramesh Sawant"
+                      placeholder="e.g. Driver name"
                       className="w-full border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500"
                     />
                   </div>
@@ -1741,7 +1775,7 @@ export default function OrderProcessingWorkflowModal({
                         {linkedInvoice?.invoice_number || `INV/2026-27/${order.order_number?.replace(/\D/g, '').slice(-5) || '00001'}`}
                       </h3>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Date: {new Date(linkedInvoice?.date || order.order_date || new Date()).toLocaleDateString('en-IN', { dateStyle: 'medium' })} &bull; Place of Supply: {linkedInvoice?.place_of_supply || (retailer.state_code === '27' ? 'Maharashtra (27)' : `Out of State (${retailer.state_code})`)}
+                        Date: {new Date(linkedInvoice?.date || order.order_date || new Date()).toLocaleDateString('en-IN', { dateStyle: 'medium' })} &bull; Place of Supply: {linkedInvoice?.place_of_supply || formatPlaceOfSupply(retailer.state_code)}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -1774,9 +1808,9 @@ export default function OrderProcessingWorkflowModal({
                     </div>
                     <div>
                       <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Distributor (Supplier)</span>
-                      <p className="font-extrabold text-slate-800 mt-1">Saifee General Stores</p>
-                      <p className="text-slate-600">Main Market Road, Indore, Madhya Pradesh</p>
-                      <p className="text-slate-500 mt-0.5">GSTIN: <span className="font-semibold text-slate-700">23AAAFS1234F1Z9</span></p>
+                      <p className="font-extrabold text-slate-800 mt-1">{getSellerDetails(activeCompany).name}</p>
+                      {getSellerDetails(activeCompany).address && <p className="text-slate-600">{getSellerDetails(activeCompany).address}</p>}
+                      <p className="text-slate-500 mt-0.5"><span className="font-semibold text-slate-700">{getSellerDetails(activeCompany).gstinLabel}</span> | {getSellerDetails(activeCompany).stateLabel}</p>
                     </div>
                   </div>
 

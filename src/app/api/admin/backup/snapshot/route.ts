@@ -1,9 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { saveSnapshotToServer, readSnapshotFromServer, deleteSnapshotFromServer } from '@/lib/serverSnapshotManager';
+import { getAuthenticatedUser, sanitizeProfiles, validateCsrfOrigin } from '@/lib/authSession';
 
 export async function POST(req: NextRequest) {
   try {
+    if (!validateCsrfOrigin(req)) {
+      return NextResponse.json({ success: false, error: 'Forbidden: Cross-site request rejected.' }, { status: 403 });
+    }
+
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+    if (auth.session.role !== 'admin' && auth.session.profileType !== 'ADMIN') {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Admin access required.' }, { status: 403 });
+    }
+
     let payload;
     try {
       const body = await req.json();
@@ -16,6 +29,16 @@ export async function POST(req: NextRequest) {
 
     if (!payload) {
       payload = db.exportFullDatabaseBackup();
+    }
+
+    // Sanitize credentials so passwords are not written to snapshot files
+    if (payload.tables) {
+      if (payload.tables.profiles) {
+        payload.tables.profiles = sanitizeProfiles(payload.tables.profiles) as any;
+      }
+      if (payload.tables.retailers) {
+        payload.tables.retailers = sanitizeProfiles(payload.tables.retailers) as any;
+      }
     }
 
     const snapshotInfo = saveSnapshotToServer(payload, false);
@@ -36,6 +59,14 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   try {
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+    if (auth.session.role !== 'admin' && auth.session.profileType !== 'ADMIN') {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Admin access required.' }, { status: 403 });
+    }
+
     const { searchParams } = new URL(req.url);
     const fileName = searchParams.get('fileName');
 
@@ -44,6 +75,16 @@ export async function GET(req: NextRequest) {
     }
 
     const snapshotData = readSnapshotFromServer(fileName);
+
+    // Sanitize credentials before returning
+    if (snapshotData && snapshotData.tables) {
+      if (snapshotData.tables.profiles) {
+        snapshotData.tables.profiles = sanitizeProfiles(snapshotData.tables.profiles) as any;
+      }
+      if (snapshotData.tables.retailers) {
+        snapshotData.tables.retailers = sanitizeProfiles(snapshotData.tables.retailers) as any;
+      }
+    }
 
     return new NextResponse(JSON.stringify(snapshotData, null, 2), {
       status: 200,
@@ -64,6 +105,18 @@ export async function GET(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    if (!validateCsrfOrigin(req)) {
+      return NextResponse.json({ success: false, error: 'Forbidden: Cross-site request rejected.' }, { status: 403 });
+    }
+
+    const auth = await getAuthenticatedUser(req);
+    if (!auth) {
+      return NextResponse.json({ success: false, error: 'Authentication required. Please log in.' }, { status: 401 });
+    }
+    if (auth.session.role !== 'admin' && auth.session.profileType !== 'ADMIN') {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Admin access required.' }, { status: 403 });
+    }
+
     const { searchParams } = new URL(req.url);
     const fileName = searchParams.get('fileName');
 

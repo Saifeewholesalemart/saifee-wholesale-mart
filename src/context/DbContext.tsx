@@ -16,17 +16,26 @@ import {
   DatabaseBackupSnapshot
 } from '@/lib/db';
 import { 
-  syncBidirectional, 
   pushCloudSnapshot, 
   fetchCloudSnapshot, 
-  queueCloudBackup, 
-  subscribeToSyncStatus, 
-  setupRealtimeSubscription, 
   isCloudSyncAvailable, 
   CloudSyncStatus 
 } from '@/lib/supabaseSyncEngine';
+import {
+  startCloudSession,
+  stopCloudSession,
+  subscribeCloudStatus,
+  getCloudStatus,
+  flushOutbox,
+  pullCloudChanges,
+  waitForCloudSave,
+  getPendingCount,
+  refreshMasterTables,
+  allowBulkDeleteFor,
+  CloudStatus
+} from '@/lib/cloudWriteThrough';
 
-export type { PendingOrderItemWarning, PendingOrderRef, CartItemToCheck, CashFlowTransaction, CompanyOpeningBalance, CustomerCreditProfile, CustomerLedgerEntry, TradeMode, AutoBoxResult, DatabaseBackupSnapshot, CloudSyncStatus };
+export type { PendingOrderItemWarning, PendingOrderRef, CartItemToCheck, CashFlowTransaction, CompanyOpeningBalance, CustomerCreditProfile, CustomerLedgerEntry, TradeMode, AutoBoxResult, DatabaseBackupSnapshot, CloudSyncStatus, CloudStatus };
 
 export interface RetailerCartItem {
   cartonQty: number;
@@ -79,7 +88,10 @@ interface DbContextType {
   cancelStockTransfer: (transferId: string) => StockTransfer;
 
   currentUser: Profile;
-  setCurrentUser: (id: string) => void;
+  setCurrentUser: (id: string, profile?: Profile) => void;
+  isAuthenticated: boolean;
+  isAuthLoading: boolean;
+  logout: () => Promise<void>;
   profiles: Profile[];
   companies: Company[];
   suppliers: Supplier[];
@@ -551,6 +563,7 @@ interface DbContextType {
       column_mapping: Record<string, string>;
       user_id?: string;
       user_name?: string;
+      import_opening_stock?: boolean;
     }
   ) => { importId: string; batch: VyaparImportBatch };
   rollbackVyaparImport: (importId: string, reason?: string, userName?: string) => { success: boolean; message: string };
@@ -587,6 +600,19 @@ interface DbContextType {
 
   // Supabase Live Cloud Database Synchronization
   cloudSyncStatus: CloudSyncStatus;
+  /** Cloud-only storage status (saving / saved / offline / setup required) */
+  cloudStatus: CloudStatus;
+  /** Waits until every change is confirmed saved in cloud. Returns false if not saved. */
+  waitForCloudSave: (timeoutMs?: number) => Promise<boolean>;
+  /** Retry connecting / loading cloud data (used by the cloud gate screen) */
+  retryCloudConnection: () => void;
+  /** Simple order flow: packer finished packing (itemId -> packed pieces) */
+  flowPackOrder: (orderId: string, packedQty: Record<string, number>) => { packedPieces: number; backorderPieces: number };
+  /** Simple order flow: biller generates the invoice for the packed quantity */
+  flowBillOrder: (
+    orderId: string,
+    options: { rates?: Record<string, number>; paymentMode: 'Cash' | 'UPI' | 'Credit'; generateChallan?: boolean }
+  ) => { invoice: Invoice; challan?: DeliveryChallan; shortfall: string };
   syncWithCloud: () => Promise<{ action: string; message: string }>;
   forcePushToCloud: () => Promise<string>;
   forcePullFromCloud: () => Promise<void>;
@@ -595,13 +621,107 @@ interface DbContextType {
 
 const DbContext = createContext<DbContextType | undefined>(undefined);
 
+/**
+ * Cloud (Supabase) se login hue user ko local store me daalta hai, taaki
+ * db.getCurrentUser() use dhundh sake. Warna app use "guest" maan leta hai
+ * aur login page par wapas bhej deta hai.
+ */
+function ensureLocalProfile(user: Profile | null | undefined): void {
+  if (!user || !user.id) return;
+  try {
+    const list = db.getProfiles();
+    const exists = list.some((p) => p.id === user.id);
+    db.saveProfiles(
+      exists
+        ? list.map((p) => (p.id === user.id ? { ...p, ...user } : p))
+        : [...list, user]
+    );
+  } catch {
+    // local store likhne me dikkat aaye to app ko na rokein
+  }
+}
+
+/**
+ * Profile ko cloud database me save karta hai (server par password hash hota hai).
+ * Save hone ke baad local store se plain password hata deta hai.
+ */
+async function persistProfileToCloud(
+  profile: Profile,
+  password?: string
+): Promise<{ ok: boolean; message?: string }> {
+  try {
+    const res = await fetch('/api/admin/profiles/upsert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        profile: { ...profile, password: undefined, password_hash: undefined },
+        password: password || undefined
+      })
+    });
+    const data = await res.json().catch(() => ({} as any));
+    if (!res.ok || !data.success) {
+      return { ok: false, message: data.error || `HTTP ${res.status}` };
+    }
+    try {
+      db.saveProfiles(
+        db.getProfiles().map((p) =>
+          p.id === profile.id ? { ...p, password: undefined, password_hash: undefined } : p
+        )
+      );
+    } catch {}
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, message: e?.message || 'Network error. Please check your internet connection.' };
+  }
+}
+
+function saveProfileToCloud(
+  profile: Profile | null | undefined,
+  options: { password?: string; rollbackOnFail?: boolean },
+  afterDone: () => void
+): void {
+  if (!profile || !profile.id) return;
+  void persistProfileToCloud(profile, options.password).then((r) => {
+    if (!r.ok) {
+      if (options.rollbackOnFail) {
+        try {
+          db.saveProfiles(db.getProfiles().filter((p) => p.id !== profile.id));
+        } catch {}
+      }
+      if (typeof window !== 'undefined') {
+        window.alert(
+          `Profile could not be saved to the cloud: ${r.message || 'unknown error'}` +
+            (options.rollbackOnFail ? '\n\nThe profile has been removed. Please try again.' : '')
+        );
+      }
+    }
+    afterDone();
+  });
+}
+
 export function DbProvider({ children }: { children: React.ReactNode }) {
   // Supabase Cloud Sync State
-  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>({
-    state: isCloudSyncAvailable() ? 'idle' : 'offline',
-    lastSyncedAt: null,
-    message: isCloudSyncAvailable() ? 'Cloud database connected' : 'Supabase not configured'
-  });
+  const [cloudStatus, setCloudStatus] = useState<CloudStatus>(() => getCloudStatus());
+  const [isLocalCacheReady, setIsLocalCacheReady] = useState<boolean>(false);
+  const [sessionBusinessId, setSessionBusinessId] = useState<string | null>(null);
+  const [cloudRestartKey, setCloudRestartKey] = useState<number>(0);
+
+  // Purane button/screens ke liye cloud status ko pehle wale format me bhi dete hain
+  const cloudSyncStatus: CloudSyncStatus = {
+    state:
+      cloudStatus.state === 'saving' || cloudStatus.state === 'connecting'
+        ? 'syncing'
+        : cloudStatus.state === 'ready'
+        ? 'synced'
+        : cloudStatus.state === 'offline'
+        ? 'offline'
+        : cloudStatus.state === 'idle'
+        ? 'idle'
+        : 'error',
+    lastSyncedAt: cloudStatus.lastSavedAt || cloudStatus.lastLoadedAt,
+    message: cloudStatus.message,
+    error: cloudStatus.error
+  } as CloudSyncStatus;
 
   // Multi-Company Tenant State
   const [activeCompanyId, setActiveCompanyId] = useState<string>(() => db.getInitialActiveBusinessCompanyId());
@@ -614,6 +734,8 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   const [stockTransfers, setStockTransfers] = useState<StockTransfer[]>(() => db.getInitialStockTransfers());
 
   const [currentUser, setCurrentUserState] = useState<Profile>(() => db.getInitialCurrentUser());
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
   const [profiles, setProfiles] = useState<Profile[]>(() => db.getInitialProfiles());
   const [companies, setCompanies] = useState<Company[]>(() => db.getInitialCompanies());
   const [suppliers, setSuppliers] = useState<Supplier[]>(() => db.getInitialSuppliers());
@@ -672,24 +794,20 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     setVyaparImports([...db.getVyaparImports(activeId)]);
     setCashFlowTransactions([...db.getCashFlowTransactions(activeId)]);
     setCompanyOpeningBalance(db.getCompanyOpeningBalance(activeId));
-    setCurrentUserState(db.getCurrentUser());
+    {
+      // Cloud se login hue user ko "guest" se overwrite na karein
+      const dbUser = db.getCurrentUser();
+      setCurrentUserState((prev) => (dbUser.id ? dbUser : prev && prev.id ? prev : dbUser));
+    }
   }, []);
 
   // Cross-tab / Cross-portal Real-time Synchronization Engine
   useEffect(() => {
-    // 0. Initialize and hydrate from high-capacity IndexedDB on startup
+    // 0. Device cache (IndexedDB) load karo taaki app jaldi khule. Asli data cloud se aata hai
+    //    (startCloudSession neeche wale effect me, login ke baad).
     db.initIndexedDB().then(() => {
       loadData();
-      // Run initial smart cloud sync only after local hydration is fully complete
-      syncBidirectional()
-        .then((res) => {
-          if (res.action === 'pulled' || res.action === 'merged' || res.action === 'synced') {
-            loadData();
-          }
-        })
-        .catch((err) => {
-          console.warn('[DbContext] Initial cloud sync notice:', err);
-        });
+      setIsLocalCacheReady(true);
     });
 
     loadData();
@@ -717,36 +835,10 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
       // ignore
     }
 
-    // 3. Supabase Cloud Sync & Realtime Channel
-    const unsubStatus = subscribeToSyncStatus((status) => {
-      setCloudSyncStatus(status);
+    // 3. Cloud-only storage status
+    const unsubStatus = subscribeCloudStatus((status) => {
+      setCloudStatus(status);
     });
-
-    // Listen for real-time remote updates from Supabase
-    const unsubRealtime = setupRealtimeSubscription(() => {
-      syncBidirectional()
-        .then((res) => {
-          if (res.action === 'pulled' || res.action === 'merged' || res.action === 'synced') {
-            loadData();
-          }
-        })
-        .catch(() => {});
-    });
-
-    // Mobile / tab focus trigger
-    const handleVisibility = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        syncBidirectional()
-          .then((res) => {
-            if (res.action === 'pulled' || res.action === 'merged' || res.action === 'synced') {
-              loadData();
-            }
-          })
-          .catch(() => {});
-      }
-    };
-    window.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('focus', handleVisibility);
 
     return () => {
       window.removeEventListener('storage', handleStorageChange);
@@ -754,14 +846,122 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         syncChannel.close();
       }
       unsubStatus();
-      unsubRealtime();
-      window.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('focus', handleVisibility);
     };
   }, [loadData]);
 
+  // Server-Side Session Verification & Hydration Effect
+  useEffect(() => {
+    let isMounted = true;
+
+    async function hydrateSession() {
+      try {
+        // 1. Try server-side verification via secure HTTP-only cookie
+        const res = await fetch('/api/auth/me');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.authenticated && data.user) {
+            if (isMounted) {
+              ensureLocalProfile(data.user);
+              db.setCurrentUser(data.user.id);
+              setCurrentUserState(data.user);
+              setSessionBusinessId(data.user.business_id || null);
+              setIsAuthenticated(true);
+              setIsAuthLoading(false);
+              try {
+                localStorage.setItem('fmcg_cached_session', JSON.stringify({
+                  user: data.user,
+                  savedAt: Date.now()
+                }));
+              } catch {}
+            }
+            return;
+          }
+          // Server clearly said "not signed in" (expired or logged out): never fall back to the cached session
+          try { localStorage.removeItem('fmcg_cached_session'); } catch {}
+          if (isMounted) {
+            db.setCurrentUser('');
+            setCurrentUserState(db.getInitialCurrentUser());
+            setIsAuthenticated(false);
+            setIsAuthLoading(false);
+          }
+          return;
+        }
+      } catch (netErr) {
+        // Device is offline or network error occurred
+      }
+
+      // 2. Offline Fallback: Check if device has a previously verified session
+      try {
+        const cachedRaw = typeof localStorage !== 'undefined' ? localStorage.getItem('fmcg_cached_session') : null;
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw);
+          if (cached?.user?.id) {
+            if (isMounted) {
+              ensureLocalProfile(cached.user);
+              db.setCurrentUser(cached.user.id);
+              setCurrentUserState(cached.user);
+              setSessionBusinessId(cached.user.business_id || null);
+              setIsAuthenticated(true);
+              setIsAuthLoading(false);
+            }
+            return;
+          }
+        }
+      } catch {}
+
+      // 3. Unauthenticated State: Do NOT silently default to Distributor Admin
+      if (isMounted) {
+        db.setCurrentUser('');
+        setCurrentUserState(db.getInitialCurrentUser());
+        setIsAuthenticated(false);
+        setIsAuthLoading(false);
+      }
+    }
+
+    hydrateSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const logout = useCallback(async () => {
+    // Jo changes abhi cloud tak nahi pahunche, pehle unhe save karne ki koshish
+    if (getPendingCount() > 0) {
+      const saved = await waitForCloudSave(10000);
+      if (!saved && typeof window !== 'undefined') {
+        const goAhead = window.confirm(
+          `${getPendingCount()} change(s) have not been saved to the cloud yet. Please check your internet connection.\n\n` +
+          'If you log out now, they will stay on this device and be saved the next time you log in.\nLog out anyway?'
+        );
+        if (!goAhead) return;
+      }
+    }
+    stopCloudSession();
+
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
+
+    try {
+      localStorage.removeItem('fmcg_cached_session');
+      localStorage.removeItem('saifee_remembered_mobile');
+    } catch {}
+
+    db.setCurrentUser('');
+    setCurrentUserState(db.getInitialCurrentUser());
+    setIsAuthenticated(false);
+    setRetailerCart({});
+    setSalespersonCart({});
+    if (typeof window !== 'undefined') {
+      window.location.href = '/';
+    }
+  }, []);
+
   const switchCompany = useCallback(async (companyId: string) => {
     setIsSwitchingCompany(true);
+    // Purani company ke pending changes pehle cloud me
+    await waitForCloudSave(10000);
     db.setActiveBusinessCompanyId(companyId);
     setActiveCompanyId(companyId);
     setActiveCompany(db.getActiveBusinessCompany());
@@ -769,6 +969,8 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     setRetailerCart({});
     setSalespersonCart({});
     loadData();
+    // Nayi company ka data cloud se lao
+    setCloudRestartKey((k) => k + 1);
     setTimeout(() => {
       setIsSwitchingCompany(false);
     }, 250);
@@ -799,17 +1001,63 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore
     }
-    // Queue debounced background backup to Supabase Cloud
-    queueCloudBackup(1200);
+    // Cloud save: har saveStore khud turant cloud me bhejta hai (cloudWriteThrough)
   };
 
   const syncWithCloud = useCallback(async () => {
-    const res = await syncBidirectional();
-    if (res.action === 'pulled' || res.action === 'merged') {
-      loadData();
+    // 1. Pending changes cloud me
+    const saved = await flushOutbox();
+    // 2. Doosre devices ke changes + master tables (products etc.) refresh
+    let pulled = await pullCloudChanges();
+    pulled += await refreshMasterTables();
+    loadData();
+    const pending = getPendingCount();
+    if (!saved && pending > 0) {
+      throw new Error(`${pending} change(s) could not be saved to the cloud. ${getCloudStatus().message}`);
     }
-    return res;
+    return {
+      action: pulled > 0 ? 'pulled' : 'synced',
+      message: pulled > 0 ? `${pulled} new change(s) loaded from the cloud` : 'Everything is up to date with the cloud'
+    };
   }, [loadData]);
+
+  // Login ke baad (aur company badalne par): cloud se data lao, phir har change cloud me save
+  useEffect(() => {
+    if (!isAuthenticated || !isLocalCacheReady) return;
+    let cancelled = false;
+    const activeBiz = db.getActiveBusinessCompanyId();
+    startCloudSession({
+      businessId: activeBiz,
+      sessionBusinessId,
+      onDataChanged: () => loadData()
+    }).then((ok) => {
+      if (ok && !cancelled) {
+        // Ek baar: purane retailers ka galat default state (Maharashtra 27) theek karo
+        const locationFixed = db.fixCompanyLocationDefaults(activeBiz);
+        const fixed = db.fixLegacyRetailerStateCodes(activeBiz);
+        if (locationFixed) loadData();
+        if (fixed > 0) {
+          console.info(`[GST] Updated the state code of ${fixed} retailer(s) to the home state.`);
+          loadData();
+        }
+      }
+      if (cancelled || ok) return;
+      // Is company ka access nahi mila: apni login wali company par wapas
+      const st = getCloudStatus();
+      if (sessionBusinessId && activeBiz !== sessionBusinessId && /access/i.test(st.error || st.message)) {
+        db.setActiveBusinessCompanyId(sessionBusinessId);
+        loadData();
+        setCloudRestartKey((k) => k + 1);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, isLocalCacheReady, sessionBusinessId, cloudRestartKey, loadData]);
+
+  const retryCloudConnection = useCallback(() => {
+    setCloudRestartKey((k) => k + 1);
+  }, []);
 
   const forcePushToCloud = useCallback(async () => {
     const snap = db.exportFullDatabaseBackup();
@@ -818,16 +1066,21 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const forcePullFromCloud = useCallback(async () => {
-    const remote = await fetchCloudSnapshot();
+    const remote = await fetchCloudSnapshot({ forceRefresh: true });
     if (remote?.snapshot) {
       db.restoreFullDatabaseBackup(remote.snapshot);
       loadData();
     }
   }, [loadData]);
 
-  const setCurrentUser = (id: string) => {
+  const setCurrentUser = (id: string, profile?: Profile) => {
+    if (profile) ensureLocalProfile(profile);
     db.setCurrentUser(id);
-    setCurrentUserState(db.getCurrentUser());
+    const u = db.getCurrentUser();
+    setCurrentUserState(u);
+    const bizOfUser = (profile as any)?.business_id || (u as any)?.business_id || null;
+    if (bizOfUser) setSessionBusinessId(bizOfUser);
+    setIsAuthenticated(Boolean(u.id && u.id !== ''));
     // Clear carts on user account switch to prevent cross-session cart bleeding
     setRetailerCart({});
     setSalespersonCart({});
@@ -1332,11 +1585,13 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   };
 
   const clearAllOrders = useCallback(() => {
+    allowBulkDeleteFor();
     db.clearAllOrders();
     refreshState();
   }, [refreshState]);
 
   const clearDummyOrders = useCallback(() => {
+    allowBulkDeleteFor();
     const res = db.clearDummyOrders();
     refreshState();
     return res;
@@ -1452,6 +1707,14 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
 
   const createSupplier = (name: string, gstin: string, address: string) => {
     const res = db.createSupplier(name, gstin, address);
+    // Timestamp lagao taaki cloud sync is naye supplier ko pehchan kar push kare
+    try {
+      const nowIso = new Date().toISOString();
+      const stamped = db.getSuppliers().map((sp) =>
+        sp.id === res.id ? ({ ...sp, created_at: nowIso, updated_at: nowIso } as typeof sp) : sp
+      );
+      db.saveSuppliers(stamped);
+    } catch {}
     refreshState();
     return res;
   };
@@ -1506,48 +1769,59 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   const createRetailerProfile = (data: Parameters<typeof db.createRetailerProfile>[0]) => {
     const res = db.createRetailerProfile(data);
     refreshState();
+    saveProfileToCloud(res.profile, { password: data.password, rollbackOnFail: true }, refreshState);
     return res;
   };
 
   const createSalespersonProfile = (data: Parameters<typeof db.createSalespersonProfile>[0]) => {
     const res = db.createSalespersonProfile(data);
     refreshState();
+    saveProfileToCloud(res, { password: data.password, rollbackOnFail: true }, refreshState);
     return res;
   };
 
   const updateSalespersonProfile = (id: string, updates: Parameters<typeof db.updateSalespersonProfile>[1]) => {
     const res = db.updateSalespersonProfile(id, updates);
     refreshState();
+    saveProfileToCloud(res, { password: updates?.password }, refreshState);
     return res;
   };
 
   const createStaffProfile = (data: Parameters<typeof db.createStaffProfile>[0]) => {
     const res = db.createStaffProfile(data);
     refreshState();
+    saveProfileToCloud(res, { password: data.password, rollbackOnFail: true }, refreshState);
     return res;
   };
 
   const updateStaffProfile = (id: string, updates: Parameters<typeof db.updateStaffProfile>[1]) => {
     const res = db.updateStaffProfile(id, updates);
     refreshState();
+    saveProfileToCloud(res, { password: updates?.password }, refreshState);
     return res;
   };
 
   const updateRetailerProfile = (retailerId: string, updates: Parameters<typeof db.updateRetailerProfile>[1]) => {
     const res = db.updateRetailerProfile(retailerId, updates);
     refreshState();
+    saveProfileToCloud(res?.profile, { password: updates?.password }, refreshState);
     return res;
   };
 
   const resetProfilePassword = (profileId: string, newPassword: string) => {
     const res = db.resetProfilePassword(profileId, newPassword);
     refreshState();
+    if (res) {
+      const target = db.getProfiles().find((p) => p.id === profileId || p.retailer_id === profileId);
+      saveProfileToCloud(target, { password: newPassword }, refreshState);
+    }
     return res;
   };
 
   const toggleProfileStatus = (profileId: string, forcedStatus?: boolean) => {
     const res = db.toggleProfileStatus(profileId, forcedStatus);
     refreshState();
+    saveProfileToCloud(res, {}, refreshState);
     return res;
   };
 
@@ -1893,6 +2167,9 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         },
         currentUser,
         setCurrentUser,
+        isAuthenticated,
+        isAuthLoading,
+        logout,
         profiles,
         companies,
         suppliers,
@@ -2015,7 +2292,8 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         postSalesInvoiceAtomic: (payload) => {
           const res = db.postSalesInvoiceAtomic({
             ...payload,
-            business_company_id: payload.business_company_id || activeCompanyId
+            business_id: payload.business_id || payload.business_company_id || activeCompanyId,
+            business_company_id: payload.business_company_id || payload.business_id || activeCompanyId
           });
           refreshState();
           return res;
@@ -2097,6 +2375,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         // Database Backup & Restore
         exportFullDatabaseBackup: () => db.exportFullDatabaseBackup(),
         restoreFullDatabaseBackup: (backup: any) => {
+          allowBulkDeleteFor();
           const res = db.restoreFullDatabaseBackup(backup);
           loadData();
           refreshState();
@@ -2105,6 +2384,26 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
 
         // Supabase Live Cloud Database Synchronization
         cloudSyncStatus,
+        cloudStatus,
+        waitForCloudSave,
+        retryCloudConnection,
+        flowPackOrder: (orderId, packedQty) => {
+          const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
+          try {
+            const res = db.flowPackOrder(orderId, packedQty, user);
+            return { packedPieces: res.packedPieces, backorderPieces: res.backorderPieces };
+          } finally {
+            refreshState();
+          }
+        },
+        flowBillOrder: (orderId, options) => {
+          const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
+          try {
+            return db.flowBillOrder(orderId, options, user);
+          } finally {
+            refreshState();
+          }
+        },
         syncWithCloud,
         forcePushToCloud,
         forcePullFromCloud,

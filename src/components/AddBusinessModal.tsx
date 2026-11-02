@@ -31,8 +31,8 @@ export function AddBusinessModal({ isOpen, onClose }: AddBusinessModalProps) {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
-  const [city, setCity] = useState('Mumbai');
-  const [stateCode, setStateCode] = useState('27');
+  const [city, setCity] = useState('Khachrod');
+  const [stateCode, setStateCode] = useState('23');
   const [pincode, setPincode] = useState('400003');
   const [switchImmediately, setSwitchImmediately] = useState(true);
 
@@ -61,8 +61,8 @@ export function AddBusinessModal({ isOpen, onClose }: AddBusinessModalProps) {
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
         address: address.trim() || undefined,
-        city: city.trim() || 'Mumbai',
-        state_code: stateCode.trim() || '27',
+        city: city.trim() || 'Khachrod',
+        state_code: stateCode.trim() || '23',
         pincode: pincode.trim() || undefined,
         currency: 'INR'
       });
@@ -158,7 +158,7 @@ export function AddBusinessModal({ isOpen, onClose }: AddBusinessModalProps) {
               <input
                 type="text"
                 maxLength={15}
-                placeholder="27AABCT1234F1Z5"
+                placeholder="23AABCT1234F1Z5"
                 value={gstin}
                 onChange={e => setGstin(e.target.value.toUpperCase())}
                 className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-white font-mono uppercase"
@@ -227,7 +227,7 @@ export function AddBusinessModal({ isOpen, onClose }: AddBusinessModalProps) {
               </label>
               <input
                 type="text"
-                placeholder="Mumbai"
+                placeholder="Khachrod"
                 value={city}
                 onChange={e => setCity(e.target.value)}
                 className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-white"
@@ -241,7 +241,7 @@ export function AddBusinessModal({ isOpen, onClose }: AddBusinessModalProps) {
               <input
                 type="text"
                 maxLength={2}
-                placeholder="27"
+                placeholder="23"
                 value={stateCode}
                 onChange={e => setStateCode(e.target.value)}
                 className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900 dark:text-white font-mono"

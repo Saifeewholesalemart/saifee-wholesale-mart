@@ -110,17 +110,22 @@ export default function SmartSearchBar({
       return entityFilter.includes(type);
     };
 
+    const queryTokens = query ? query.split(/\s+/).filter(Boolean) : [];
+
     // 2. Products
     if (shouldInclude('product') && products) {
       for (const prod of products) {
         if (results.length >= maxSuggestions * 2) break;
-        const matchName = (prod.name || '').toLowerCase().includes(query);
-        const matchBrand = (prod.brand || '').toLowerCase().includes(query);
-        const matchSku = (prod.sku || '').toLowerCase().includes(query);
-        const matchBarcode = (prod.barcode || '').toLowerCase().includes(query);
-        const matchCode = (prod.product_code || '').toLowerCase().includes(query);
+        const corpus = `${prod.name || ''} ${prod.brand || ''} ${prod.sku || ''} ${prod.barcode || ''} ${prod.product_code || ''} ${prod.hsn || ''}`.toLowerCase();
+        let matchesAll = true;
+        for (let t = 0; t < queryTokens.length; t++) {
+          if (!corpus.includes(queryTokens[t])) {
+            matchesAll = false;
+            break;
+          }
+        }
 
-        if ((matchName || matchBrand || matchSku || matchBarcode || matchCode) && !seenTitles.has(prod.name.toLowerCase())) {
+        if (matchesAll && !seenTitles.has(prod.name.toLowerCase())) {
           seenTitles.add(prod.name.toLowerCase());
           results.push({
             id: `prod-${prod.id}`,
