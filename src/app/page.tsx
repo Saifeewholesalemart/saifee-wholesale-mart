@@ -4,6 +4,7 @@ import { getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
+import { homePathFor } from '@/lib/useUrlStep';
 import { 
   Package, 
   Smartphone, 
@@ -76,8 +77,15 @@ const BUILTIN_DEMO_ACCOUNTS = [
 ];
 
 export default function Home() {
-  const { setCurrentUser, profiles, retailers, activeCompany } = useDb();
+  const { setCurrentUser, profiles, retailers, activeCompany, isAuthenticated, isAuthLoading, currentUser } = useDb();
   const router = useRouter();
+
+  // Already signed in (for example after pressing Back): go to the app, not the login form
+  useEffect(() => {
+    if (isAuthLoading || !isAuthenticated) return;
+    const home = homePathFor(currentUser);
+    if (home) router.replace(home);
+  }, [isAuthLoading, isAuthenticated, currentUser, router]);
 
   // Form states
   const [mobileNumber, setMobileNumber] = useState('');
@@ -226,7 +234,8 @@ export default function Home() {
       setSuccessRole(loginData.roleLabel);
 
       setTimeout(() => {
-        router.push(loginData.targetRoute);
+        // replace: Back from the app must not return to the login form
+        router.replace(loginData.targetRoute);
       }, 300);
 
     } catch (err: any) {

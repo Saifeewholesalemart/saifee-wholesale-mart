@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
-  LayoutDashboard, ShoppingCart, Combine, PackageCheck, Package, 
+  LayoutDashboard, Combine, PackageCheck, Package, 
   FileSpreadsheet, FileText, Users, DollarSign, RotateCcw, 
   TrendingUp, Settings, LogOut, Menu, X, ArrowLeft, Cpu, ClipboardList, Tags, Boxes, Warehouse, ArrowLeftRight, Zap, UserCog, Store, Database
 } from 'lucide-react';
@@ -27,8 +27,7 @@ const MENU_ITEMS: MenuItem[] = [
   { name: 'Import from Vyapar', path: '/admin/products/import-vyapar', icon: FileSpreadsheet },
   { name: 'Godowns / Warehouses', path: '/admin/godowns', icon: Warehouse },
   { name: 'Categories', path: '/admin/categories', icon: Tags },
-  { name: 'Order Board', path: '/admin/order-board', icon: ClipboardList },
-  { name: 'Order Register (Advanced)', path: '/admin/orders', icon: ShoppingCart },
+  { name: 'Orders', path: '/admin/orders', icon: ClipboardList },
   { name: 'Purchases', path: '/admin/purchases', icon: PackageCheck },
   { name: 'AI Purchase Import', path: '/admin/purchase/import', icon: Cpu },
   { name: 'Inventory & Batch', path: '/admin/inventory', icon: Boxes },

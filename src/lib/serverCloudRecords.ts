@@ -15,6 +15,8 @@
 import type { PoolClient } from 'pg';
 import { getDatabasePool, ServerTenantContext, UnauthorizedError } from './serverDb';
 import {
+  RETAILER_SHARED_STORES,
+  RETAILER_OWN_STORES,
   APPEND_ONLY_STORES,
   isCloudSyncedStore,
   stripSecrets
@@ -65,6 +67,26 @@ export interface CloudLoadResult {
 const MAX_RECORDS_PER_WRITE = 1000;
 const MAX_RECORD_BYTES = 512 * 1024;
 const INSERT_CHUNK = 250;
+
+// ----------------------------------------------------------------------------
+// Retailer scope: a retailer login only gets what its own shop app needs
+// ----------------------------------------------------------------------------
+
+/** Set for retailer logins. Admin / staff / salesperson: undefined (full company data). */
+export interface RetailerScope { retailerId: string }
+
+/** What a retailer app may save to the cloud. */
+const RETAILER_WRITABLE_STORES = new Set(['fmcg_orders', 'fmcg_item_activity_logs']);
+
+/** Builds the scope from the logged-in profile (null = not a retailer). */
+export function retailerScopeFor(context: ServerTenantContext, profile: any): RetailerScope | null {
+  const isRetailer = context.isRetailer || String(context.role) === 'retailer' ||
+    String(profile?.profile_type || '').toUpperCase() === 'RETAILER';
+  if (!isRetailer) return null;
+  const retailerId = String(profile?.retailer_id || '').trim();
+  // A retailer login without a shop link sees only the catalogue
+  return { retailerId: retailerId || '__no_retailer__' };
+}
 
 // ----------------------------------------------------------------------------
 // Health
@@ -173,7 +195,8 @@ function validateRecord(r: any): string | null {
 
 export async function writeCloudRecords(
   context: ServerTenantContext,
-  input: CloudRecordInput[]
+  input: CloudRecordInput[],
+  scope?: RetailerScope | null
 ): Promise<CloudWriteResult> {
   if (!Array.isArray(input)) throw new Error('records must be an array');
   if (input.length > MAX_RECORDS_PER_WRITE) {
@@ -220,11 +243,34 @@ export async function writeCloudRecords(
       }
     }
 
-    const permitted = rows.filter(r => {
+    let permitted = rows.filter(r => {
       if (isAllowed(context, allowed, r.business_id)) return true;
       skipped.push({ store: r.store, id: r.id, business_id: r.business_id, reason: 'no access to this company' });
       return false;
     });
+
+    // Retailer: only its own orders (new or already its own) and activity notes
+    if (scope) {
+      const orderIds = permitted.filter(r => r.store === 'fmcg_orders').map(r => r.id);
+      const existingOwner = new Map<string, string>();
+      if (orderIds.length > 0) {
+        const ex = await client.query(
+          `SELECT business_id, id, data->>'retailer_id' AS retailer_id FROM app_records
+            WHERE store = 'fmcg_orders' AND id = ANY($1::text[]);`,
+          [orderIds]
+        );
+        ex.rows.forEach((x: any) => existingOwner.set(`${x.business_id}|${x.id}`, String(x.retailer_id || '')));
+      }
+      permitted = permitted.filter(r => {
+        let ok = RETAILER_WRITABLE_STORES.has(r.store) && !r.deleted;
+        if (ok && r.store === 'fmcg_orders') {
+          const owner = existingOwner.get(`${r.business_id}|${r.id}`);
+          ok = String(r.data?.retailer_id || '') === scope.retailerId && (owner === undefined || owner === scope.retailerId);
+        }
+        if (!ok) skipped.push({ store: r.store, id: r.id, business_id: r.business_id, reason: 'not allowed for a retailer login' });
+        return ok;
+      });
+    }
 
     for (let i = 0; i < permitted.length; i += INSERT_CHUNK) {
       const chunk = permitted.slice(i, i + INSERT_CHUNK);
@@ -279,7 +325,8 @@ export async function writeCloudRecords(
 
 export async function loadCloudRecords(
   context: ServerTenantContext,
-  params: { business_id: string; since?: string | null; after?: CloudLoadCursor | null; limit?: number }
+  params: { business_id: string; since?: string | null; after?: CloudLoadCursor | null; limit?: number },
+  scope?: RetailerScope | null
 ): Promise<CloudLoadResult> {
   const pool = getDatabasePool();
   const businessId = String(params.business_id || context.businessId).trim();
@@ -296,13 +343,33 @@ export async function loadCloudRecords(
   const businessIds = Array.from(allowed);
 
   // Records of this company + the company list (all companies the user may switch to)
+  // Retailer ($9 set): catalogue + its own records only. Other shops' orders come as
+  // bare stubs (number only) so new order numbers on the retailer app stay unique.
+  // Our purchase cost is removed from products and stock batches.
   const res = await pool.query(
-    `SELECT business_id, store, id, data, deleted,
+    `SELECT business_id, store, id, deleted,
+            CASE
+              WHEN $9::text IS NULL THEN data
+              WHEN store = 'fmcg_orders' AND COALESCE(data->>'retailer_id', '') <> $9::text THEN
+                jsonb_build_object('id', id, 'order_number', data->'order_number', 'business_id', business_id,
+                                   'retailer_id', '__other_shop__', 'status', 'Hidden', 'order_date', data->'order_date',
+                                   'source', data->'source', 'total_amount', 0, 'items', '[]'::jsonb)
+              WHEN store = 'fmcg_products' THEN data - 'purchase_price' - 'loose_purchase_price' - 'purchase_rate'
+              WHEN store = 'fmcg_batches' THEN data - 'purchase_rate' - 'purchase_price' - 'cost_price'
+              ELSE data
+            END AS data,
             to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_at_text
        FROM app_records
       WHERE (business_id = $1 OR (store = 'fmcg_business_companies' AND (business_id = ANY($2::text[]) OR $3::boolean)))
         AND updated_at > $4::timestamptz
         AND ($5::timestamptz IS NULL OR (updated_at, store, id) > ($5::timestamptz, $6::text, $7::text))
+        AND (
+          $9::text IS NULL
+          OR store = ANY($10::text[])
+          OR store = 'fmcg_orders'
+          OR (store = ANY($11::text[]) AND data->>'retailer_id' = $9::text)
+          OR (store = 'fmcg_retailers' AND id = $9::text)
+        )
       ORDER BY updated_at ASC, store ASC, id ASC
       LIMIT $8;`,
     [
@@ -313,7 +380,10 @@ export async function loadCloudRecords(
       after ? after.updated_at : null,
       after ? after.store : '',
       after ? after.id : '',
-      limit + 1
+      limit + 1,
+      scope ? scope.retailerId : null,
+      RETAILER_SHARED_STORES,
+      RETAILER_OWN_STORES
     ]
   );
 

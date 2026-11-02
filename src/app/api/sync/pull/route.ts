@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/authSession';
+import { retailerScopeFor } from '@/lib/serverCloudRecords';
 import {
   isServerDatabaseConfigured,
   getServerTenantContext
@@ -40,7 +41,8 @@ export async function POST(req: NextRequest) {
       since: typeof since === 'string' ? since : null,
       limit: typeof limit === 'number' ? limit : undefined,
       offset: typeof offset === 'number' ? offset : undefined,
-      tables: Array.isArray(tables) ? tables : undefined
+      tables: Array.isArray(tables) ? tables : undefined,
+      retailerId: retailerScopeFor(context, auth.profile)?.retailerId || null
     });
 
     return NextResponse.json(result);

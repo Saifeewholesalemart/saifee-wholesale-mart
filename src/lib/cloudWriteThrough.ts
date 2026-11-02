@@ -22,7 +22,9 @@ import {
   isCloudSyncedStore,
   resolveRecordId,
   resolveRecordTenant,
-  stripSecrets
+  stripSecrets,
+  RETAILER_SHARED_STORES,
+  RETAILER_OWN_STORES
 } from './cloudRecordStores';
 import { syncIncrementalWithServer } from './incrementalSyncEngine';
 
@@ -493,7 +495,7 @@ async function fetchCloudRecords(businessId: string, since: string | null): Prom
   for (let page = 0; page < 500; page++) {
     const res: { records: LoadedRecord[]; hasMore: boolean; next: LoadCursor | null } = await postJson(
       '/api/cloud/load',
-      { business_id: businessId, since, after, limit: 2000 },
+      { business_id: businessId, since, after, limit: 5000 },
       60000
     );
     all.push(...res.records);
@@ -671,10 +673,52 @@ function attachWindowListeners() {
  * Login ke baad (aur company badalne par) chalayein.
  * Cloud se data laata hai, phir app ko "ready" karta hai.
  */
+/**
+ * Retailer device: remove everything a shop app must not keep (other shops' records,
+ * stock ledger, purchase cost...). Runs once per device + shop; then a fresh cloud load.
+ */
+function restrictLocalDataToRetailer(retailerId: string) {
+  const shared = new Set(RETAILER_SHARED_STORES);
+  const own = new Set(RETAILER_OWN_STORES);
+  const COST_FIELDS = ['purchase_price', 'loose_purchase_price', 'purchase_rate', 'cost_price'];
+  applyingRemote++;
+  try {
+    for (const store of db.listLoadedStoreKeys()) {
+      if (!isCloudSyncedStore(store)) continue;
+      const items = db.getRawStore(store);
+      if (store === 'fmcg_products' || store === 'fmcg_batches' || store === 'fmcg_inventory') {
+        const cleaned = items.map((it: any) => {
+          if (!it || typeof it !== 'object') return it;
+          const copy = { ...it };
+          COST_FIELDS.forEach(f => { delete copy[f]; });
+          return copy;
+        });
+        db.applyCloudRecords(store, cleaned, []);
+        continue;
+      }
+      if (shared.has(store)) continue;
+      const remove: string[] = [];
+      items.forEach((it: any) => {
+        const id = resolveRecordId(store, it);
+        if (!id) return;
+        const keep = store === 'fmcg_retailers'
+          ? id === retailerId
+          : own.has(store) ? String(it?.retailer_id || '') === retailerId : false;
+        if (!keep) remove.push(id);
+      });
+      if (remove.length > 0) db.applyCloudRecords(store, [], remove);
+    }
+  } finally {
+    applyingRemote--;
+  }
+}
+
 export async function startCloudSession(options: {
   businessId: string;
   sessionBusinessId: string | null;
   onDataChanged: () => void;
+  /** Set when a retailer is logged in: the device keeps only that shop's data */
+  retailerId?: string | null;
 }): Promise<boolean> {
   const token = ++startToken;
   ready = false;
@@ -720,6 +764,35 @@ export async function startCloudSession(options: {
   try {
     await restoreOutbox();
 
+    // Who is using this device decides how much data it keeps (retailer: own shop only,
+    // everyone else: full company). When that changes (e.g. a retailer logs out and a
+    // salesman logs in on the same phone), reload everything fresh from the cloud.
+    const scopeTag = options.retailerId ? `retailer:${options.retailerId}` : 'full';
+    const scopeKey = `fmcg_data_scope_v1_${options.businessId}`;
+    const scopeChanged = (await getIdbItem<string>(scopeKey)) !== scopeTag;
+    if (scopeChanged) {
+      if (options.retailerId) {
+        outbox.clear();
+        await setIdbItem(OUTBOX_KEY, []).catch(() => {});
+        restrictLocalDataToRetailer(options.retailerId);
+      }
+      await setIdbItem(CHECKPOINT_PREFIX + options.businessId, '').catch(() => {});
+      await setIdbItem(`fmcg_normalized_backfill_v2_${options.businessId}`, '').catch(() => {});
+      await setIdbItem(scopeKey, scopeTag);
+    }
+
+    // PERFORMANCE: start downloading app_records now, in parallel with the master tables below.
+    // They are still APPLIED in the same order as before (masters first, then app_records).
+    const cpKey = CHECKPOINT_PREFIX + options.businessId;
+    const cp = await getIdbItem<string>(cpKey);
+    // One-time upload of device-only records: only on a truly new device, not after a scope reload
+    const firstLoad = !cp && !scopeChanged;
+    const since = cp ? new Date(new Date(cp).getTime() - POLL_OVERLAP_MS).toISOString() : null;
+    const recordsPromise = fetchCloudRecords(options.businessId, since).then(
+      value => ({ value, error: null as any }),
+      error => ({ value: null as any, error })
+    );
+
     // A. Normalized master tables (products, retailers, godowns...) — sirf apni login company ke liye
     if (options.sessionBusinessId && options.sessionBusinessId === options.businessId) {
       applyingRemote++;
@@ -744,12 +817,10 @@ export async function startCloudSession(options: {
     }
     if (token !== startToken) return false;
 
-    // B. app_records (sab transactions + full master copies)
-    const cpKey = CHECKPOINT_PREFIX + options.businessId;
-    const cp = await getIdbItem<string>(cpKey);
-    const firstLoad = !cp;
-    const since = cp ? new Date(new Date(cp).getTime() - POLL_OVERLAP_MS).toISOString() : null;
-    const { records, maxUpdatedAt } = await fetchCloudRecords(options.businessId, since);
+    // B. app_records (sab transactions + full master copies) — already downloading
+    const loaded = await recordsPromise;
+    if (loaded.error) throw loaded.error;
+    const { records, maxUpdatedAt } = loaded.value as { records: LoadedRecord[]; maxUpdatedAt: string | null };
     if (token !== startToken) return false;
 
     applyRemoteRecords(records);
@@ -761,7 +832,7 @@ export async function startCloudSession(options: {
       const m = known.get(e.store);
       if (m && !e.deleted) m.set(e.id, { h: 'pending', biz: e.business_id });
     });
-    if (firstLoad) {
+    if (firstLoad && !options.retailerId) {
       const cloudIds = new Map<string, Set<string>>();
       records.forEach(r => {
         if (r.business_id !== options.businessId) return;

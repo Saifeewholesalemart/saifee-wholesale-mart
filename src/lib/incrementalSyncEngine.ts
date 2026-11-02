@@ -189,7 +189,7 @@ export async function syncIncrementalWithServer(options?: {
     // PHASE 2: PULL REMOTE DELTAS
     // ------------------------------------------------------------------------
     // Pull ALL pages (2000 rows per table per page) so large catalogs load completely
-    const PULL_PAGE_SIZE = 2000;
+    const PULL_PAGE_SIZE = 5000; // fewer round trips (server max 5000)
     const MAX_PULL_PAGES = 50;
     let pulledCount = 0;
     let pageOffset = 0;

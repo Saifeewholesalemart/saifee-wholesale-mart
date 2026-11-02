@@ -674,6 +674,7 @@ export interface Invoice {
   last_edited_at?: string;
   last_edited_by?: string;
   edit_count?: number;
+  revised?: boolean;
 }
 
 export interface CustomerCreditProfile {
@@ -1528,7 +1529,8 @@ export function formatTradingQuantity(
     }
   }
 
-  const primaryUnit = tUnit || bUnit || 'Piece';
+  // Pack size 1: the item is sold by the piece/packet, so name the base unit (not "Carton")
+  const primaryUnit = packSize <= 1 ? (bUnit || tUnit || 'Piece') : (tUnit || bUnit || 'Piece');
   const label = getCleanUnitLabel(primaryUnit, total);
   return `${total} ${label}`;
 }
@@ -2846,6 +2848,656 @@ class FMCGDatabase {
     return { invoice, challan: res.challan, shortfall };
   }
 
+
+  /**
+   * Packing Done for one shop: several orders packed in one go.
+   * Stock is checked for all of them together first, so nothing is saved half-way.
+   */
+  flowPackOrders(
+    entries: { orderId: string; packedQty: Record<string, number> }[],
+    user?: { id: string; name: string }
+  ): { packedPieces: number; backorderPieces: number } {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const orders = this.getOrders(activeBiz);
+    const products = this.getProducts(activeBiz);
+    const ids = new Set(entries.map(e => e.orderId));
+
+    const free: Record<string, number> = {};
+    this.getBatches(activeBiz).forEach(b => {
+      if ((b.quantity || 0) > 0) free[b.product_id] = (free[b.product_id] || 0) + b.quantity;
+    });
+    orders.forEach(o => {
+      if (ids.has(o.id) || !o.flow_ready_to_bill) return;
+      (o.items || []).forEach(it => {
+        const q = Number(it.flow_packed_qty) || 0;
+        if (q > 0) free[it.product_id] = (free[it.product_id] || 0) - q;
+      });
+    });
+
+    const want: Record<string, number> = {};
+    for (const e of entries) {
+      const o = orders.find(x => x.id === e.orderId);
+      if (!o) throw new Error('Order not found.');
+      if (o.status === 'Cancelled') throw new Error(`${o.order_number} is cancelled.`);
+      if (o.flow_ready_to_bill) throw new Error(`${o.order_number} is already packed and waiting for billing.`);
+      (o.items || []).forEach(it => {
+        const q = Number(e.packedQty[it.id]) || 0;
+        if (q > 0) want[it.product_id] = (want[it.product_id] || 0) + q;
+      });
+    }
+    for (const pid of Object.keys(want)) {
+      const f = Math.max(0, free[pid] || 0);
+      if (want[pid] > f) {
+        const name = products.find(p => p.id === pid)?.name || 'Item';
+        throw new Error(`${name}: only ${f} in stock for all these orders together.`);
+      }
+    }
+
+    let packedPieces = 0;
+    let backorderPieces = 0;
+    for (const e of entries) {
+      const r = this.flowPackOrder(e.orderId, e.packedQty, user);
+      packedPieces += r.packedPieces;
+      backorderPieces += r.backorderPieces;
+    }
+    return { packedPieces, backorderPieces };
+  }
+
+  /**
+   * One invoice for all packed orders of one shop (any channel).
+   * Walk-in orders are always billed one at a time.
+   */
+  flowBillShop(
+    orderIds: string[],
+    options: { rates?: Record<string, number>; paymentMode: 'Cash' | 'UPI' | 'Credit'; generateChallan?: boolean },
+    user?: { id: string; name: string }
+  ): { invoice: Invoice; challan?: DeliveryChallan; shortfall: string } {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    let orders = this.getOrders(activeBiz);
+    const list = orderIds.map(id => orders.find(o => o.id === id)).filter(Boolean) as Order[];
+    if (list.length === 0) throw new Error('Order not found.');
+    const retailerId = list[0].retailer_id;
+    if (list.some(o => o.retailer_id !== retailerId)) throw new Error('All orders in one bill must be for the same shop.');
+    if (list.length > 1 && isWalkInRetailerId(retailerId)) throw new Error('Walk-in orders are billed one at a time.');
+    if (list.some(o => !o.flow_ready_to_bill)) throw new Error('Some of these orders are not packed yet.');
+
+    const products = this.getProducts(activeBiz);
+    const lotItems: any[] = [];
+    list.forEach(o => {
+      (o.items || []).forEach(it => {
+        // Keep the real ordered quantity, so the short part stays as backorder
+        if (it.ordered_qty === undefined || it.ordered_qty === null) it.ordered_qty = flowOrderedQty(it);
+        const q = Math.floor(Number(it.flow_packed_qty) || 0);
+        if (q <= 0) return;
+        const prod = products.find(p => p.id === it.product_id);
+        const units = it.units_per_trading_unit || prod?.units_per_box_carton || 1;
+        const { cartonQty, looseQty } = splitBaseQuantity(q, units);
+        let rate = flowItemRate(it, prod);
+        const newRate = options.rates?.[it.id];
+        if (newRate !== undefined && newRate !== null && !isNaN(Number(newRate))) {
+          const r = Math.round(Number(newRate) * 100) / 100;
+          if (r < 0) throw new Error('Rate cannot be negative.');
+          rate = r;
+        }
+        lotItems.push({
+          originOrderId: o.id,
+          originItemId: it.id,
+          productId: it.product_id,
+          productName: prod?.name || (it as any).product_name || 'Item',
+          sku: prod?.sku || '',
+          mrp: Number((it as any).selected_mrp ?? (it as any).mrp ?? prod?.mrp) || 0,
+          unitsPerPack: units,
+          tradingUnit: it.trading_unit || prod?.trading_unit || 'Piece',
+          baseUnit: it.base_unit || prod?.base_unit || 'Piece',
+          orderedCartons: cartonQty,
+          orderedLoose: looseQty,
+          packedCartons: cartonQty,
+          packedLoose: looseQty,
+          packedPieces: q,
+          unitRate: rate,
+          purchaseCost: Number((it as any).purchase_rate ?? prod?.purchase_price) || 0,
+          hsn: prod?.hsn
+        });
+      });
+    });
+    if (lotItems.length === 0) throw new Error('Nothing is packed on these orders.');
+    this.saveOrders(orders, activeBiz);
+
+    const res = this.dispatchRetailerPackingLot(
+      { retailerId, sourceOrderIds: list.map(o => o.id), items: lotItems },
+      {
+        transportMode: 'Counter / Direct',
+        notes: list.length > 1 ? `One bill for orders ${list.map(o => o.order_number).join(', ')}` : 'Order billing',
+        generateChallan: options.generateChallan === true,
+        paymentMode: options.paymentMode
+      },
+      user
+    );
+    const shortfall = describeStockShortfall();
+    if (!res) throw new Error(shortfall || 'Invoice could not be generated.');
+
+    // Packing session over: the rest stays on the orders as backorder
+    orders = this.getOrders(activeBiz);
+    const now = new Date().toISOString();
+    list.forEach(src => {
+      const o = orders.find(x => x.id === src.id);
+      if (!o) return;
+      o.flow_ready_to_bill = false;
+      (o.items || []).forEach(it => { it.flow_packed_qty = 0; });
+      o.updated_at = now;
+    });
+    this.saveOrders(orders, activeBiz);
+    return { invoice: res.invoice, challan: res.challan, shortfall };
+  }
+
+  /**
+   * Admin edits an order that is not billed yet (or the unbilled part of it).
+   * lines = the full list of items still to supply: qty (pcs) and rate.
+   * Items left out are removed (or their pending part is cancelled if something was billed).
+   * A packed order goes back to To Pack.
+   */
+  flowEditOrder(
+    orderId: string,
+    lines: { itemId?: string; productId: string; qty: number; rate: number }[],
+    user?: { id: string; name: string }
+  ): { order: Order; changes: string[] } {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const orders = this.getOrders(activeBiz);
+    const order = orders.find(o => o.id === orderId);
+    if (!order) throw new Error('Order not found.');
+    if (order.status === 'Cancelled') throw new Error('This order is cancelled.');
+    const products = this.getProducts(activeBiz);
+    const changes: string[] = [];
+    const keep = new Set<string>();
+    order.items = order.items || [];
+
+    for (const line of lines) {
+      const prod = products.find(p => p.id === line.productId);
+      const name = prod?.name || 'Item';
+      const qty = Number(line.qty);
+      const rate = Math.round(Number(line.rate) * 100) / 100;
+      if (!Number.isInteger(qty) || qty < 0) throw new Error(`${name}: enter a whole number.`);
+      if (isNaN(rate) || rate < 0) throw new Error(`${name}: enter a valid rate.`);
+
+      let it = line.itemId ? order.items.find(i => i.id === line.itemId) : undefined;
+      if (!it) {
+        if (qty <= 0) continue;
+        if (!prod) throw new Error('Product not found.');
+        const units = prod.units_per_box_carton || 1;
+        const split = splitBaseQuantity(qty, units);
+        it = {
+          id: `oi-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          order_id: order.id,
+          product_id: prod.id,
+          quantity: qty,
+          base_qty: qty,
+          ordered_qty: qty,
+          carton_qty: split.cartonQty,
+          loose_qty: split.looseQty,
+          trading_unit: prod.trading_unit || 'Piece',
+          base_unit: prod.base_unit || 'Piece',
+          units_per_trading_unit: units,
+          units_per_box_carton: units,
+          carton_rate: rate,
+          rate,
+          base_price: rate,
+          order_time_rate: rate,
+          gst_percent: Number(prod.gst_percent) || 0,
+          fulfilled_qty: 0,
+          cancelled_qty: 0,
+          mrp: prod.mrp,
+          selected_mrp: prod.mrp,
+          purchase_rate: prod.purchase_price
+        } as any;
+        order.items.push(it as OrderItem);
+        changes.push(`Added ${name}: ${qty} pcs @ ₹${rate}`);
+      } else {
+        const billed = Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0;
+        const cancelled = Number(it.cancelled_qty ?? 0) || 0;
+        const oldPending = flowRemainingQty(it);
+        if (qty !== oldPending) {
+          const units = it.units_per_trading_unit || prod?.units_per_box_carton || 1;
+          const ordered = billed + cancelled + qty;
+          const split = splitBaseQuantity(ordered, units);
+          it.ordered_qty = ordered;
+          it.base_qty = ordered;
+          it.quantity = ordered;
+          it.carton_qty = split.cartonQty;
+          it.loose_qty = split.looseQty;
+          changes.push(`${name}: qty ${oldPending} → ${qty} pcs`);
+        }
+        const oldRate = flowItemRate(it, prod);
+        if (Math.abs(rate - oldRate) > 0.001) {
+          it.manual_billing_rate = rate;
+          it.manual_rate_applied = true;
+          it.manual_rate_reason = 'Changed by admin';
+          it.carton_rate = rate;
+          it.rate = rate;
+          changes.push(`${name}: rate ₹${oldRate} → ₹${rate}`);
+        }
+      }
+      keep.add(it!.id);
+    }
+
+    const remove = new Set<string>();
+    order.items.forEach(it => {
+      if (keep.has(it.id)) return;
+      const pending = flowRemainingQty(it);
+      if (pending <= 0) return;
+      const name = products.find(p => p.id === it.product_id)?.name || 'Item';
+      const billed = Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0;
+      if (billed === 0 && (Number(it.cancelled_qty) || 0) === 0) {
+        remove.add(it.id);
+      } else {
+        it.cancelled_qty = (Number(it.cancelled_qty) || 0) + pending;
+        it.cancel_reason = 'Removed by admin';
+      }
+      changes.push(`Removed ${name}`);
+    });
+    order.items = order.items.filter(it => !remove.has(it.id));
+    if (order.items.length === 0) throw new Error('An order needs at least one item. Use "Cancel order" instead.');
+    if (changes.length === 0) return { order, changes };
+
+    const now = new Date().toISOString();
+    const anyBilled = order.items.some(it => (Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0) > 0);
+    if (order.flow_ready_to_bill) {
+      order.flow_ready_to_bill = false;
+      order.items.forEach(it => { it.flow_packed_qty = 0; });
+      changes.push('Packing reset: order goes back to To Pack');
+    }
+    if (!anyBilled) {
+      order.flow_pack_attempted_at = undefined;
+      order.status = 'Confirmed';
+    } else {
+      const pending = order.items.reduce((s, it) => s + flowRemainingQty(it), 0);
+      order.status = pending > 0 ? 'Partially Fulfilled' : 'Completed';
+    }
+    // Order value (ordered minus cancelled)
+    order.total_amount = Math.round(order.items.reduce((s, it) => {
+      const prod = products.find(p => p.id === it.product_id);
+      const q = Math.max(0, flowOrderedQty(it) - (Number(it.cancelled_qty) || 0));
+      const units = it.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const gst = Number(it.gst_percent ?? prod?.gst_percent) || 0;
+      const taxable = Math.round((q / units) * flowItemRate(it, prod) * 100) / 100;
+      return s + taxable * (1 + gst / 100);
+    }, 0));
+    order.updated_at = now;
+    this.saveOrders(orders, activeBiz);
+
+    this.addItemActivityLog({
+      product_id: order.items[0]?.product_id || '',
+      action: 'Order Edited',
+      details: `Order ${order.order_number} edited: ${changes.join('; ')}`,
+      reference_id: order.id,
+      user_id: user?.id || this.currentUserId,
+      user_name: user?.name || 'Admin'
+    });
+    return { order, changes };
+  }
+
+  /**
+   * Admin changes a bill that is already made: qty, rate, add or remove items.
+   * Same invoice number, marked revised. Stock, customer balance, the orders and the
+   * delivery challan follow the difference. The old version is kept in the audit log.
+   */
+  flowReviseInvoice(
+    invoiceId: string,
+    lines: { lineId?: string; productId: string; qty: number; rate: number }[],
+    reason: string,
+    user?: { id: string; name: string }
+  ): { invoice: Invoice; changes: string[] } {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const invoices = this.getInvoices(activeBiz);
+    const inv = invoices.find(i => i.id === invoiceId);
+    if (!inv) throw new Error('Invoice not found.');
+    if ((inv as any).status === 'Cancelled') throw new Error('This invoice is cancelled.');
+    const before = JSON.parse(JSON.stringify(inv)) as Invoice;
+
+    const retailers = this.getRetailers(activeBiz);
+    const ret = retailers.find(r => r.id === inv.retailer_id) || addWalkInToList(retailers, ensureWalkInRetailer(inv.retailer_id));
+    const products = this.getProducts(activeBiz);
+    const batches = this.getBatches(activeBiz);
+    const inventory = this.getInventory(activeBiz);
+    const ledgers = this.getLedger(activeBiz);
+    const intra = isIntraStateSupply(ret?.state_code);
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+
+    for (const l of lines) {
+      const name = products.find(p => p.id === l.productId)?.name || 'Item';
+      if (!Number.isInteger(Number(l.qty)) || Number(l.qty) < 0) throw new Error(`${name}: enter a whole number.`);
+      if (isNaN(Number(l.rate)) || Number(l.rate) < 0) throw new Error(`${name}: enter a valid rate.`);
+    }
+    const keepLines = lines.filter(l => Number(l.qty) > 0);
+    if (keepLines.length === 0) throw new Error('A bill needs at least one item.');
+
+    const oldQty: Record<string, number> = {};
+    (inv.items || []).forEach(it => { oldQty[it.product_id] = (oldQty[it.product_id] || 0) + (Number(it.base_qty ?? it.quantity) || 0); });
+    const newQty: Record<string, number> = {};
+    keepLines.forEach(l => { newQty[l.productId] = (newQty[l.productId] || 0) + Number(l.qty); });
+    const pids = Array.from(new Set([...Object.keys(oldQty), ...Object.keys(newQty)]));
+
+    // Stock rule: more pieces on the bill only if they are in stock
+    for (const pid of pids) {
+      const delta = (newQty[pid] || 0) - (oldQty[pid] || 0);
+      if (delta > 0) {
+        const available = batches.filter(b => b.product_id === pid && b.quantity > 0).reduce((s, b) => s + b.quantity, 0);
+        if (delta > available) {
+          const name = products.find(p => p.id === pid)?.name || 'Item';
+          throw new Error(`${name}: only ${available} more in stock.`);
+        }
+      }
+    }
+
+    const newItems: InvoiceItem[] = keepLines.map(l => {
+      const old = l.lineId ? (inv.items || []).find(i => i.id === l.lineId) : undefined;
+      const prod = products.find(p => p.id === l.productId);
+      const qty = Number(l.qty);
+      const rate = round2(Number(l.rate));
+      const units = old?.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const split = splitBaseQuantity(qty, units);
+      const taxable = round2((qty / units) * rate);
+      const gst = Number(old?.gst_percent ?? prod?.gst_percent) || 0;
+      const gstAmt = round2(taxable * gst / 100);
+      const cgst = intra ? round2(gstAmt / 2) : 0;
+      const sgst = intra ? round2(gstAmt / 2) : 0;
+      const igst = intra ? 0 : gstAmt;
+      return {
+        ...(old || {}),
+        id: old?.id || `inv-item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        invoice_id: inv.id,
+        product_id: l.productId,
+        product_name: old?.product_name || prod?.name,
+        hsn: old?.hsn || prod?.hsn || '',
+        packing: old?.packing || `${units} ${prod?.base_unit || 'Piece'}/${prod?.trading_unit || 'Piece'}`,
+        quantity: qty,
+        base_qty: qty,
+        carton_qty: split.cartonQty,
+        loose_qty: split.looseQty,
+        trading_unit: old?.trading_unit || prod?.trading_unit || 'Piece',
+        base_unit: old?.base_unit || prod?.base_unit || 'Piece',
+        units_per_trading_unit: units,
+        units_per_box_carton: units,
+        rate,
+        carton_rate: rate,
+        loose_rate: round2(rate / units),
+        discount: 0,
+        carton_discount: 0,
+        loose_discount: 0,
+        taxable_value: taxable,
+        gst_percent: gst,
+        cgst,
+        sgst,
+        igst,
+        total_amount: round2(taxable + cgst + sgst + igst),
+        mrp: old?.mrp ?? prod?.mrp,
+        purchase_rate: old?.purchase_rate ?? prod?.purchase_price,
+        manual_billing_rate: rate,
+        manual_rate_applied: true
+      } as InvoiceItem;
+    });
+
+    // Stock movement by the difference
+    const now = new Date().toISOString();
+    const editorId = user?.id || this.currentUserId;
+    const changes: string[] = [];
+    for (const pid of pids) {
+      const delta = (newQty[pid] || 0) - (oldQty[pid] || 0);
+      if (delta === 0) continue;
+      const name = products.find(p => p.id === pid)?.name || 'Item';
+      changes.push(`${name}: qty ${oldQty[pid] || 0} → ${newQty[pid] || 0}`);
+      if (delta > 0) {
+        let rem = delta;
+        const fifo = batches.filter(b => b.product_id === pid && b.quantity > 0)
+          .sort((a, b) => new Date(a.expiry_date).getTime() - new Date(b.expiry_date).getTime());
+        for (const b of fifo) {
+          if (rem <= 0) break;
+          const take = Math.min(b.quantity, rem);
+          b.quantity -= take;
+          rem -= take;
+        }
+      } else {
+        const oldLine = (inv.items || []).find(i => i.product_id === pid);
+        const back = batches.find(b => b.id === oldLine?.batch_id) || batches.find(b => b.product_id === pid);
+        if (back) back.quantity += Math.abs(delta);
+      }
+      const invRow = inventory.find(i => i.product_id === pid);
+      if (invRow) {
+        invRow.physical_qty = Math.max(0, (invRow.physical_qty || 0) - delta);
+        invRow.available_qty = Math.max(0, invRow.physical_qty - (invRow.reserved_qty || 0));
+        invRow.updated_at = now;
+      }
+      ledgers.push({
+        id: `led-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        product_id: pid,
+        change_qty: -delta,
+        direction: delta > 0 ? 'OUT' : 'IN',
+        reason: 'Invoice Revised',
+        reference_id: inv.id,
+        user_id: editorId,
+        created_at: now
+      } as any);
+    }
+    keepLines.forEach(l => {
+      const old = (inv.items || []).find(i => l.lineId ? i.id === l.lineId : i.product_id === l.productId);
+      const oldRate = Number(old?.carton_rate ?? old?.rate);
+      if (old && Math.abs(oldRate - Number(l.rate)) > 0.001) {
+        const name = products.find(p => p.id === l.productId)?.name || 'Item';
+        changes.push(`${name}: rate ₹${oldRate} → ₹${round2(Number(l.rate))}`);
+      }
+    });
+    if (changes.length === 0) return { invoice: inv, changes };
+
+    // Totals and balance
+    const taxableTotal = round2(newItems.reduce((s, i) => s + (i.taxable_value || 0), 0));
+    const cgstTotal = round2(newItems.reduce((s, i) => s + (i.cgst || 0), 0));
+    const sgstTotal = round2(newItems.reduce((s, i) => s + (i.sgst || 0), 0));
+    const igstTotal = round2(newItems.reduce((s, i) => s + (i.igst || 0), 0));
+    const exact = taxableTotal + cgstTotal + sgstTotal + igstTotal;
+    const grand = Math.round(exact);
+    const paid = Number(inv.paid_amount) || 0;
+    const oldUnpaid = Number(inv.outstanding_amount ?? Math.max(0, (inv.grand_total || 0) - paid)) || 0;
+    const newUnpaid = Math.max(0, grand - paid);
+    const balanceDelta = round2(newUnpaid - oldUnpaid);
+    if (balanceDelta !== 0 && ret) {
+      ret.outstanding = Math.max(0, round2((ret.outstanding || 0) + balanceDelta));
+      (ret as any).outstanding_balance = Math.max(0, round2(((ret as any).outstanding_balance || 0) + balanceDelta));
+      (ret as any).current_balance = round2(((ret as any).current_balance || 0) + balanceDelta);
+    }
+    changes.push(`Total ₹${before.grand_total} → ₹${grand}`);
+
+    Object.assign(inv, {
+      items: newItems,
+      subtotal: taxableTotal,
+      discount_amount: 0,
+      taxable_value: taxableTotal,
+      cgst: cgstTotal,
+      sgst: sgstTotal,
+      igst: igstTotal,
+      round_off: round2(grand - exact),
+      grand_total: grand,
+      outstanding_amount: newUnpaid,
+      payment_status: paid >= grand ? 'Paid' : paid > 0 ? 'Partial' : 'Unpaid',
+      last_edited_at: now,
+      last_edited_by: user?.name || 'Admin',
+      edit_count: (inv.edit_count || 0) + 1,
+      revised: true
+    });
+
+    // Orders follow the bill: fewer pieces are closed on the order (not sent back to backorder)
+    const orders = this.getOrders(activeBiz);
+    const linked = orders.filter(o =>
+      inv.source_order_ids?.includes(o.id) || o.id === inv.order_ref_id || o.invoice_id === inv.id
+    ).sort((a, b) => new Date(b.order_date || 0).getTime() - new Date(a.order_date || 0).getTime());
+    if (linked.length > 0) {
+      for (const pid of pids) {
+        let delta = (newQty[pid] || 0) - (oldQty[pid] || 0);
+        const lineRate = keepLines.find(l => l.productId === pid)?.rate;
+        linked.forEach(o => (o.items || []).forEach(it => {
+          if (it.product_id === pid && lineRate !== undefined) {
+            it.carton_rate = round2(Number(lineRate));
+            it.rate = it.carton_rate;
+            it.manual_billing_rate = it.carton_rate;
+            it.manual_rate_applied = true;
+          }
+        }));
+        if (delta < 0) {
+          for (const o of linked) {
+            for (const it of o.items || []) {
+              if (delta >= 0) break;
+              if (it.product_id !== pid) continue;
+              const ful = Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0;
+              const take = Math.min(ful, -delta);
+              if (take <= 0) continue;
+              it.fulfilled_qty = ful - take;
+              it.dispatched_qty = it.fulfilled_qty;
+              it.cancelled_qty = (Number(it.cancelled_qty) || 0) + take;
+              delta += take;
+            }
+          }
+        } else if (delta > 0) {
+          const target = linked.find(o => (o.items || []).some(it => it.product_id === pid)) || linked[0];
+          let it = (target.items || []).find(x => x.product_id === pid);
+          if (!it) {
+            const prod = products.find(p => p.id === pid);
+            const nl = newItems.find(n => n.product_id === pid)!;
+            it = {
+              id: `oi-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              order_id: target.id,
+              product_id: pid,
+              quantity: 0, base_qty: 0, ordered_qty: 0, fulfilled_qty: 0, cancelled_qty: 0,
+              carton_qty: 0, loose_qty: 0,
+              trading_unit: nl.trading_unit, base_unit: nl.base_unit,
+              units_per_trading_unit: nl.units_per_trading_unit, units_per_box_carton: nl.units_per_box_carton,
+              carton_rate: nl.carton_rate, rate: nl.rate, base_price: nl.rate, order_time_rate: nl.rate,
+              gst_percent: nl.gst_percent, mrp: prod?.mrp
+            } as any;
+            target.items = [...(target.items || []), it!];
+          }
+          const ordered = flowOrderedQty(it!) + delta;
+          it!.ordered_qty = ordered;
+          it!.base_qty = ordered;
+          it!.quantity = ordered;
+          it!.fulfilled_qty = (Number(it!.fulfilled_qty ?? it!.dispatched_qty ?? 0) || 0) + delta;
+          it!.dispatched_qty = it!.fulfilled_qty;
+        }
+      }
+      linked.forEach(o => {
+        o.updated_at = now;
+        if (o.status !== 'Cancelled') {
+          const pending = (o.items || []).reduce((s, it) => s + flowRemainingQty(it), 0);
+          if (!o.flow_ready_to_bill) o.status = pending > 0 ? 'Partially Fulfilled' : 'Completed';
+        }
+      });
+      this.saveOrders(orders, activeBiz);
+    }
+
+    // Delivery challan follows the bill
+    const challans = this.getDeliveryChallans(activeBiz);
+    const dc = challans.find(c => c.invoice_id === inv.id);
+    if (dc) {
+      dc.items = newItems.map(ni => {
+        const old = (dc.items || []).find(x => x.product_id === ni.product_id);
+        return {
+          ...(old || {}),
+          id: old?.id || `dc-item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          challan_id: dc.id,
+          product_id: ni.product_id,
+          product_name: old?.product_name || ni.product_name || 'Item',
+          pack_size: old?.pack_size || ni.packing || '',
+          trading_unit: ni.trading_unit,
+          base_unit: ni.base_unit,
+          units_per_trading_unit: ni.units_per_trading_unit,
+          carton_qty: ni.carton_qty,
+          loose_qty: ni.loose_qty,
+          base_qty: ni.base_qty,
+          dispatched_qty: ni.quantity,
+          batch_number: old?.batch_number || ni.batch_number || '',
+          mrp: ni.mrp
+        } as DeliveryChallanItem;
+      });
+      (dc as any).total_quantity = newItems.reduce((s, i) => s + (i.quantity || 0), 0);
+      this.saveDeliveryChallans(challans, activeBiz);
+    }
+
+    this.saveInvoices(invoices, activeBiz);
+    this.saveBatches(batches, activeBiz);
+    this.saveInventory(inventory, activeBiz);
+    this.saveLedger(ledgers, activeBiz);
+    this.saveRetailers(retailers, activeBiz);
+
+    this.saveInvoiceAuditLog({
+      id: `inv-audit-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      invoice_id: inv.id,
+      invoice_number: inv.invoice_number,
+      retailer_id: ret?.id || inv.retailer_id,
+      retailer_name: ret?.shop_name || '',
+      admin_id: editorId,
+      admin_name: user?.name || 'Admin',
+      timestamp: now,
+      reason: reason || 'Bill revised by admin',
+      old_grand_total: before.grand_total,
+      new_grand_total: grand,
+      old_outstanding_amount: oldUnpaid,
+      new_outstanding_amount: newUnpaid,
+      retailer_outstanding_delta: balanceDelta,
+      field_changes: [{ field: 'grand_total', label: 'Grand Total', old_value: `₹${before.grand_total}`, new_value: `₹${grand}` }],
+      item_changes: [],
+      snapshot_before: before,
+      snapshot_after: JSON.parse(JSON.stringify(inv)),
+      business_id: activeBiz
+    } as InvoiceAuditLog);
+
+    this.addItemActivityLog({
+      product_id: newItems[0]?.product_id || '',
+      action: 'Invoice Revised',
+      details: `Invoice ${inv.invoice_number} revised: ${changes.join('; ')}${reason ? `. Reason: ${reason}` : ''}`,
+      reference_id: inv.id,
+      user_id: editorId,
+      user_name: user?.name || 'Admin'
+    });
+    return { invoice: inv, changes };
+  }
+
+  /**
+   * Cancels everything on the order that is not billed yet.
+   * Used for "Cancel order" and for "Close short" on a backorder.
+   */
+  flowCancelRemaining(orderId: string, reason: string, user?: { id: string; name: string }): Order {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const orders = this.getOrders(activeBiz);
+    const order = orders.find(o => o.id === orderId);
+    if (!order) throw new Error('Order not found.');
+    if (order.status === 'Cancelled') return order;
+    const now = new Date().toISOString();
+    let cancelledPieces = 0;
+    (order.items || []).forEach(it => {
+      const pending = flowRemainingQty(it);
+      it.flow_packed_qty = 0;
+      if (pending <= 0) return;
+      it.cancelled_qty = (Number(it.cancelled_qty) || 0) + pending;
+      it.cancel_reason = reason;
+      it.cancelled_by = user?.name || 'Admin';
+      it.cancelled_at = now;
+      it.backordered = false;
+      cancelledPieces += pending;
+    });
+    order.flow_ready_to_bill = false;
+    const anyBilled = (order.items || []).some(it => (Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0) > 0);
+    order.status = anyBilled ? 'Completed' : 'Cancelled';
+    if (!anyBilled) order.cancellation_reason = reason;
+    order.updated_at = now;
+    this.saveOrders(orders, activeBiz);
+    this.addItemActivityLog({
+      product_id: order.items?.[0]?.product_id || '',
+      action: anyBilled ? 'Backorder Closed' : 'Order Cancelled',
+      details: `Order ${order.order_number}: ${cancelledPieces} pcs cancelled. Reason: ${reason}`,
+      reference_id: order.id,
+      user_id: user?.id || this.currentUserId,
+      user_name: user?.name || 'Admin'
+    });
+    return order;
+  }
+
   // ----------------------------------------------------
   // CLOUD-ONLY STORAGE HOOKS (used by cloudWriteThrough.ts)
   // ----------------------------------------------------
@@ -3037,7 +3689,7 @@ class FMCGDatabase {
     // Add company member for the current user
     const members = this.getCompanyMembers();
     members.push({
-      id: `cm-${Date.now()}`,
+      id: `cm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       business_id: newCompany.id,
       user_id: this.currentUserId,
       role: 'owner',
@@ -3923,7 +4575,7 @@ class FMCGDatabase {
   createSupplier(name: string, gstin: string, address: string): Supplier {
     const suppliers = this.getSuppliers();
     const newSupplier: Supplier = {
-      id: `s-${Date.now()}`,
+      id: `s-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       business_id: this.getActiveBusinessCompanyId(),
       name,
       gstin,
@@ -5176,7 +5828,7 @@ class FMCGDatabase {
     let comp = companies.find(c => c.name.toLowerCase().replace(/[^a-z0-9]/g, '') === companyName.toLowerCase().replace(/[^a-z0-9]/g, ''));
     if (!comp) {
       comp = {
-        id: `c-${Date.now()}`,
+        id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         name: companyName,
         code: companyName.substring(0, 5).toUpperCase(),
         active: true
@@ -5954,7 +6606,7 @@ class FMCGDatabase {
     const year = new Date().getFullYear();
     const existingCount = transfers.filter(t => (t.transfer_number || '').includes(`TR-${year}`)).length;
     const transferNumber = `TR-${year}-${String(existingCount + 1).padStart(5, '0')}`;
-    const transferId = `tr-${Date.now()}`;
+    const transferId = `tr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
     const items: StockTransferItem[] = data.items.map(it => {
       const prod = products.find(p => p.id === it.productId);
@@ -8020,7 +8672,7 @@ class FMCGDatabase {
     if (paidAmount > 0) {
       const payments = this.getPayments(activeBiz);
       const paymentAllocations = this.getPaymentAllocations(activeBiz);
-      const payId = `pay-${Date.now()}`;
+      const payId = `pay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const payNum = `PAY-${Date.now().toString().slice(-6)}`;
 
       payments.push({
@@ -8036,7 +8688,7 @@ class FMCGDatabase {
       });
 
       paymentAllocations.push({
-        id: `pa-${Date.now()}`,
+        id: `pa-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         payment_id: payId,
         invoice_id: invoiceId,
         amount_allocated: paidAmount,
@@ -8280,7 +8932,7 @@ class FMCGDatabase {
 
     const newOrder: Order = {
       ...orderData,
-      id: `ord-${Date.now()}`,
+      id: `ord-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       order_number: orderNum,
       status: 'Submitted',
       order_date: new Date().toISOString(),
@@ -8959,7 +9611,7 @@ class FMCGDatabase {
     );
 
     const fulfilments = this.getFulfilments();
-    const fId = `ful-${Date.now()}`;
+    const fId = `ful-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const fNum = `FUL-${new Date().getFullYear()}-${String(fulfilments.length + 1).padStart(5, '0')}`;
 
     // Group order items strictly by exact product variant & commercial trading unit
@@ -9225,7 +9877,7 @@ class FMCGDatabase {
 
     let newBackorder: Order | null = null;
     if (backorderItems.length > 0) {
-      const boId = `ord-bo-${Date.now()}`;
+      const boId = `ord-bo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const boNumber = `${order.order_number}-BO`;
       backorderItems.forEach(bi => { bi.order_id = boId; });
 
@@ -9427,7 +10079,7 @@ class FMCGDatabase {
 
     if (newItems.length === 0) return null;
 
-    const newOrdId = `ord-${Date.now()}`;
+    const newOrdId = `ord-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const newOrdNumber = `SO-${new Date().getFullYear()}-${String(orders.length + 1).padStart(5, '0')}`;
     newItems.forEach(ni => { ni.order_id = newOrdId; });
 
@@ -9715,7 +10367,7 @@ class FMCGDatabase {
     // 3. Roll remaining shortage into a consolidated Backorder record
     let newBackorder: Order | null = null;
     if (shortageBackorderItems.length > 0) {
-      const boId = `ord-bo-${Date.now()}`;
+      const boId = `ord-bo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const firstOrdNum = targetOrders[0]?.order_number || targetBackorders[0]?.order_number || 'ORD';
       const boNumber = `${firstOrdNum}-BO`;
       shortageBackorderItems.forEach(bi => { bi.order_id = boId; });
@@ -10002,8 +10654,8 @@ class FMCGDatabase {
     let igstTotal = 0;
     let hasManualRatesApplied = false;
 
-    const invoiceId = `inv-${Date.now()}`;
-    const challanId = `dc-${Date.now()}`;
+    const invoiceId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const challanId = `dc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const invoiceNumber = `INV/2026-27/${String(invoices.length + 1).padStart(5, '0')}`;
     const challanNumber = `DC/2026-27/${String(challans.length + 1).padStart(5, '0')}`;
 
@@ -10401,7 +11053,7 @@ class FMCGDatabase {
     if (confirmedQty <= 0) return null;
 
     const fulfilments = this.getFulfilments();
-    const fId = `ful-${Date.now()}`;
+    const fId = `ful-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const fNum = `FUL-${new Date().getFullYear()}-${String(fulfilments.length + 1).padStart(5, '0')}`;
 
     const delivered = oItem.delivered_qty || 0;
@@ -10517,7 +11169,7 @@ class FMCGDatabase {
     let sgstTotal = 0;
     let igstTotal = 0;
 
-    const invoiceId = `inv-pos-${Date.now()}`;
+    const invoiceId = `inv-pos-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const invoiceItems: InvoiceItem[] = [];
 
     items.forEach(item => {
@@ -10647,7 +11299,7 @@ class FMCGDatabase {
 
     // Create matching Order record for on-counter sale so it appears in Order Register & history
     const orders = this.getOrders();
-    const orderId = `ord-pos-${Date.now()}`;
+    const orderId = `ord-pos-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const orderNumber = `ORD-${String(orders.length + 1050).padStart(4, '0')}`;
     const orderItems: OrderItem[] = invoiceItems.map(invItem => ({
       id: `oi-${invItem.id}`,
@@ -10708,7 +11360,7 @@ class FMCGDatabase {
     // If paid immediately, create a Payment entry
     if (newInvoice.paid_amount > 0) {
       const payments = this.getPayments();
-      const payId = `pay-pos-${Date.now()}`;
+      const payId = `pay-pos-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const payNum = `PAY-${new Date().getFullYear()}-${String(payments.length + 1).padStart(5, '0')}`;
       
       const newPay: Payment = {
@@ -10726,7 +11378,7 @@ class FMCGDatabase {
 
       const allocations = this.getPaymentAllocations();
       allocations.push({
-        id: `alloc-${Date.now()}`,
+        id: `alloc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         payment_id: payId,
         invoice_id: invoiceId,
         amount_allocated: newInvoice.paid_amount
@@ -10766,7 +11418,7 @@ class FMCGDatabase {
     const targetGodownId = purchaseData.receiving_godown_id || defGodown?.id || (activeBiz === 'biz-saifee' ? 'gdn-saifee-main' : 'gdn-hub-a');
     const targetGodownName = godowns.find(g => g.id === targetGodownId)?.name || 'Main Godown';
 
-    const pId = `pur-${Date.now()}`;
+    const pId = `pur-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const newPurchase: Purchase = {
       ...purchaseData,
       id: pId,
@@ -11135,7 +11787,7 @@ class FMCGDatabase {
    */
   recordPayment(retailerId: string, amount: number, method: Payment['method'], refNum?: string, notes?: string): Payment {
     const payments = this.getPayments();
-    const payId = `pay-${Date.now()}`;
+    const payId = `pay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const payNum = `PAY-${new Date().getFullYear()}-${String(payments.length + 1).padStart(5, '0')}`;
 
     const newPayment: Payment = {
@@ -11256,7 +11908,7 @@ class FMCGDatabase {
     const year = new Date().getFullYear();
     const existingCNCount = sReturns.filter(sr => (sr.credit_note_number || '').includes(`CN-${year}`)).length;
     const creditNoteNumber = `CN-${year}-${String(existingCNCount + 1).padStart(5, '0')}`;
-    const retId = `sr-${Date.now()}`;
+    const retId = `sr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
     let totalTaxable = 0;
     let totalCgst = 0;
@@ -12232,8 +12884,8 @@ class FMCGDatabase {
     let igstTotal = 0;
     let totalDispatchedUnits = 0;
 
-    const invoiceId = `inv-${Date.now()}`;
-    const challanId = `dc-${Date.now()}`;
+    const invoiceId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const challanId = `dc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const invoiceNumber = `INV/2026-27/${String(invoices.length + 1).padStart(5, '0')}`;
     const challanNumber = `DC/2026-27/${String(challans.length + 1).padStart(5, '0')}`;
 
@@ -12927,8 +13579,8 @@ class FMCGDatabase {
     const invoices = this.getInvoices(activeBiz);
     const challans = this.getDeliveryChallans(activeBiz);
 
-    const invoiceId = `inv-${Date.now()}`;
-    const challanId = `dc-${Date.now()}`;
+    const invoiceId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const challanId = `dc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const invoiceNumber = `INV/2026-27/${String(invoices.length + 1).padStart(5, '0')}`;
     const challanNumber = `DC/2026-27/${String(challans.length + 1).padStart(5, '0')}`;
 
@@ -13464,14 +14116,14 @@ class FMCGDatabase {
 
       this.saveInvoices(invoices);
       this.saveOrders(orders);
-      return { id: `cred-${Date.now()}`, type: 'credit_confirmed', invoice_id: inv.id };
+      return { id: `cred-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'credit_confirmed', invoice_id: inv.id };
     }
 
     // Money Collection (UPI, Cash, Bank Transfer, Cheque, Other):
     const payments = this.getPayments();
     const allocations = this.getPaymentAllocations();
 
-    const payId = `pay-${Date.now()}`;
+    const payId = `pay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const payNum = `PAY-${new Date().getFullYear()}-${String(payments.length + 1).padStart(5, '0')}`;
 
     const allocAmt = Math.min(inv.outstanding_amount, amount);
@@ -13493,7 +14145,7 @@ class FMCGDatabase {
     this.savePayments(payments);
 
     allocations.push({
-      id: `alloc-${Date.now()}`,
+      id: `alloc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       payment_id: payId,
       invoice_id: inv.id,
       amount_allocated: allocAmt
@@ -14127,7 +14779,7 @@ class FMCGDatabase {
     // Create consolidated inward purchase record if opening stock was inwarded
     let createdPurchaseId: string | undefined;
     if (purchaseItems.length > 0) {
-      createdPurchaseId = `pur-vyapar-${Date.now()}`;
+      createdPurchaseId = `pur-vyapar-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       purchases.push({
         id: createdPurchaseId,
         business_id: activeBiz,
@@ -14644,4 +15296,43 @@ export function flowLineAmounts(item: Partial<OrderItem>, product: Partial<Produ
     igst: intraState ? 0 : a.gstAmount,
     total: a.totalAmount
   };
+}
+
+/** Orders of one shop are grouped together (any channel). Walk-in orders always stay separate. */
+export function flowShopKey(order: Pick<Order, 'id' | 'retailer_id'>): string {
+  return !order.retailer_id || isWalkInRetailerId(order.retailer_id) ? `single:${order.id}` : `shop:${order.retailer_id}`;
+}
+
+/** Where the order came from, in plain words. */
+export function flowChannelLabel(order: Pick<Order, 'source' | 'channel'>): string {
+  switch (order.source) {
+    case 'retailer_direct': return 'Retailer app';
+    case 'distributor_salesperson': return 'Salesman';
+    case 'company_salesperson': return 'Company salesman';
+    case 'counter_sale': return 'Counter';
+    default: return String(order.channel || order.source || 'Order');
+  }
+}
+
+/** Line maths used by the shop bill (same as dispatchRetailerPackingLot). rate = per trading unit. */
+export function flowBillLineAmounts(qty: number, unitsPerPack: number, rate: number, gstPercent: number, intraState: boolean) {
+  const taxable = Math.round((qty / Math.max(1, unitsPerPack || 1)) * rate * 100) / 100;
+  const gstAmt = Math.round(taxable * (gstPercent / 100) * 100) / 100;
+  const cgst = intraState ? Math.round((gstAmt / 2) * 100) / 100 : 0;
+  const sgst = intraState ? Math.round((gstAmt / 2) * 100) / 100 : 0;
+  const igst = intraState ? 0 : gstAmt;
+  return { taxable, gstPercent, cgst, sgst, igst, total: Math.round((taxable + cgst + sgst + igst) * 100) / 100 };
+}
+
+/** Order status in plain words for the shop (retailer app). tone: colour group for the badge. */
+export function flowCustomerStatus(order: Order, freeStock: Record<string, number>): { label: string; tone: 'blue' | 'sky' | 'green' | 'amber' | 'grey' } {
+  const stage = flowOrderStage(order, freeStock);
+  const anyBilled = (order.items || []).some(it => (Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0) > 0);
+  switch (stage) {
+    case 'cancelled': return { label: 'Cancelled', tone: 'grey' };
+    case 'billed': return { label: 'Billed', tone: 'green' };
+    case 'ready_to_bill': return { label: 'Packed – being billed', tone: 'sky' };
+    case 'backorder': return { label: anyBilled ? 'Partly billed – rest waiting for stock' : 'Waiting for stock', tone: 'amber' };
+    default: return { label: anyBilled ? 'Partly billed – rest being packed' : 'Received – being packed', tone: 'blue' };
+  }
 }

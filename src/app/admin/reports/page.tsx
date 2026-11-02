@@ -332,7 +332,7 @@ export default function AdminReports() {
             <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-800 text-xs font-black rounded uppercase tracking-wider">
               Distributor Management System
             </span>
-            <span className="text-xs text-slate-400 font-bold">&bull; 5,500+ FMCG Catalog</span>
+            <span className="text-xs text-slate-400 font-bold">&bull; {products.length.toLocaleString('en-IN')} products in catalogue</span>
           </div>
           <h2 className="text-xl md:text-2xl font-black text-slate-900 mt-1 tracking-tight">
             ERP Financial &amp; Operations Reports

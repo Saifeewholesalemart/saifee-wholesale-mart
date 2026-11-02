@@ -53,6 +53,8 @@ export interface SyncPullRequest {
   limit?: number;
   offset?: number;
   tables?: string[];
+  /** Set for retailer logins: catalogue + own shop records only, no purchase cost */
+  retailerId?: string | null;
 }
 
 export interface SyncPullResponse {
@@ -171,79 +173,120 @@ export async function executeServerSyncPull(
 
   let hasMore = false;
 
-  // 1. Master entities
-  changes.products = await fetchTableDeltas('products', 'updated_at');
-  if (changes.products.length >= limitPerTable) hasMore = true;
-
-  changes.categories = await fetchTableDeltas('categories', 'updated_at');
-  if (changes.categories.length >= limitPerTable) hasMore = true;
-
-  changes.companies = await fetchTableDeltas('companies', 'created_at', false);
-  changes.godowns = await fetchTableDeltas('godowns', 'updated_at');
-  changes.retailers = await fetchTableDeltas('retailers', 'updated_at');
-  changes.suppliers = await fetchTableDeltas('suppliers', 'created_at');
-
   // Tenant-isolated profiles query (NEVER leak password_hash or other tenants' data)
-  try {
-    const profRes = await pool.query(
-      `SELECT id, business_id, email, mobile, phone, contact_no, name, full_name, role, profile_type,
-              sales_role_type, trade_scope, custom_role, department, company_id, retailer_id,
-              assigned_company_ids, assigned_category_ids, category_access_mode,
-              active, status, created_at, updated_at
-       FROM profiles
-       WHERE business_id = $1 AND updated_at > $2
-       ORDER BY updated_at ASC, id ASC LIMIT $3 OFFSET $4;`,
-      [activeBiz, since, limitPerTable, pageOffset]
-    );
-    changes.profiles = profRes.rows;
-    if (changes.profiles.length >= limitPerTable) hasMore = true;
-  } catch (profErr: any) {
-    console.warn('[SERVER_SYNC_PULL_WARN]: Profiles delta query warning:', profErr?.message);
-    changes.profiles = [];
-  }
+  const fetchProfiles = async (): Promise<any[]> => {
+    try {
+      const profRes = await pool.query(
+        `SELECT id, business_id, email, mobile, phone, contact_no, name, full_name, role, profile_type,
+                sales_role_type, trade_scope, custom_role, department, company_id, retailer_id,
+                assigned_company_ids, assigned_category_ids, category_access_mode,
+                active, status, created_at, updated_at
+         FROM profiles
+         WHERE business_id = $1 AND updated_at > $2
+         ORDER BY updated_at ASC, id ASC LIMIT $3 OFFSET $4;`,
+        [activeBiz, since, limitPerTable, pageOffset]
+      );
+      return profRes.rows;
+    } catch (profErr: any) {
+      console.warn('[SERVER_SYNC_PULL_WARN]: Profiles delta query warning:', profErr?.message);
+      return [];
+    }
+  };
 
-  // 2. Junction table: product_categories (strictly tenant-scoped by joining products)
-  try {
-    const pcRes = await pool.query(
-      `SELECT pc.id, pc.product_id, pc.category_id, pc.created_at
-       FROM product_categories pc
-       JOIN products p ON pc.product_id = p.id
-       WHERE p.business_id = $1 AND pc.created_at > $2
-       ORDER BY pc.created_at ASC, pc.id ASC LIMIT $3 OFFSET $4;`,
-      [activeBiz, since, limitPerTable, pageOffset]
-    );
-    changes.product_categories = pcRes.rows;
-    if (changes.product_categories.length >= limitPerTable) hasMore = true;
-  } catch (pcErr: any) {
-    console.warn('[SERVER_SYNC_PULL_WARN]: product_categories delta query warning:', pcErr?.message);
-    changes.product_categories = [];
-  }
+  // Junction table: product_categories (strictly tenant-scoped by joining products)
+  const fetchProductCategories = async (): Promise<any[]> => {
+    try {
+      const pcRes = await pool.query(
+        `SELECT pc.id, pc.product_id, pc.category_id, pc.created_at
+         FROM product_categories pc
+         JOIN products p ON pc.product_id = p.id
+         WHERE p.business_id = $1 AND pc.created_at > $2
+         ORDER BY pc.created_at ASC, pc.id ASC LIMIT $3 OFFSET $4;`,
+        [activeBiz, since, limitPerTable, pageOffset]
+      );
+      return pcRes.rows;
+    } catch (pcErr: any) {
+      console.warn('[SERVER_SYNC_PULL_WARN]: product_categories delta query warning:', pcErr?.message);
+      return [];
+    }
+  };
 
+  // Retailer login: tables a shop app never needs are not read at all
+  const R = !!params.retailerId;
+  const none = async (): Promise<any[]> => [];
+
+  // PERFORMANCE: all table queries run at the same time (same results as running them one by one)
+  const [
+    products, categories, companies, godowns, retailers, suppliers, profiles, productCategories,
+    inventory, inventoryBatches, orders, invoices, payments,
+    stockLedger, customerLedger, billingRateAudits, itemActivityLogs, invoiceAudits, cashFlow
+  ] = await Promise.all([
+    fetchTableDeltas('products', 'updated_at'),
+    fetchTableDeltas('categories', 'updated_at'),
+    fetchTableDeltas('companies', 'created_at', false),
+    fetchTableDeltas('godowns', 'updated_at'),
+    fetchTableDeltas('retailers', 'updated_at'),
+    R ? none() : fetchTableDeltas('suppliers', 'created_at'),
+    R ? none() : fetchProfiles(),
+    fetchProductCategories(),
+    fetchTableDeltas('inventory', 'updated_at'),
+    fetchTableDeltas('inventory_batches', 'created_at'),
+    fetchTableDeltas('orders', 'updated_at'),
+    fetchTableDeltas('invoices', 'updated_at'),
+    fetchTableDeltas('payments', 'date'),
+    R ? none() : fetchTableDeltas('stock_ledger', 'created_at'),
+    R ? none() : fetchTableDeltas('customer_ledger', 'created_at'),
+    R ? none() : fetchTableDeltas('billing_rate_audit_logs', 'created_at'),
+    R ? none() : fetchTableDeltas('item_activity_logs', 'created_at'),
+    R ? none() : fetchTableDeltas('invoice_audits', 'created_at'),
+    R ? none() : fetchTableDeltas('cash_flow_transactions', 'created_at')
+  ]);
+
+  // 1. Master entities
+  changes.products = products;
+  changes.categories = categories;
+  changes.companies = companies;
+  changes.godowns = godowns;
+  changes.retailers = retailers;
+  changes.suppliers = suppliers;
+  changes.profiles = profiles;
+  // 2. Junction table
+  changes.product_categories = productCategories;
   // 3. Inventory & Batches
-  changes.inventory = await fetchTableDeltas('inventory', 'updated_at');
-  changes.inventory_batches = await fetchTableDeltas('inventory_batches', 'created_at');
-
+  changes.inventory = inventory;
+  changes.inventory_batches = inventoryBatches;
   // 4. Transactions
-  changes.orders = await fetchTableDeltas('orders', 'updated_at');
-  if (changes.orders.length >= limitPerTable) hasMore = true;
-
-  changes.invoices = await fetchTableDeltas('invoices', 'updated_at');
-  if (changes.invoices.length >= limitPerTable) hasMore = true;
-
-  changes.payments = await fetchTableDeltas('payments', 'date');
-
+  changes.orders = orders;
+  changes.invoices = invoices;
+  changes.payments = payments;
   // 5. Append-only Ledgers & Audits
-  changes.stock_ledger = await fetchTableDeltas('stock_ledger', 'created_at');
-  if (changes.stock_ledger.length >= limitPerTable) hasMore = true;
-
-  changes.customer_ledger = await fetchTableDeltas('customer_ledger', 'created_at');
-  changes.billing_rate_audit_logs = await fetchTableDeltas('billing_rate_audit_logs', 'created_at');
-  changes.item_activity_logs = await fetchTableDeltas('item_activity_logs', 'created_at');
-  changes.invoice_audits = await fetchTableDeltas('invoice_audits', 'created_at');
-  changes.cash_flow_transactions = await fetchTableDeltas('cash_flow_transactions', 'created_at');
+  changes.stock_ledger = stockLedger;
+  changes.customer_ledger = customerLedger;
+  changes.billing_rate_audit_logs = billingRateAudits;
+  changes.item_activity_logs = itemActivityLogs;
+  changes.invoice_audits = invoiceAudits;
+  changes.cash_flow_transactions = cashFlow;
 
   // Any table that filled a full page may have more rows on the next page
   hasMore = Object.values(changes).some(rows => Array.isArray(rows) && rows.length >= limitPerTable);
+
+  // Retailer login: only its own shop records, and never our purchase cost
+  if (R) {
+    const rid = String(params.retailerId);
+    const own = (rows?: any[]) => (rows || []).filter(r => String(r?.retailer_id || '') === rid);
+    changes.retailers = (changes.retailers || []).filter((r: any) => String(r?.id) === rid);
+    changes.orders = own(changes.orders);
+    changes.invoices = own(changes.invoices);
+    changes.payments = own(changes.payments);
+    const noCost = (rows?: any[]) => (rows || []).map((r: any) => {
+      const { purchase_price, loose_purchase_price, purchase_rate, cost_price, ...rest } = r || {};
+      void purchase_price; void loose_purchase_price; void purchase_rate; void cost_price;
+      return rest;
+    });
+    changes.products = noCost(changes.products);
+    changes.inventory_batches = noCost(changes.inventory_batches);
+    changes.inventory = noCost(changes.inventory);
+  }
 
   // 6. Query Tombstones (records soft-deleted or marked inactive since `since`)
   try {

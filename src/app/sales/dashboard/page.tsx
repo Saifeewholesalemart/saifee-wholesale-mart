@@ -1,15 +1,16 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useDeferredValue, useCallback } from 'react';
 import { useDb, SalespersonCartItem } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
+import { useUrlStep } from '@/lib/useUrlStep';
 import { 
   Search, ShoppingCart, Plus, Minus, User, History, ArrowRight, RotateCcw, 
   Package, Check, X, ShieldAlert, CheckCircle, Percent, Store, Sparkles,
   Eye, FileText, Lock, ShieldCheck, Layers, Building, Tag, ChevronRight, ChevronLeft,
   Info, ExternalLink, Calendar, MapPin, AlertCircle, ArrowLeft, Clock
 } from 'lucide-react';
-import { Product, Retailer, Order, formatQuantityDisplay, splitBaseQuantity, calculateItemAmounts, PendingOrderItemWarning, getProductTradeMode } from '@/lib/db';
+import { Product, Retailer, Order, formatQuantityDisplay, splitBaseQuantity, calculateItemAmounts, PendingOrderItemWarning, getProductTradeMode, isWalkInRetailerId, computeFreeStockByProduct, flowCustomerStatus } from '@/lib/db';
 import LastBillingRatesModal from '@/components/LastBillingRatesModal';
 import SmartSearchBar from '@/components/SmartSearchBar';
 import AddRetailerModal from '@/components/AddRetailerModal';
@@ -20,7 +21,7 @@ import OrderReviewModal from '@/components/orders/OrderReviewModal';
 export default function SalesDashboard() {
   const { 
     currentUser, setCurrentUser, logout, products, batches, retailers, orders, placeOrder, inventory, profiles,
-    companies, categories, getCategoriesForProduct,
+    companies, categories, productCategories,
     salespersonCart: cart, setSalespersonCart: setCart,
     getAssignedCategoriesForSalesperson, getAssignedCategoriesForRetailer,
     isProductVisibleToSalesperson, isProductVisibleToRetailer,
@@ -40,8 +41,9 @@ export default function SalesDashboard() {
   }, []);
 
   // View States
-  const [activeTab, setActiveTab] = useState<'order' | 'history'>('order');
-  const [orderStep, setOrderStep] = useState<'retailer' | 'catalog' | 'cart' | 'confirm' | 'success'>('retailer');
+  // Tab and step are kept in the URL so the phone Back button goes to the previous screen
+  const [activeTab, setActiveTab] = useUrlStep<'order' | 'history'>('tab', 'order', ['order', 'history']);
+  const [orderStep, setOrderStep] = useUrlStep<'retailer' | 'catalog' | 'cart' | 'confirm' | 'success'>('step', 'retailer', ['retailer', 'catalog', 'cart', 'confirm', 'success']);
   
   // Selection States
   const [selectedRetailerId, setSelectedRetailerId] = useState('');
@@ -70,8 +72,16 @@ export default function SalesDashboard() {
   // 1. Target Retailer object
   const selectedRetailer = retailers.find(r => r.id === selectedRetailerId);
 
+  // A step that needs a shop (e.g. page reopened on ?step=cart) falls back to choosing the shop
+  useEffect(() => {
+    if (orderStep !== 'retailer' && orderStep !== 'success' && !selectedRetailer && retailers.length > 0) {
+      setOrderStep('retailer', { replace: true });
+    }
+  }, [orderStep, selectedRetailer, retailers.length, setOrderStep]);
+
   // 2. Filter Retailers based on search
-  const filteredRetailers = retailers.filter(r => 
+  // The shop counter's walk-in record is not a real shop: salesmen never order for it
+  const filteredRetailers = retailers.filter(r => !isWalkInRetailerId(r.id) && r.active !== false).filter(r =>
     retailerSearch.trim() === '' ||
     (r.shop_name || '').toLowerCase().includes(retailerSearch.toLowerCase()) ||
     (r.owner_name || '').toLowerCase().includes(retailerSearch.toLowerCase()) ||
@@ -99,42 +109,117 @@ export default function SalesDashboard() {
     ? ['All', ...assignedCategories.map(c => c.name)]
     : ['All', ...Array.from(new Set(products.map(p => p.category)))];
 
-  const filteredProducts = products.filter(p => {
-    // Salesperson category assignment check
-    if (currentUser && !isProductVisibleToSalesperson(p.id, currentUser.id)) {
-      return false;
-    }
+  // PERFORMANCE: lookups built once per data change (not once per product, per render)
+  const productById = useMemo(() => new Map(products.map(p => [p.id, p])), [products]);
+  const batchesByProduct = useMemo(() => {
+    const m = new Map<string, typeof batches>();
+    batches.forEach(b => {
+      if (!(b.quantity > 0)) return;
+      const list = m.get(b.product_id);
+      if (list) list.push(b); else m.set(b.product_id, [b]);
+    });
+    return m;
+  }, [batches]);
+  const productCats = useMemo(() => {
+    const catById = new Map(categories.map(c => [c.id, c]));
+    const m = new Map<string, { ids: string[]; cats: typeof categories }>();
+    productCategories.forEach(pc => {
+      const e = m.get(pc.product_id) || { ids: [], cats: [] };
+      e.ids.push(pc.category_id);
+      const c = catById.get(pc.category_id);
+      if (c) e.cats.push(c);
+      m.set(pc.product_id, e);
+    });
+    return m;
+  }, [categories, productCategories]);
+  const activeCategoryCount = useMemo(() => categories.filter(c => c.active).length, [categories]);
 
-    // Retailer category assignment check if retailer is selected
-    if (selectedRetailer && !isProductVisibleToRetailer(p.id, selectedRetailer.id)) {
-      return false;
-    }
+  // Same rules as db.isProductVisibleToSalesperson / isProductVisibleToRetailer, worked out once
+  const salesVisible = useMemo(() => {
+    const profile = currentUser ? profiles.find(x => x.id === currentUser.id) : undefined;
+    if (!currentUser || !profile || profile.role === 'admin') return (_p: any) => true;
+    const companyScope = profile.role === 'sales_co' || profile.sales_role_type === 'COMPANY' || profile.trade_scope === 'RESTRICTED';
+    const allowedCompanies = new Set<string>(
+      Array.isArray(profile.assigned_company_ids) && profile.assigned_company_ids.length > 0
+        ? profile.assigned_company_ids
+        : (profile.company_id ? [profile.company_id] : [])
+    );
+    const allowedCats = getAssignedCategoriesForSalesperson(currentUser.id);
+    const allowedIds = new Set(allowedCats.map(c => c.id));
+    const allowedNames = new Set(allowedCats.map(c => c.name.toLowerCase()));
+    const fullAccess = profile.category_access_mode !== 'custom' && allowedCats.length === activeCategoryCount;
+    return (p: any) => {
+      if (companyScope && allowedCompanies.size > 0 && (!p.company_id || !allowedCompanies.has(p.company_id))) return false;
+      return (productCats.get(p.id)?.ids || []).some(id => allowedIds.has(id)) ||
+        allowedNames.has((p.category || '').toLowerCase()) || fullAccess;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, profiles, categories, productCats, activeCategoryCount]);
+  const retailerVisible = useMemo(() => {
+    if (!selectedRetailer) return (_p: any) => true;
+    const allowedCats = getAssignedCategoriesForRetailer(selectedRetailer.id);
+    const allowedIds = new Set(allowedCats.map(c => c.id));
+    const allowedNames = new Set(allowedCats.map(c => c.name.toLowerCase()));
+    const fullAccess = selectedRetailer.category_access_mode !== 'custom' && allowedCats.length === activeCategoryCount;
+    return (p: any) =>
+      (productCats.get(p.id)?.ids || []).some(id => allowedIds.has(id)) ||
+      allowedNames.has((p.category || '').toLowerCase()) || fullAccess;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRetailer, categories, retailers, productCats, activeCategoryCount]);
 
-    const matchCompany = !isCompanySalesperson || 
-      (assignedCompanyIds.length > 0 ? (p.company_id && assignedCompanyIds.includes(p.company_id)) : (!companyIdFilter || p.company_id === companyIdFilter));
-    if (!matchCompany) return false;
+  const deferredProductSearch = useDeferredValue(productSearch);
+  // For the order status shown in the Order Book (packed / waiting for stock / billed)
+  const freeStockForStatus = useMemo(() => computeFreeStockByProduct(batches, orders), [batches, orders]);
+  const filteredProducts = useMemo(() => {
+    const q = deferredProductSearch.trim().toLowerCase();
+    return products.filter(p => {
+      // Salesperson category assignment check
+      if (!salesVisible(p)) return false;
+      // Retailer category assignment check if retailer is selected
+      if (!retailerVisible(p)) return false;
 
-    let matchCat = selectedCategory === 'All';
-    if (!matchCat) {
-      const prodCats = getCategoriesForProduct(p.id);
-      if (prodCats.length > 0) {
-        matchCat = prodCats.some(c => c.active && c.name === selectedCategory);
-      } else {
-        matchCat = p.category === selectedCategory;
+      const matchCompany = !isCompanySalesperson ||
+        (assignedCompanyIds.length > 0 ? (p.company_id && assignedCompanyIds.includes(p.company_id)) : (!companyIdFilter || p.company_id === companyIdFilter));
+      if (!matchCompany) return false;
+
+      let matchCat = selectedCategory === 'All';
+      if (!matchCat) {
+        const prodCats = productCats.get(p.id)?.cats || [];
+        if (prodCats.length > 0) {
+          matchCat = prodCats.some(c => c.active && c.name === selectedCategory);
+        } else {
+          matchCat = p.category === selectedCategory;
+        }
       }
-    }
-    if (!matchCat) return false;
+      if (!matchCat) return false;
 
-    const matchSearch = productSearch.trim() === '' ||
-      p.name.toLowerCase().includes(productSearch.toLowerCase()) ||
-      p.brand.toLowerCase().includes(productSearch.toLowerCase()) ||
-      p.product_code.toLowerCase().includes(productSearch.toLowerCase());
-    return matchSearch;
+      return q === '' ||
+        (p.name || '').toLowerCase().includes(q) ||
+        (p.brand || '').toLowerCase().includes(q) ||
+        (p.product_code || '').toLowerCase().includes(q);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products, salesVisible, retailerVisible, isCompanySalesperson, companyIdFilter, assignedCompanyIds.join(','), selectedCategory, productCats, deferredProductSearch]);
+
+  // Show products in steps while scrolling (all products stay available)
+  const PAGE_STEP = 40;
+  const [visibleCount, setVisibleCount] = useState(PAGE_STEP);
+  useEffect(() => { setVisibleCount(PAGE_STEP); }, [deferredProductSearch, selectedCategory, selectedRetailerId]);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) setVisibleCount(c => c + PAGE_STEP);
+    }, { rootMargin: '600px' });
+    io.observe(el);
+    return () => io.disconnect();
   });
+  const visibleProducts = filteredProducts.slice(0, visibleCount);
 
   const getProductMrpLots = (productId: string) => {
-    const prod = products.find(p => p.id === productId);
-    const prodBatches = batches.filter(b => b.product_id === productId && b.quantity > 0);
+    const prod = productById.get(productId);
+    const prodBatches = batchesByProduct.get(productId) || [];
     if (prodBatches.length === 0) {
       return [{
         mrp: prod?.mrp || 0,
@@ -222,6 +307,20 @@ export default function SalesDashboard() {
     };
     setCart(updated);
   };
+
+  // PERFORMANCE: stable helpers (always use the latest cart) so unchanged cards are not redrawn
+  const lotsCache = useMemo(() => new Map<string, SalesLot[]>(), [productById, batchesByProduct]);
+  const getLotsCached = (productId: string): SalesLot[] => {
+    let v = lotsCache.get(productId);
+    if (!v) { v = getProductMrpLots(productId) as SalesLot[]; lotsCache.set(productId, v); }
+    return v;
+  };
+  const latest = useRef({ getCartItem, handleUpdateQty, handleSetQty, handleUpdateDiscount });
+  latest.current = { getCartItem, handleUpdateQty, handleSetQty, handleUpdateDiscount };
+  const getCartItemStable = useCallback((k: string) => latest.current.getCartItem(k), []);
+  const handleUpdateQtyStable = useCallback((k: string, t: 'carton' | 'loose', d: number) => latest.current.handleUpdateQty(k, t, d), []);
+  const handleSetQtyStable = useCallback((k: string, t: 'carton' | 'loose', v: number) => latest.current.handleSetQty(k, t, v), []);
+  const handleUpdateDiscountStable = useCallback((k: string, t: 'carton' | 'loose', v: number) => latest.current.handleUpdateDiscount(k, t, v), []);
 
   // Cart aggregate metrics
   const cartItemKeys = Object.keys(cart).filter(k => {
@@ -375,7 +474,7 @@ export default function SalesDashboard() {
     setLatestOrderNum(ord.order_number);
     setCart({});
     setShowPendingWarningModal(false);
-    setOrderStep('success');
+    setOrderStep('success', { replace: true });
   };
 
   const handleRepeatOrder = (pastOrder: Order) => {
@@ -672,233 +771,33 @@ export default function SalesDashboard() {
 
                 {/* Catalogue Grid */}
                 <div className="space-y-3">
-                  {filteredProducts.map(p => {
-                    const lots = getProductMrpLots(p.id);
-                    const activeMrp = selectedProductMrp[p.id] || lots[0]?.mrp || p.mrp;
-                    const activeLot = lots.find(l => l.mrp === activeMrp) || lots[0] || {
-                      mrp: p.mrp,
-                      selling_price: p.selling_price,
-                      purchase_rate: p.purchase_price,
-                      available_qty: 0
-                    };
-                    const cartKey = `${p.id}__mrp_${activeMrp}`;
-                    const cItem = getCartItem(cartKey);
-                    const unitsPerPack = p.units_per_box_carton || 1;
-                    const cartonRate = activeLot.selling_price || p.selling_price;
-                    const looseRate = p.loose_price_mode === 'manual' && p.loose_selling_price != null
-                      ? p.loose_selling_price
-                      : (cartonRate / unitsPerPack);
-                    
-                    const tradeModeInfo = getProductTradeMode(p);
-                    const allowCarton = tradeModeInfo.allowCarton;
-                    const allowPieces = tradeModeInfo.allowPieces;
-                    const isCartonOnly = allowCarton && !allowPieces;
-                    const isPieceOnly = !allowCarton && allowPieces;
-                    const isBoth = allowCarton && allowPieces;
-                    
-                    const stock = activeLot.available_qty;
-                    const hasCart = cItem.cartonQty > 0 || cItem.looseQty > 0;
-                    
+                  {visibleProducts.map(p => {
+                    const lots = getLotsCached(p.id);
+                    const cartSig = lots.map(l => {
+                      const c = getCartItem(`${p.id}__mrp_${l.mrp}`);
+                      return `${l.mrp}:${c.cartonQty}:${c.looseQty}:${c.cartonDiscount}:${c.looseDiscount}`;
+                    }).join('|');
                     return (
-                      <div key={p.id} className="erp-card bg-white p-4 space-y-3 shadow-xs border-slate-150 relative">
-                        <div className="flex justify-between items-start gap-4">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded uppercase tracking-wider">{p.brand}</span>
-                              {isCartonOnly && (
-                                <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded text-xs font-bold">
-                                  {p.trading_unit || 'Carton'} Only
-                                </span>
-                              )}
-                              {isPieceOnly && (
-                                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded text-xs font-bold">
-                                  {p.base_unit || 'Pieces'} Only
-                                </span>
-                              )}
-                              {isBoth && (
-                                <span className="px-2 py-0.5 bg-cyan-50 text-cyan-800 border border-cyan-300 rounded text-xs font-bold">
-                                  Carton &amp; Pieces
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1.5 flex-wrap mt-1">
-                              <h4 className="font-extrabold text-slate-900 text-sm block leading-tight truncate">{p.name}</h4>
-                              <span className="px-2 py-0.5 rounded text-xs font-black bg-emerald-50 text-emerald-800 border border-emerald-300">
-                                MRP ₹{activeMrp || p.mrp}
-                              </span>
-                            </div>
-                            <span className="text-xs text-slate-500 block mt-0.5 font-medium">
-                              Packing: <strong className="text-slate-700 font-bold">{isPieceOnly ? `1 ${p.base_unit || 'Piece'}` : (p.pack_size || `${unitsPerPack} ${p.base_unit || 'Pcs'}/${p.trading_unit || 'Box'}`)}</strong>
-                            </span>
-                            
-                            {lots.length > 1 ? (
-                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                <span className="text-xs font-bold text-slate-600 mr-1">Stock Lots:</span>
-                                {lots.map(l => (
-                                  <button
-                                    key={l.mrp}
-                                    type="button"
-                                    onClick={() => setSelectedProductMrp(prev => ({ ...prev, [p.id]: l.mrp }))}
-                                    className={`px-2.5 py-1 rounded text-xs font-bold transition-colors cursor-pointer border ${
-                                      activeMrp === l.mrp
-                                        ? 'bg-cyan-600 text-white border-cyan-600 shadow-xs'
-                                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                                    }`}
-                                  >
-                                    MRP ₹{l.mrp} ({formatQuantityDisplay(l.available_qty, unitsPerPack, p.trading_unit, p.base_unit)})
-                                  </button>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="mt-1 flex items-center gap-2">
-                                <span className="text-xs font-bold text-slate-600">Printed MRP: <strong className="text-slate-800">₹{activeLot.mrp}</strong></span>
-                              </div>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={() => setRateHistoryProduct(p)}
-                              className="mt-1.5 inline-flex items-center gap-1 text-xs text-cyan-700 hover:text-cyan-900 font-bold hover:underline cursor-pointer"
-                            >
-                              <History className="w-3.5 h-3.5 text-cyan-600" />
-                              <span>View Last 5 Billing Rates</span>
-                            </button>
-                          </div>
-                          
-                          <div className="text-right flex-shrink-0">
-                            {allowCarton && (
-                              <div>
-                                <span className="text-sm font-black text-slate-900 block">₹{cartonRate.toFixed(2)}/{p.trading_unit}</span>
-                                {p.carton_discount ? (
-                                  <span className="text-[11px] font-bold text-emerald-600 block">
-                                    ₹{(cartonRate - p.carton_discount).toFixed(2)} net (-₹{p.carton_discount} disc)
-                                  </span>
-                                ) : null}
-                              </div>
-                            )}
-                            {allowPieces && (
-                              <div>
-                                <span className={`text-xs font-bold text-emerald-700 block ${allowCarton ? 'mt-0.5' : 'text-sm font-black text-slate-900'}`}>
-                                  ₹{looseRate.toFixed(2)}/{p.base_unit || 'Pc'}
-                                </span>
-                                {isPieceOnly && p.loose_discount ? (
-                                  <span className="text-[11px] font-bold text-emerald-600 block">
-                                    ₹{(looseRate - p.loose_discount).toFixed(2)} net (-₹{p.loose_discount} disc)
-                                  </span>
-                                ) : null}
-                              </div>
-                            )}
-                            <span className={`text-xs font-bold block mt-1 ${stock > 0 ? 'text-slate-600' : 'text-red-500'}`}>
-                              {stock > 0 ? formatQuantityDisplay(stock, unitsPerPack, p.trading_unit, p.base_unit) : 'Out of Stock'}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Dual Steppers & Discount Inputs with Direct Numeric Entry */}
-                        <div className="border-t border-slate-100 pt-2.5 space-y-2">
-                          {/* Cartons row - Only display if allowCarton */}
-                          {allowCarton && (
-                            <div className="flex items-center justify-between gap-2 bg-slate-50 p-2 rounded-lg border border-slate-150">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold text-slate-700 uppercase">{p.trading_unit}s:</span>
-                                <div className="flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
-                                    className="w-6 h-6 bg-white hover:bg-slate-200 border border-slate-200 rounded flex items-center justify-center text-slate-700 font-bold cursor-pointer"
-                                    title="Decrease 1 carton"
-                                  >
-                                    <Minus className="w-3.5 h-3.5" />
-                                  </button>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    placeholder="0"
-                                    value={cItem.cartonQty || ''}
-                                    onChange={(e) => handleSetQty(cartKey, 'carton', parseInt(e.target.value) || 0)}
-                                    className="w-12 border border-slate-300 bg-white rounded text-center py-0.5 font-black text-xs text-cyan-700 focus:border-cyan-500 focus:outline-none"
-                                    title="Type carton quantity directly"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
-                                    className="w-6 h-6 bg-cyan-600 text-white hover:bg-cyan-700 rounded flex items-center justify-center font-bold cursor-pointer"
-                                    title="Increase 1 carton"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-
-                              {cItem.cartonQty > 0 && (
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs font-bold text-slate-600">Disc (₹/{p.trading_unit}):</span>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    placeholder="0"
-                                    value={cItem.cartonDiscount || ''}
-                                    onChange={(e) => handleUpdateDiscount(cartKey, 'carton', parseFloat(e.target.value) || 0)}
-                                    className="w-14 border border-slate-250 bg-white rounded text-center py-0.5 font-bold text-xs"
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Loose Pieces row - Only display if allowPieces */}
-                          {allowPieces && (
-                            <div className="flex items-center justify-between gap-2 bg-emerald-50/60 p-2 rounded-lg border border-emerald-100">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold text-emerald-800 uppercase">{isPieceOnly ? (p.base_unit || 'Pieces') : `Loose (${p.base_unit || 'Pc'}):`}</span>
-                                <div className="flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateQty(cartKey, 'loose', -1)}
-                                    className="w-6 h-6 bg-white hover:bg-emerald-100 border border-emerald-200 text-emerald-800 rounded flex items-center justify-center font-bold cursor-pointer"
-                                    title="Decrease 1 loose unit"
-                                  >
-                                    <Minus className="w-3.5 h-3.5" />
-                                  </button>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    placeholder="0"
-                                    value={cItem.looseQty || ''}
-                                    onChange={(e) => handleSetQty(cartKey, 'loose', parseInt(e.target.value) || 0)}
-                                    className="w-12 border border-emerald-300 bg-white rounded text-center py-0.5 font-black text-xs text-emerald-700 focus:border-emerald-500 focus:outline-none"
-                                    title="Type loose quantity directly"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateQty(cartKey, 'loose', 1)}
-                                    className="w-6 h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
-                                    title="Increase 1 loose unit"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-
-                              {cItem.looseQty > 0 && (
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs font-bold text-emerald-800">Disc (₹/{p.base_unit || 'Pc'}):</span>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    placeholder="0"
-                                    value={cItem.looseDiscount || ''}
-                                    onChange={(e) => handleUpdateDiscount(cartKey, 'loose', parseFloat(e.target.value) || 0)}
-                                    className="w-14 border border-emerald-200 bg-white rounded text-center py-0.5 font-bold text-xs"
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                      <SalesProductCard
+                        key={p.id}
+                        p={p}
+                        lots={lots}
+                        selectedMrp={selectedProductMrp[p.id]}
+                        cartSig={cartSig}
+                        getCartItem={getCartItemStable}
+                        handleUpdateQty={handleUpdateQtyStable}
+                        handleSetQty={handleSetQtyStable}
+                        handleUpdateDiscount={handleUpdateDiscountStable}
+                        setSelectedProductMrp={setSelectedProductMrp}
+                        setRateHistoryProduct={setRateHistoryProduct}
+                      />
                     );
                   })}
+                  {visibleProducts.length < filteredProducts.length && (
+                    <div ref={loadMoreRef} className="py-6 text-center text-xs font-semibold text-slate-500">
+                      Showing {visibleProducts.length} of {filteredProducts.length} products. Scroll to see more.
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1262,7 +1161,7 @@ export default function SalesDashboard() {
                 className="bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-700 focus:outline-none cursor-pointer max-w-[140px] truncate shadow-2xs"
               >
                 <option value="ALL">All Retailers</option>
-                {retailers.map(r => (
+                {retailers.filter(r => !isWalkInRetailerId(r.id)).map(r => (
                   <option key={r.id} value={r.id}>{r.shop_name}</option>
                 ))}
               </select>
@@ -1285,13 +1184,14 @@ export default function SalesDashboard() {
                   const isScopedOrder = ord.is_scoped_view;
                   const visibleItemCount = ord.items?.length || 0;
                   const totalOriginal = ord.total_original_items_count || visibleItemCount;
-                  const isUnconfirmed = ord.status === 'Submitted' || ord.status === 'Under Review' || ord.status === 'Draft';
+                  const shopStatus = flowCustomerStatus(ord, freeStockForStatus);
+                  const isUnconfirmed = shopStatus.tone === 'blue';
 
                   return (
                     <div 
                       key={ord.id} 
                       className={`erp-card bg-white p-3.5 space-y-2.5 text-xs transition-all cursor-pointer shadow-xs group ${
-                        isUnconfirmed ? 'border-amber-300 ring-1 ring-amber-200 hover:border-amber-400' : 'hover:border-cyan-400'
+                        isUnconfirmed ? 'border-indigo-300 ring-1 ring-indigo-100 hover:border-indigo-400' : 'hover:border-cyan-400'
                       }`}
                       onClick={() => setOrderForReview(ord)}
                     >
@@ -1303,15 +1203,13 @@ export default function SalesDashboard() {
                           </span>
                         </div>
                         <span className={`px-2 py-0.5 rounded-[4px] text-[10px] font-black uppercase tracking-wider shrink-0 ${
-                          isUnconfirmed ? 'bg-amber-100 text-amber-800 border border-amber-300' :
-                          ord.status === 'Confirmed' ? 'badge-confirmed' :
-                          ord.status === 'Partially Confirmed' ? 'badge-partially-confirmed' :
-                          ord.status === 'Packed' ? 'bg-amber-100 text-amber-800 border border-amber-300' :
-                          ord.status === 'Dispatched' ? 'badge-dispatched' :
-                          ord.status === 'Delivered' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' :
+                          shopStatus.tone === 'blue' ? 'bg-indigo-100 text-indigo-900 border border-indigo-300' :
+                          shopStatus.tone === 'sky' ? 'bg-sky-100 text-sky-900 border border-sky-300' :
+                          shopStatus.tone === 'green' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' :
+                          shopStatus.tone === 'amber' ? 'bg-amber-100 text-amber-900 border border-amber-300' :
                           'badge-cancelled'
                         }`}>
-                          {isUnconfirmed ? 'ORDER PLACED / PENDING CONFIRMATION' : ord.status}
+                          {shopStatus.label}
                         </span>
                       </div>
 
@@ -1373,14 +1271,10 @@ export default function SalesDashboard() {
                               e.stopPropagation();
                               setOrderForReview(ord);
                             }}
-                            className={`px-2.5 py-1 rounded text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer ${
-                              isUnconfirmed
-                                ? 'bg-amber-500 hover:bg-amber-600 text-white font-black shadow-xs'
-                                : 'text-slate-700 hover:text-cyan-700 hover:underline'
-                            }`}
+                            className="px-2.5 py-1 rounded text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer text-slate-700 hover:text-cyan-700 hover:underline"
                           >
                             <Eye className="w-3.5 h-3.5" />
-                            <span>{isUnconfirmed ? 'Review & Confirm' : 'Details'}</span>
+                            <span>Details</span>
                           </button>
                           <button
                             type="button"
@@ -1412,10 +1306,10 @@ export default function SalesDashboard() {
             
             <div className="space-y-1">
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 inline-block mb-1">
-                Order Placed / Pending Confirmation
+                Order received
               </span>
               <h3 className="text-lg font-black text-slate-800 uppercase tracking-wide">SALES ORDER BOOKED</h3>
-              <p className="text-xs text-slate-500">The customer order is recorded. Please perform final line-item review before confirmation.</p>
+              <p className="text-xs text-slate-500">The order has been sent for packing and billing. You can track it in the Order Book.</p>
             </div>
 
             <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl font-mono text-xs">
@@ -1432,7 +1326,7 @@ export default function SalesDashboard() {
               className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wide shadow-md shadow-emerald-900/10 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95"
             >
               <CheckCircle className="w-4 h-4" />
-              <span>Review Complete Order &amp; Confirm</span>
+              <span>View Order</span>
             </button>
 
             <div className="flex gap-3">
@@ -1990,3 +1884,246 @@ export default function SalesDashboard() {
     </div>
   );
 }
+
+// PERFORMANCE: one catalogue card. Re-renders only when its own data or cart lines change.
+type SalesLot = { mrp: number; selling_price: number; purchase_rate: number; available_qty: number };
+interface SalesCardProps {
+  p: Product;
+  lots: SalesLot[];
+  selectedMrp?: number;
+  cartSig: string;
+  getCartItem: (cartKey: string) => SalespersonCartItem;
+  handleUpdateQty: (cartKey: string, type: 'carton' | 'loose', delta: number) => void;
+  handleSetQty: (cartKey: string, type: 'carton' | 'loose', val: number) => void;
+  handleUpdateDiscount: (cartKey: string, type: 'carton' | 'loose', disc: number) => void;
+  setSelectedProductMrp: React.Dispatch<React.SetStateAction<{ [productId: string]: number }>>;
+  setRateHistoryProduct: (p: Product) => void;
+}
+const SalesProductCard = React.memo(function SalesProductCard({
+  p, lots, selectedMrp, getCartItem, handleUpdateQty, handleSetQty, handleUpdateDiscount, setSelectedProductMrp, setRateHistoryProduct
+}: SalesCardProps) {
+                    const activeMrp = selectedMrp || lots[0]?.mrp || p.mrp;
+                    const activeLot = lots.find(l => l.mrp === activeMrp) || lots[0] || {
+                      mrp: p.mrp,
+                      selling_price: p.selling_price,
+                      purchase_rate: p.purchase_price,
+                      available_qty: 0
+                    };
+                    const cartKey = `${p.id}__mrp_${activeMrp}`;
+                    const cItem = getCartItem(cartKey);
+                    const unitsPerPack = p.units_per_box_carton || 1;
+                    const cartonRate = activeLot.selling_price || p.selling_price;
+                    const looseRate = p.loose_price_mode === 'manual' && p.loose_selling_price != null
+                      ? p.loose_selling_price
+                      : (cartonRate / unitsPerPack);
+                    
+                    const tradeModeInfo = getProductTradeMode(p);
+                    const allowCarton = tradeModeInfo.allowCarton;
+                    const allowPieces = tradeModeInfo.allowPieces;
+                    const isCartonOnly = allowCarton && !allowPieces;
+                    const isPieceOnly = !allowCarton && allowPieces;
+                    const isBoth = allowCarton && allowPieces;
+                    
+                    const stock = activeLot.available_qty;
+                    const hasCart = cItem.cartonQty > 0 || cItem.looseQty > 0;
+                    
+                    return (
+                      <div className="erp-card bg-white p-4 space-y-3 shadow-xs border-slate-150 relative">
+                        <div className="flex justify-between items-start gap-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded uppercase tracking-wider">{p.brand}</span>
+                              {isCartonOnly && (
+                                <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded text-xs font-bold">
+                                  {p.trading_unit || 'Carton'} Only
+                                </span>
+                              )}
+                              {isPieceOnly && (
+                                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded text-xs font-bold">
+                                  {p.base_unit || 'Pieces'} Only
+                                </span>
+                              )}
+                              {isBoth && (
+                                <span className="px-2 py-0.5 bg-cyan-50 text-cyan-800 border border-cyan-300 rounded text-xs font-bold">
+                                  Carton &amp; Pieces
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                              <h4 className="font-extrabold text-slate-900 text-sm block leading-tight truncate">{p.name}</h4>
+                              <span className="px-2 py-0.5 rounded text-xs font-black bg-emerald-50 text-emerald-800 border border-emerald-300">
+                                MRP ₹{activeMrp || p.mrp}
+                              </span>
+                            </div>
+                            <span className="text-xs text-slate-500 block mt-0.5 font-medium">
+                              Packing: <strong className="text-slate-700 font-bold">{isPieceOnly ? `1 ${p.base_unit || 'Piece'}` : (p.pack_size || `${unitsPerPack} ${p.base_unit || 'Pcs'}/${p.trading_unit || 'Box'}`)}</strong>
+                            </span>
+                            
+                            {lots.length > 1 ? (
+                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                <span className="text-xs font-bold text-slate-600 mr-1">Stock Lots:</span>
+                                {lots.map(l => (
+                                  <button
+                                    key={l.mrp}
+                                    type="button"
+                                    onClick={() => setSelectedProductMrp(prev => ({ ...prev, [p.id]: l.mrp }))}
+                                    className={`px-2.5 py-1 rounded text-xs font-bold transition-colors cursor-pointer border ${
+                                      activeMrp === l.mrp
+                                        ? 'bg-cyan-600 text-white border-cyan-600 shadow-xs'
+                                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    MRP ₹{l.mrp} ({formatQuantityDisplay(l.available_qty, unitsPerPack, p.trading_unit, p.base_unit)})
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-1 flex items-center gap-2">
+                                <span className="text-xs font-bold text-slate-600">Printed MRP: <strong className="text-slate-800">₹{activeLot.mrp}</strong></span>
+                              </div>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => setRateHistoryProduct(p)}
+                              className="mt-1.5 inline-flex items-center gap-1 text-xs text-cyan-700 hover:text-cyan-900 font-bold hover:underline cursor-pointer"
+                            >
+                              <History className="w-3.5 h-3.5 text-cyan-600" />
+                              <span>View Last 5 Billing Rates</span>
+                            </button>
+                          </div>
+                          
+                          <div className="text-right flex-shrink-0">
+                            {allowCarton && (
+                              <div>
+                                <span className="text-sm font-black text-slate-900 block">₹{cartonRate.toFixed(2)}/{p.trading_unit}</span>
+                                {p.carton_discount ? (
+                                  <span className="text-[11px] font-bold text-emerald-600 block">
+                                    ₹{(cartonRate - p.carton_discount).toFixed(2)} net (-₹{p.carton_discount} disc)
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
+                            {allowPieces && (
+                              <div>
+                                <span className={`text-xs font-bold text-emerald-700 block ${allowCarton ? 'mt-0.5' : 'text-sm font-black text-slate-900'}`}>
+                                  ₹{looseRate.toFixed(2)}/{p.base_unit || 'Pc'}
+                                </span>
+                                {isPieceOnly && p.loose_discount ? (
+                                  <span className="text-[11px] font-bold text-emerald-600 block">
+                                    ₹{(looseRate - p.loose_discount).toFixed(2)} net (-₹{p.loose_discount} disc)
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
+                            <span className={`text-xs font-bold block mt-1 ${stock > 0 ? 'text-slate-600' : 'text-red-500'}`}>
+                              {stock > 0 ? formatQuantityDisplay(stock, unitsPerPack, p.trading_unit, p.base_unit) : 'Out of Stock'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Dual Steppers & Discount Inputs with Direct Numeric Entry */}
+                        <div className="border-t border-slate-100 pt-2.5 space-y-2">
+                          {/* Cartons row - Only display if allowCarton */}
+                          {allowCarton && (
+                            <div className="flex items-center justify-between gap-2 bg-slate-50 p-2 rounded-lg border border-slate-150">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-slate-700 uppercase">{p.trading_unit}s:</span>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
+                                    className="w-6 h-6 bg-white hover:bg-slate-200 border border-slate-200 rounded flex items-center justify-center text-slate-700 font-bold cursor-pointer"
+                                    title="Decrease 1 carton"
+                                  >
+                                    <Minus className="w-3.5 h-3.5" />
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="0"
+                                    value={cItem.cartonQty || ''}
+                                    onChange={(e) => handleSetQty(cartKey, 'carton', parseInt(e.target.value) || 0)}
+                                    className="w-12 border border-slate-300 bg-white rounded text-center py-0.5 font-black text-xs text-cyan-700 focus:border-cyan-500 focus:outline-none"
+                                    title="Type carton quantity directly"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
+                                    className="w-6 h-6 bg-cyan-600 text-white hover:bg-cyan-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                    title="Increase 1 carton"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {cItem.cartonQty > 0 && (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs font-bold text-slate-600">Disc (₹/{p.trading_unit}):</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="0"
+                                    value={cItem.cartonDiscount || ''}
+                                    onChange={(e) => handleUpdateDiscount(cartKey, 'carton', parseFloat(e.target.value) || 0)}
+                                    className="w-14 border border-slate-250 bg-white rounded text-center py-0.5 font-bold text-xs"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Loose Pieces row - Only display if allowPieces */}
+                          {allowPieces && (
+                            <div className="flex items-center justify-between gap-2 bg-emerald-50/60 p-2 rounded-lg border border-emerald-100">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-emerald-800 uppercase">{isPieceOnly ? (p.base_unit || 'Pieces') : `Loose (${p.base_unit || 'Pc'}):`}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateQty(cartKey, 'loose', -1)}
+                                    className="w-6 h-6 bg-white hover:bg-emerald-100 border border-emerald-200 text-emerald-800 rounded flex items-center justify-center font-bold cursor-pointer"
+                                    title="Decrease 1 loose unit"
+                                  >
+                                    <Minus className="w-3.5 h-3.5" />
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="0"
+                                    value={cItem.looseQty || ''}
+                                    onChange={(e) => handleSetQty(cartKey, 'loose', parseInt(e.target.value) || 0)}
+                                    className="w-12 border border-emerald-300 bg-white rounded text-center py-0.5 font-black text-xs text-emerald-700 focus:border-emerald-500 focus:outline-none"
+                                    title="Type loose quantity directly"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateQty(cartKey, 'loose', 1)}
+                                    className="w-6 h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                    title="Increase 1 loose unit"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {cItem.looseQty > 0 && (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs font-bold text-emerald-800">Disc (₹/{p.base_unit || 'Pc'}):</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="0"
+                                    value={cItem.looseDiscount || ''}
+                                    onChange={(e) => handleUpdateDiscount(cartKey, 'loose', parseFloat(e.target.value) || 0)}
+                                    className="w-14 border border-emerald-200 bg-white rounded text-center py-0.5 font-bold text-xs"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+});

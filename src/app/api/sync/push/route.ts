@@ -29,6 +29,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Retailer logins never change products, stock or other master data
+    if (auth.profile?.role === 'retailer' || String(auth.profile?.profile_type || '').toUpperCase() === 'RETAILER') {
+      return NextResponse.json(
+        { success: false, error: 'Retailer logins cannot change master data.' },
+        { status: 403 }
+      );
+    }
+
     if (!isServerDatabaseConfigured()) {
       return NextResponse.json(
         {

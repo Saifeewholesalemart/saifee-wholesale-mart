@@ -3,7 +3,7 @@
 import React, { useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
 import { X, History, Tag, AlertCircle, Check, ArrowRight, TrendingUp } from 'lucide-react';
-import { BillingRateRecord, formatQuantityDisplay } from '@/lib/db';
+import { BillingRateRecord, formatQuantityDisplay, getProductTradeMode } from '@/lib/db';
 
 interface LastBillingRatesModalProps {
   isOpen: boolean;
@@ -22,7 +22,9 @@ export default function LastBillingRatesModal({
   tradingUnit,
   onApplyRate
 }: LastBillingRatesModalProps) {
-  const { getLastBillingRates, products, retailers } = useDb();
+  const { getLastBillingRates, products, retailers, currentUser } = useDb();
+  // Our purchase cost and margin are never shown to a retailer
+  const hideCost = currentUser?.role === 'retailer';
 
   // Close on ESC key
   useEffect(() => {
@@ -56,6 +58,10 @@ export default function LastBillingRatesModal({
     hours = hours % 12 || 12;
     return `${day} ${mon} ${year} • ${hours.toString().padStart(2, '0')}:${minutes} ${ampm}`;
   };
+
+  // Unit the shop actually buys in: pack size 1 or pieces-only items are sold per piece/packet
+  const sellUnitOf = (unitsPerPack: number | undefined, tradingUnit?: string, baseUnit?: string, piecesOnly?: boolean) =>
+    (piecesOnly || (Number(unitsPerPack) || 1) <= 1) ? (baseUnit || 'Piece') : (tradingUnit || 'Carton');
 
   const getUnitAbbr = (unit: string) => {
     if (!unit) return '';
@@ -111,7 +117,7 @@ export default function LastBillingRatesModal({
               <span>
                 Packing: <strong className="text-white font-semibold">{product?.pack_size || '-'}</strong>
               </span>
-              {purchaseCost > 0 && (
+              {!hideCost && purchaseCost > 0 && (
                 <>
                   <span>&bull;</span>
                   <span>
@@ -155,7 +161,7 @@ export default function LastBillingRatesModal({
                 <span className="font-extrabold text-indigo-700 text-base">
                   ₹{product.selling_price.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </span>
-                <span className="text-xs text-slate-500 font-bold ml-1">/{getUnitAbbr(product.trading_unit)}</span>
+                <span className="text-xs text-slate-500 font-bold ml-1">/{getUnitAbbr(sellUnitOf(product.units_per_box_carton, product.trading_unit, product.base_unit, !getProductTradeMode(product).allowCarton))}</span>
               </div>
             </div>
           )}
@@ -182,13 +188,13 @@ export default function LastBillingRatesModal({
                       <th className="p-3">Date &amp; Historical Invoice</th>
                       <th className="p-3 text-center">Billed Qty</th>
                       <th className="p-3 text-right">Billed Rate</th>
-                      <th className="p-3 text-center">Dist. Margin</th>
+                      {!hideCost && <th className="p-3 text-center">Dist. Margin</th>}
                       {onApplyRate && <th className="p-3 text-center">Action</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {records.map((rec, index) => {
-                      const unitStr = getUnitAbbr(rec.trading_unit);
+                      const unitStr = getUnitAbbr(sellUnitOf(rec.units_per_box_carton || product?.units_per_box_carton, rec.trading_unit, rec.base_unit || product?.base_unit, product ? !getProductTradeMode(product).allowCarton : false));
                       const unitsPerPack = rec.units_per_box_carton || product?.units_per_box_carton || 1;
                       const baseUnit = rec.base_unit || product?.base_unit || 'Piece';
                       const marginPct = rec.final_applied_rate > 0 && purchaseCost > 0
@@ -216,7 +222,7 @@ export default function LastBillingRatesModal({
                             </span>
                             <span className="text-[11px] text-slate-400 font-normal">/{unitStr}</span>
                           </td>
-                          <td className="p-3 text-center">
+                          {!hideCost && <td className="p-3 text-center">
                             {marginPct !== null ? (
                               <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-black ${
                                 marginPct >= 10 ? 'bg-emerald-100 text-emerald-800' : marginPct > 0 ? 'bg-blue-100 text-blue-800' : 'bg-red-100 text-red-800'
@@ -227,7 +233,7 @@ export default function LastBillingRatesModal({
                             ) : (
                               <span className="text-slate-400 font-normal">-</span>
                             )}
-                          </td>
+                          </td>}
                           {onApplyRate && (
                             <td className="p-3 text-center">
                               <button

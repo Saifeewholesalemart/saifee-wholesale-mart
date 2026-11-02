@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser, validateCsrfOrigin } from '@/lib/authSession';
 import { createServerTenantContext, isServerDatabaseConfigured } from '@/lib/serverDb';
-import { writeCloudRecords } from '@/lib/serverCloudRecords';
+import { writeCloudRecords, retailerScopeFor } from '@/lib/serverCloudRecords';
 
 /**
  * POST /api/cloud/write
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     }
 
     const context = createServerTenantContext(auth.session);
-    const result = await writeCloudRecords(context, body.records);
+    const result = await writeCloudRecords(context, body.records, retailerScopeFor(context, auth.profile));
     return NextResponse.json(result);
   } catch (err: any) {
     const msg = String(err?.message || 'Failed to save to cloud');

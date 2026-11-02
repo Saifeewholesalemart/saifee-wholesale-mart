@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/authSession';
 import { createServerTenantContext, isServerDatabaseConfigured } from '@/lib/serverDb';
-import { loadCloudRecords } from '@/lib/serverCloudRecords';
+import { loadCloudRecords, retailerScopeFor } from '@/lib/serverCloudRecords';
 
 /**
  * POST /api/cloud/load
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
       since: typeof body.since === 'string' ? body.since : null,
       after: body.after && typeof body.after === 'object' ? body.after : null,
       limit: typeof body.limit === 'number' ? body.limit : undefined
-    });
+    }, retailerScopeFor(context, auth.profile));
     return NextResponse.json(result);
   } catch (err: any) {
     const msg = String(err?.message || 'Failed to load cloud data');

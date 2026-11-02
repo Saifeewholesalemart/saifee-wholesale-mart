@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useDeferredValue, useCallback } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
 import { 
@@ -9,25 +9,28 @@ import {
 } from 'lucide-react';
 import { 
   Product, Order, Invoice, Payment, formatQuantityDisplay, 
-  splitBaseQuantity, calculateItemAmounts, PendingOrderItemWarning, getProductTradeMode 
+  splitBaseQuantity, calculateItemAmounts, PendingOrderItemWarning, getProductTradeMode,
+  computeFreeStockByProduct, flowCustomerStatus, flowChannelLabel
 } from '@/lib/db';
 import LastBillingRatesModal from '@/components/LastBillingRatesModal';
 import SmartSearchBar from '@/components/SmartSearchBar';
 import PendingItemWarningCard, { CartPendingSummaryBanner } from '@/components/orders/PendingItemWarningCard';
 import PendingDeliveryWarningModal from '@/components/orders/PendingDeliveryWarningModal';
+import { useUrlStep } from '@/lib/useUrlStep';
 
 export default function RetailerDashboard() {
   const { 
     currentUser, setCurrentUser, profiles, products, batches, retailers, orders, invoices, payments, 
     placeOrder, retailerCart: cart, setRetailerCart: setCart,
-    categories, getCategoriesForProduct, getAssignedCategoriesForRetailer, isProductVisibleToRetailer,
+    categories, productCategories, getAssignedCategoriesForRetailer,
     getPendingItemsForRetailer, logPendingOrderProceedActivity
   } = useDb();
   const router = useRouter();
 
   // Navigation & Order Step States (Same workflow as Distributor/Salesperson)
-  const [activeView, setActiveView] = useState<'catalog' | 'history' | 'finance'>('catalog');
-  const [orderStep, setOrderStep] = useState<'catalog' | 'cart' | 'confirm' | 'success'>('catalog');
+  // Tab and step are kept in the URL so the phone Back button goes to the previous screen
+  const [activeView, setActiveView] = useUrlStep<'catalog' | 'history' | 'finance'>('tab', 'catalog', ['catalog', 'history', 'finance']);
+  const [orderStep, setOrderStep] = useUrlStep<'catalog' | 'cart' | 'confirm' | 'success'>('step', 'catalog', ['catalog', 'cart', 'confirm', 'success']);
 
   // Search & Filter States
   const [searchTerm, setSearchTerm] = useState('');
@@ -40,6 +43,109 @@ export default function RetailerDashboard() {
 
   // 1. Get associated retailer profile object
   const retailerObj = retailers.find(r => r.id === currentUser?.retailer_id);
+
+  // PERFORMANCE: lookups built once per data change, not once per product
+  const productById = useMemo(() => new Map(products.map(p => [p.id, p])), [products]);
+  const batchesByProduct = useMemo(() => {
+    const m = new Map<string, typeof batches>();
+    batches.forEach(b => {
+      if (!(b.quantity > 0)) return;
+      const list = m.get(b.product_id);
+      if (list) list.push(b); else m.set(b.product_id, [b]);
+    });
+    return m;
+  }, [batches]);
+  const productCats = useMemo(() => {
+    const catById = new Map(categories.map(c => [c.id, c]));
+    const m = new Map<string, { ids: string[]; cats: typeof categories }>();
+    productCategories.forEach(pc => {
+      const e = m.get(pc.product_id) || { ids: [], cats: [] };
+      e.ids.push(pc.category_id);
+      const c = catById.get(pc.category_id);
+      if (c) e.cats.push(c);
+      m.set(pc.product_id, e);
+    });
+    return m;
+  }, [categories, productCategories]);
+  // Same rule as db.isProductVisibleToRetailer, worked out once for all products
+  const assignedCats = useMemo(
+    () => (retailerObj ? getAssignedCategoriesForRetailer(retailerObj.id) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [retailerObj, categories, retailers]
+  );
+  const visibleToRetailer = useMemo(() => {
+    const allowedIds = new Set(assignedCats.map(c => c.id));
+    const allowedNames = new Set(assignedCats.map(c => c.name.toLowerCase()));
+    const fullAccess = !!retailerObj && retailerObj.category_access_mode !== 'custom' &&
+      assignedCats.length === categories.filter(c => c.active).length;
+    return (p: { id: string; category?: string }) =>
+      (productCats.get(p.id)?.ids || []).some(id => allowedIds.has(id)) ||
+      allowedNames.has((p.category || '').toLowerCase()) ||
+      fullAccess;
+  }, [assignedCats, categories, retailerObj, productCats]);
+  const deferredSearch = useDeferredValue(searchTerm);
+  // For the order status shown to the shop (packed / waiting for stock / billed)
+  const freeStockForStatus = useMemo(() => computeFreeStockByProduct(batches, orders), [batches, orders]);
+  const catalogProducts = useMemo(() => {
+    if (!retailerObj) return [];
+    const q = deferredSearch.trim().toLowerCase();
+    return products.filter(p => {
+      if (!visibleToRetailer(p)) return false;
+
+      let matchCat = selectedCategory === 'All';
+      if (!matchCat) {
+        const prodCats = productCats.get(p.id)?.cats || [];
+        if (prodCats.length > 0) {
+          matchCat = prodCats.some(c => c.active && c.name === selectedCategory);
+        } else {
+          matchCat = p.category === selectedCategory;
+        }
+      }
+      if (!matchCat) return false;
+
+      return q === '' ||
+        (p.name || '').toLowerCase().includes(q) ||
+        (p.brand || '').toLowerCase().includes(q) ||
+        (p.product_code || '').toLowerCase().includes(q);
+    });
+  }, [retailerObj, products, visibleToRetailer, selectedCategory, productCats, deferredSearch]);
+
+  // Show products in steps while scrolling (all products stay available)
+  const PAGE_STEP = 40;
+  const [visibleCount, setVisibleCount] = useState(PAGE_STEP);
+  useEffect(() => { setVisibleCount(PAGE_STEP); }, [deferredSearch, selectedCategory]);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) setVisibleCount(c => c + PAGE_STEP);
+    }, { rootMargin: '600px' });
+    io.observe(el);
+    return () => io.disconnect();
+  });
+  const visibleCatalog = catalogProducts.slice(0, visibleCount);
+  const lotsCache = useMemo(() => new Map<string, DashLot[]>(), [productById, batchesByProduct]);
+  const cartRef = useRef(cart);
+  cartRef.current = cart;
+  const getCartItemStable = useCallback((cartKey: string): { cartonQty: number; looseQty: number } => {
+    const raw = cartRef.current[cartKey];
+    if (!raw) return { cartonQty: 0, looseQty: 0 };
+    if (typeof raw === 'number') return { cartonQty: raw, looseQty: 0 };
+    return { cartonQty: Number(raw.cartonQty || 0), looseQty: Number(raw.looseQty || 0) };
+  }, []);
+  const handleUpdateQtyStable = useCallback((cartKey: string, type: 'carton' | 'loose', delta: number) => {
+    setCart(prev => {
+      const raw = prev[cartKey];
+      const cur = !raw ? { c: 0, l: 0 } : typeof raw === 'number' ? { c: raw, l: 0 } : { c: Number(raw.cartonQty || 0), l: Number(raw.looseQty || 0) };
+      const nc = type === 'carton' ? Math.max(0, cur.c + delta) : cur.c;
+      const nl = type === 'loose' ? Math.max(0, cur.l + delta) : cur.l;
+      const updated = { ...prev };
+      if (nc === 0 && nl === 0) delete updated[cartKey];
+      else updated[cartKey] = { cartonQty: nc, looseQty: nl };
+      return updated;
+    });
+  }, [setCart]);
 
   if (!currentUser || currentUser.role !== 'retailer' || !retailerObj) {
     return (
@@ -68,30 +174,11 @@ export default function RetailerDashboard() {
     ? ['All', ...assignedRetailerCategories.map(c => c.name)]
     : ['All', ...Array.from(new Set(products.map(p => p.category)))];
 
-  // 3. Filter products matching retailer assigned categories & search term
-  const catalogProducts = products.filter(p => {
-    if (!isProductVisibleToRetailer(p.id, retailerObj.id)) return false;
-
-    let matchCat = selectedCategory === 'All';
-    if (!matchCat) {
-      const prodCats = getCategoriesForProduct(p.id);
-      if (prodCats.length > 0) {
-        matchCat = prodCats.some(c => c.active && c.name === selectedCategory);
-      } else {
-        matchCat = p.category === selectedCategory;
-      }
-    }
-    if (!matchCat) return false;
-
-    return searchTerm.trim() === '' ||
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.brand.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.product_code.toLowerCase().includes(searchTerm.toLowerCase());
-  });
+  // 3. Product list: see catalogProducts above (worked out once, not on every render)
 
   const getProductMrpLots = (productId: string) => {
-    const prod = products.find(p => p.id === productId);
-    const prodBatches = batches.filter(b => b.product_id === productId && b.quantity > 0);
+    const prod = productById.get(productId);
+    const prodBatches = batchesByProduct.get(productId) || [];
     if (prodBatches.length === 0) {
       return [{
         mrp: prod?.mrp || 0,
@@ -115,6 +202,12 @@ export default function RetailerDashboard() {
     });
 
     return Object.values(mrpMap).sort((a, b) => a.mrp - b.mrp);
+  };
+
+  const getLotsCached = (productId: string): DashLot[] => {
+    let v = lotsCache.get(productId);
+    if (!v) { v = getProductMrpLots(productId) as DashLot[]; lotsCache.set(productId, v); }
+    return v;
   };
 
   const getCartItem = (cartKey: string): { cartonQty: number; looseQty: number } => {
@@ -313,7 +406,7 @@ export default function RetailerDashboard() {
     setLatestOrderNum(ord.order_number);
     setCart({});
     setShowPendingWarningModal(false);
-    setOrderStep('success');
+    setOrderStep('success', { replace: true });
   };
 
   const handleRepeatOrder = (pastOrder: Order) => {
@@ -365,7 +458,7 @@ export default function RetailerDashboard() {
           </div>
         </div>
         <button 
-          onClick={() => router.push('/')} 
+          onClick={() => router.push('/retailer/home')} 
           className="text-xs text-slate-300 font-bold border border-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-800 cursor-pointer transition-colors"
         >
           EXIT
@@ -463,199 +556,34 @@ export default function RetailerDashboard() {
                 )}
 
                 <div className="space-y-3">
-                  {catalogProducts.map(p => {
-                    const lots = getProductMrpLots(p.id);
-                    const activeMrp = selectedProductMrp[p.id] || lots[0]?.mrp || p.mrp;
-                    const activeLot = lots.find(l => l.mrp === activeMrp) || lots[0] || {
-                      mrp: p.mrp,
-                      selling_price: p.selling_price,
-                      purchase_rate: p.purchase_price,
-                      available_qty: 0
-                    };
-                    const cartKey = `${p.id}__mrp_${activeMrp}`;
-                    const { cartonQty, looseQty } = getCartItem(cartKey);
-
-                    const unitsPerPack = p.units_per_box_carton || 1;
-                    const cartonRate = activeLot.selling_price || p.selling_price;
-                    const looseRate = p.loose_price_mode === 'manual' && p.loose_selling_price != null
-                      ? p.loose_selling_price
-                      : (cartonRate / unitsPerPack);
-
-                    const tradeModeInfo = getProductTradeMode(p);
-                    const allowCarton = tradeModeInfo.allowCarton;
-                    const allowPieces = tradeModeInfo.allowPieces;
-                    const isCartonOnly = allowCarton && !allowPieces;
-                    const isPieceOnly = !allowCarton && allowPieces;
-                    const isBoth = allowCarton && allowPieces;
-
+                  {visibleCatalog.map(p => {
+                    const lots = getLotsCached(p.id);
+                    const cartSig = lots.map(l => {
+                      const c = getCartItem(`${p.id}__mrp_${l.mrp}`);
+                      return `${l.mrp}:${c.cartonQty}:${c.looseQty}`;
+                    }).join('|');
+                    const itemWarning = cartPendingWarnings.find(w => w.productId === p.id);
                     return (
-                      <div key={p.id} className="erp-card bg-white p-4 flex flex-col gap-3 rounded-xl border border-slate-200 shadow-xs">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-extrabold text-slate-900 text-sm block leading-tight">{p.name}</span>
-                              <span className="px-2 py-0.5 rounded text-xs font-black bg-emerald-50 text-emerald-800 border border-emerald-300">
-                                MRP: ₹{activeMrp || p.mrp}
-                              </span>
-                              {isCartonOnly && (
-                                <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded text-xs font-bold shrink-0">
-                                  {p.trading_unit || 'Carton'} Only
-                                </span>
-                              )}
-                              {isPieceOnly && (
-                                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded text-xs font-bold shrink-0">
-                                  {p.base_unit || 'Pieces'} Only
-                                </span>
-                              )}
-                              {isBoth && (
-                                <span className="px-2 py-0.5 bg-cyan-50 text-cyan-800 border border-cyan-300 rounded text-xs font-bold shrink-0">
-                                  Carton &amp; Pieces
-                                </span>
-                              )}
-                            </div>
-                            <span className="text-xs text-slate-600 font-medium block mt-1">
-                              Brand: {p.brand} | Packing: <strong className="text-slate-700 font-bold">{isPieceOnly ? `1 ${p.base_unit || 'Piece'}` : (p.pack_size || `${unitsPerPack} ${p.base_unit || 'Pcs'}/${p.trading_unit}`)}</strong>
-                            </span>
-                            
-                            {lots.length > 1 ? (
-                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                <span className="text-xs font-bold text-slate-600 mr-0.5">Stock Lots:</span>
-                                {lots.map(l => (
-                                  <button
-                                    key={l.mrp}
-                                    type="button"
-                                    onClick={() => setSelectedProductMrp(prev => ({ ...prev, [p.id]: l.mrp }))}
-                                    className={`px-2 py-0.5 rounded text-xs font-bold transition-colors cursor-pointer border ${
-                                      activeMrp === l.mrp
-                                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                                    }`}
-                                  >
-                                    MRP ₹{l.mrp} ({formatQuantityDisplay(l.available_qty, unitsPerPack, p.trading_unit, p.base_unit)})
-                                  </button>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="mt-1.5 flex items-center gap-2">
-                                <span className="text-xs font-bold text-slate-600">Printed MRP: <strong className="text-slate-900">₹{activeLot.mrp}</strong></span>
-                                {activeLot.available_qty > 0 && (
-                                  <span className="text-xs text-emerald-700 font-bold">
-                                    ({formatQuantityDisplay(activeLot.available_qty, unitsPerPack, p.trading_unit, p.base_unit)} in stock)
-                                  </span>
-                                )}
-                              </div>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={() => setRateHistoryProduct(p)}
-                              className="mt-2 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer"
-                            >
-                              <History className="w-3.5 h-3.5 text-indigo-500" />
-                              <span>View Last 5 Billing Rates</span>
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Pricing and Steppers */}
-                        <div className="border-t border-slate-100 pt-2 space-y-2">
-                          <div className="flex items-center justify-between text-xs">
-                            {allowCarton && (
-                              <div>
-                                <span className="text-xs text-slate-500 block uppercase font-bold">Wholesale {p.trading_unit}</span>
-                                <span className="text-sm font-black text-indigo-700">₹{cartonRate.toFixed(2)}/{p.trading_unit}</span>
-                                {p.carton_discount ? (
-                                  <span className="text-[11px] font-bold text-emerald-600 block">
-                                    ₹{(cartonRate - p.carton_discount).toFixed(2)} net (-₹{p.carton_discount} disc)
-                                  </span>
-                                ) : null}
-                              </div>
-                            )}
-                            {allowPieces && (
-                              <div className={allowCarton ? "text-right" : ""}>
-                                <span className="text-xs text-slate-500 block uppercase font-bold">{isPieceOnly ? (p.base_unit || 'Piece') : 'Loose Piece'}</span>
-                                <span className="text-sm font-black text-emerald-700">₹{looseRate.toFixed(2)}/{p.base_unit || 'Piece'}</span>
-                                {isPieceOnly && p.loose_discount ? (
-                                  <span className="text-[11px] font-bold text-emerald-600 block">
-                                    ₹{(looseRate - p.loose_discount).toFixed(2)} net (-₹{p.loose_discount} disc)
-                                  </span>
-                                ) : null}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Dual Stepper buttons */}
-                          <div className={`grid ${allowCarton && allowPieces ? 'grid-cols-2' : 'grid-cols-1'} gap-2 pt-1`}>
-                            {allowCarton && (
-                              <div className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-100">
-                                <span className="text-xs font-bold text-slate-700 uppercase">{p.trading_unit}s:</span>
-                                <div className="flex items-center gap-1.5">
-                                  {cartonQty > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
-                                      className="w-7 h-7 bg-white hover:bg-slate-200 border border-slate-200 rounded-md flex items-center justify-center text-slate-700 font-bold cursor-pointer"
-                                    >
-                                      <Minus className="w-3.5 h-3.5" />
-                                    </button>
-                                  )}
-                                  <span className={`text-xs font-black w-6 text-center ${cartonQty > 0 ? 'text-indigo-700' : 'text-slate-400'}`}>
-                                    {cartonQty}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
-                                    className="w-7 h-7 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md flex items-center justify-center font-bold cursor-pointer"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-
-                            {allowPieces && (
-                              <div className="flex items-center justify-between bg-emerald-50/50 p-2 rounded-lg border border-emerald-100">
-                                <span className="text-xs font-bold text-emerald-900 uppercase">{isPieceOnly ? (p.base_unit || 'Pieces') : `Loose (${p.base_unit || 'Pc'}):`}</span>
-                                <div className="flex items-center gap-1.5">
-                                  {looseQty > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleUpdateQty(cartKey, 'loose', -1)}
-                                      className="w-7 h-7 bg-white hover:bg-emerald-100 border border-emerald-200 rounded-md flex items-center justify-center text-emerald-800 font-bold cursor-pointer"
-                                    >
-                                      <Minus className="w-3.5 h-3.5" />
-                                    </button>
-                                  )}
-                                  <span className={`text-xs font-black w-6 text-center ${looseQty > 0 ? 'text-emerald-700' : 'text-slate-400'}`}>
-                                    {looseQty}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateQty(cartKey, 'loose', 1)}
-                                    className="w-7 h-7 bg-emerald-600 text-white hover:bg-emerald-700 rounded-md flex items-center justify-center font-bold cursor-pointer"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Inline Pending Warning on Product Card */}
-                          {(() => {
-                            const itemWarning = cartPendingWarnings.find(w => w.productId === p.id);
-                            if (!itemWarning) return null;
-                            return (
-                              <PendingItemWarningCard
-                                warning={itemWarning}
-                                mode="inline"
-                              />
-                            );
-                          })()}
-                        </div>
-                      </div>
+                      <DashProductCard
+                        key={p.id}
+                        p={p}
+                        lots={lots}
+                        selectedMrp={selectedProductMrp[p.id]}
+                        cartSig={cartSig}
+                        itemWarning={itemWarning}
+                        warningSig={itemWarning ? JSON.stringify(itemWarning) : ''}
+                        getCartItem={getCartItemStable}
+                        handleUpdateQty={handleUpdateQtyStable}
+                        setSelectedProductMrp={setSelectedProductMrp}
+                        setRateHistoryProduct={setRateHistoryProduct}
+                      />
                     );
                   })}
+                  {visibleCatalog.length < catalogProducts.length && (
+                    <div ref={loadMoreRef} className="py-6 text-center text-xs font-semibold text-slate-500">
+                      Showing {visibleCatalog.length} of {catalogProducts.length} products. Scroll to see more.
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -977,10 +905,10 @@ export default function RetailerDashboard() {
                 
                 <div className="space-y-1">
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 inline-block mb-1">
-                    Order Placed / Pending Confirmation
+                    Order received
                   </span>
-                  <h3 className="text-lg font-black text-slate-800 uppercase tracking-wide">ORDER BOOKED SUCCESSFULLY</h3>
-                  <p className="text-xs text-slate-500">Your order has been recorded with the distributor and is pending confirmation.</p>
+                  <h3 className="text-lg font-black text-slate-800 uppercase tracking-wide">ORDER PLACED</h3>
+                  <p className="text-xs text-slate-500">Your order has been received. It will now be packed and billed. You can track it in My Orders.</p>
                 </div>
 
                 <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl font-mono text-xs">
@@ -1033,28 +961,30 @@ export default function RetailerDashboard() {
             ) : (
               <div className="space-y-3">
                 {myOrders.map(ord => {
-                  const isUnconfirmed = ord.status === 'Submitted' || ord.status === 'Under Review' || ord.status === 'Draft';
+                  const shopStatus = flowCustomerStatus(ord, freeStockForStatus);
+                  const isUnconfirmed = shopStatus.tone === 'blue';
 
                   return (
                     <div 
                       key={ord.id} 
                       className={`erp-card bg-white p-4 space-y-2.5 text-xs rounded-xl border transition-all ${
-                        isUnconfirmed ? 'border-amber-300 shadow-sm ring-1 ring-amber-200' : 'border-slate-200'
+                        isUnconfirmed ? 'border-indigo-300 shadow-sm ring-1 ring-indigo-100' : 'border-slate-200'
                       }`}
                     >
                       <div className="flex justify-between items-center">
                         <span className="font-extrabold text-slate-900 text-sm">{ord.order_number}</span>
                         <span className={`px-2.5 py-0.5 rounded text-[11px] font-black uppercase tracking-wider ${
-                          isUnconfirmed ? 'bg-amber-100 text-amber-800 border border-amber-300' :
-                          ord.status === 'Confirmed' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' :
-                          ord.status === 'Partially Confirmed' ? 'bg-cyan-100 text-cyan-800 border border-cyan-300' :
+                          shopStatus.tone === 'blue' ? 'bg-indigo-100 text-indigo-900 border border-indigo-300' :
+                          shopStatus.tone === 'sky' ? 'bg-sky-100 text-sky-900 border border-sky-300' :
+                          shopStatus.tone === 'green' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' :
+                          shopStatus.tone === 'amber' ? 'bg-amber-100 text-amber-900 border border-amber-300' :
                           'bg-slate-100 text-slate-700'
                         }`}>
-                          {isUnconfirmed ? 'ORDER PLACED / PENDING CONFIRMATION' : ord.status}
+                          {shopStatus.label}
                         </span>
                       </div>
                       <div className="flex justify-between text-slate-600 text-xs">
-                        <span>Source: Direct Web App</span>
+                        <span>Placed via: {flowChannelLabel(ord)}</span>
                         <span>Total Amount: <strong className="text-slate-900 font-extrabold text-sm">₹{ord.total_amount.toLocaleString('en-IN')}</strong></span>
                       </div>
 
@@ -1219,3 +1149,229 @@ export default function RetailerDashboard() {
     </div>
   );
 }
+
+// PERFORMANCE: one catalog card. Re-renders only when its own data, cart lines or warning change.
+type DashLot = { mrp: number; selling_price: number; purchase_rate: number; available_qty: number };
+interface DashCardProps {
+  p: Product;
+  lots: DashLot[];
+  selectedMrp?: number;
+  cartSig: string;
+  itemWarning?: PendingOrderItemWarning;
+  warningSig: string;
+  getCartItem: (cartKey: string) => { cartonQty: number; looseQty: number };
+  handleUpdateQty: (cartKey: string, type: 'carton' | 'loose', delta: number) => void;
+  setSelectedProductMrp: React.Dispatch<React.SetStateAction<{ [productId: string]: number }>>;
+  setRateHistoryProduct: (p: Product) => void;
+}
+const sameDashCard = (a: DashCardProps, b: DashCardProps) =>
+  a.p === b.p && a.lots === b.lots && a.selectedMrp === b.selectedMrp && a.cartSig === b.cartSig &&
+  a.warningSig === b.warningSig && a.getCartItem === b.getCartItem && a.handleUpdateQty === b.handleUpdateQty &&
+  a.setSelectedProductMrp === b.setSelectedProductMrp && a.setRateHistoryProduct === b.setRateHistoryProduct;
+
+const DashProductCard = React.memo(function DashProductCard({
+  p, lots, selectedMrp, itemWarning, getCartItem, handleUpdateQty, setSelectedProductMrp, setRateHistoryProduct
+}: DashCardProps) {
+                    const activeMrp = selectedMrp || lots[0]?.mrp || p.mrp;
+                    const activeLot = lots.find(l => l.mrp === activeMrp) || lots[0] || {
+                      mrp: p.mrp,
+                      selling_price: p.selling_price,
+                      purchase_rate: p.purchase_price,
+                      available_qty: 0
+                    };
+                    const cartKey = `${p.id}__mrp_${activeMrp}`;
+                    const { cartonQty, looseQty } = getCartItem(cartKey);
+
+                    const unitsPerPack = p.units_per_box_carton || 1;
+                    const cartonRate = activeLot.selling_price || p.selling_price;
+                    const looseRate = p.loose_price_mode === 'manual' && p.loose_selling_price != null
+                      ? p.loose_selling_price
+                      : (cartonRate / unitsPerPack);
+
+                    const tradeModeInfo = getProductTradeMode(p);
+                    const allowCarton = tradeModeInfo.allowCarton;
+                    const allowPieces = tradeModeInfo.allowPieces;
+                    const isCartonOnly = allowCarton && !allowPieces;
+                    const isPieceOnly = !allowCarton && allowPieces;
+                    const isBoth = allowCarton && allowPieces;
+
+                    return (
+                      <div className="erp-card bg-white p-4 flex flex-col gap-3 rounded-xl border border-slate-200 shadow-xs">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-extrabold text-slate-900 text-sm block leading-tight">{p.name}</span>
+                              <span className="px-2 py-0.5 rounded text-xs font-black bg-emerald-50 text-emerald-800 border border-emerald-300">
+                                MRP: ₹{activeMrp || p.mrp}
+                              </span>
+                              {isCartonOnly && (
+                                <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded text-xs font-bold shrink-0">
+                                  {p.trading_unit || 'Carton'} Only
+                                </span>
+                              )}
+                              {isPieceOnly && (
+                                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded text-xs font-bold shrink-0">
+                                  {p.base_unit || 'Pieces'} Only
+                                </span>
+                              )}
+                              {isBoth && (
+                                <span className="px-2 py-0.5 bg-cyan-50 text-cyan-800 border border-cyan-300 rounded text-xs font-bold shrink-0">
+                                  Carton &amp; Pieces
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-xs text-slate-600 font-medium block mt-1">
+                              Brand: {p.brand} | Packing: <strong className="text-slate-700 font-bold">{isPieceOnly ? `1 ${p.base_unit || 'Piece'}` : (p.pack_size || `${unitsPerPack} ${p.base_unit || 'Pcs'}/${p.trading_unit}`)}</strong>
+                            </span>
+                            
+                            {lots.length > 1 ? (
+                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                <span className="text-xs font-bold text-slate-600 mr-0.5">Stock Lots:</span>
+                                {lots.map(l => (
+                                  <button
+                                    key={l.mrp}
+                                    type="button"
+                                    onClick={() => setSelectedProductMrp(prev => ({ ...prev, [p.id]: l.mrp }))}
+                                    className={`px-2 py-0.5 rounded text-xs font-bold transition-colors cursor-pointer border ${
+                                      activeMrp === l.mrp
+                                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    MRP ₹{l.mrp} ({formatQuantityDisplay(l.available_qty, unitsPerPack, p.trading_unit, p.base_unit)})
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-1.5 flex items-center gap-2">
+                                <span className="text-xs font-bold text-slate-600">Printed MRP: <strong className="text-slate-900">₹{activeLot.mrp}</strong></span>
+                                {activeLot.available_qty > 0 && (
+                                  <span className="text-xs text-emerald-700 font-bold">
+                                    ({formatQuantityDisplay(activeLot.available_qty, unitsPerPack, p.trading_unit, p.base_unit)} in stock)
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => setRateHistoryProduct(p)}
+                              className="mt-2 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer"
+                            >
+                              <History className="w-3.5 h-3.5 text-indigo-500" />
+                              <span>View Last 5 Billing Rates</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Pricing and Steppers */}
+                        <div className="border-t border-slate-100 pt-2 space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            {allowCarton && (
+                              <div>
+                                <span className="text-xs text-slate-500 block uppercase font-bold">Wholesale {p.trading_unit}</span>
+                                <span className="text-sm font-black text-indigo-700">₹{cartonRate.toFixed(2)}/{p.trading_unit}</span>
+                                {p.carton_discount ? (
+                                  <span className="text-[11px] font-bold text-emerald-600 block">
+                                    ₹{(cartonRate - p.carton_discount).toFixed(2)} net (-₹{p.carton_discount} disc)
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
+                            {allowPieces && (
+                              <div className={allowCarton ? "text-right" : ""}>
+                                <span className="text-xs text-slate-500 block uppercase font-bold">{isPieceOnly ? (p.base_unit || 'Piece') : 'Loose Piece'}</span>
+                                <span className="text-sm font-black text-emerald-700">₹{looseRate.toFixed(2)}/{p.base_unit || 'Piece'}</span>
+                                {isPieceOnly && p.loose_discount ? (
+                                  <span className="text-[11px] font-bold text-emerald-600 block">
+                                    ₹{(looseRate - p.loose_discount).toFixed(2)} net (-₹{p.loose_discount} disc)
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Dual Stepper buttons */}
+                          <div className={`grid ${allowCarton && allowPieces ? 'grid-cols-2' : 'grid-cols-1'} gap-2 pt-1`}>
+                            {allowCarton && (
+                              <div className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                <span className="text-xs font-bold text-slate-700 uppercase">{p.trading_unit}s:</span>
+                                <div className="flex items-center gap-1.5">
+                                  {cartonQty > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
+                                      className="w-7 h-7 bg-white hover:bg-slate-200 border border-slate-200 rounded-md flex items-center justify-center text-slate-700 font-bold cursor-pointer"
+                                    >
+                                      <Minus className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                  <span className={`text-xs font-black w-6 text-center ${cartonQty > 0 ? 'text-indigo-700' : 'text-slate-400'}`}>
+                                    {cartonQty}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
+                                    className="w-7 h-7 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md flex items-center justify-center font-bold cursor-pointer"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {allowPieces && (
+                              <div className="flex items-center justify-between bg-emerald-50/50 p-2 rounded-lg border border-emerald-100">
+                                <span className="text-xs font-bold text-emerald-900 uppercase">{isPieceOnly ? (p.base_unit || 'Pieces') : `Loose (${p.base_unit || 'Pc'}):`}</span>
+                                <div className="flex items-center gap-1.5">
+                                  {looseQty > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateQty(cartKey, 'loose', -1)}
+                                      className="w-7 h-7 bg-white hover:bg-emerald-100 border border-emerald-200 rounded-md flex items-center justify-center text-emerald-800 font-bold cursor-pointer"
+                                    >
+                                      <Minus className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                  <span className={`text-xs font-black w-6 text-center ${looseQty > 0 ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                    {looseQty}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateQty(cartKey, 'loose', 1)}
+                                    className="w-7 h-7 bg-emerald-600 text-white hover:bg-emerald-700 rounded-md flex items-center justify-center font-bold cursor-pointer"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {(() => {
+                            const inCart = cartonQty * (unitsPerPack || 1) + looseQty;
+                            const avail = Number(activeLot.available_qty) || 0;
+                            if (inCart <= avail) return null;
+                            return (
+                              <p role="status" className="mt-1.5 text-xs font-semibold text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
+                                {avail > 0
+                                  ? `Only ${formatQuantityDisplay(avail, unitsPerPack, p.trading_unit, p.base_unit)} in stock. The rest will be supplied when stock arrives.`
+                                  : 'Out of stock. It will be supplied when stock arrives.'}
+                              </p>
+                            );
+                          })()}
+
+                          {/* Inline Pending Warning on Product Card */}
+                          {(() => {
+                            if (!itemWarning) return null;
+                            return (
+                              <PendingItemWarningCard
+                                warning={itemWarning}
+                                mode="inline"
+                              />
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    );
+}, sameDashCard);

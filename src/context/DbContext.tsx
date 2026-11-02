@@ -613,6 +613,19 @@ interface DbContextType {
     orderId: string,
     options: { rates?: Record<string, number>; paymentMode: 'Cash' | 'UPI' | 'Credit'; generateChallan?: boolean }
   ) => { invoice: Invoice; challan?: DeliveryChallan; shortfall: string };
+  /** Simple order flow: pack several orders of one shop at once */
+  flowPackOrders: (entries: { orderId: string; packedQty: Record<string, number> }[]) => { packedPieces: number; backorderPieces: number };
+  /** Simple order flow: one invoice for all packed orders of one shop */
+  flowBillShop: (
+    orderIds: string[],
+    options: { rates?: Record<string, number>; paymentMode: 'Cash' | 'UPI' | 'Credit'; generateChallan?: boolean }
+  ) => { invoice: Invoice; challan?: DeliveryChallan; shortfall: string };
+  /** Admin: edit the unbilled part of an order */
+  flowEditOrder: (orderId: string, lines: { itemId?: string; productId: string; qty: number; rate: number }[]) => { changes: string[] };
+  /** Admin: revise a bill that is already made */
+  flowReviseInvoice: (invoiceId: string, lines: { lineId?: string; productId: string; qty: number; rate: number }[], reason: string) => { invoice: Invoice; changes: string[] };
+  /** Cancel everything not billed yet on an order (cancel order / close short) */
+  flowCancelRemaining: (orderId: string, reason: string) => void;
   syncWithCloud: () => Promise<{ action: string; message: string }>;
   forcePushToCloud: () => Promise<string>;
   forcePullFromCloud: () => Promise<void>;
@@ -1026,12 +1039,14 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     if (!isAuthenticated || !isLocalCacheReady) return;
     let cancelled = false;
     const activeBiz = db.getActiveBusinessCompanyId();
+    const isRetailerLogin = currentUser?.role === 'retailer' || String(currentUser?.profile_type || '').toUpperCase() === 'RETAILER';
     startCloudSession({
       businessId: activeBiz,
       sessionBusinessId,
-      onDataChanged: () => loadData()
+      onDataChanged: () => loadData(),
+      retailerId: isRetailerLogin ? (currentUser?.retailer_id || '__no_retailer__') : null
     }).then((ok) => {
-      if (ok && !cancelled) {
+      if (ok && !cancelled && !isRetailerLogin) {
         // Ek baar: purane retailers ka galat default state (Maharashtra 27) theek karo
         const locationFixed = db.fixCompanyLocationDefaults(activeBiz);
         const fixed = db.fixLegacyRetailerStateCodes(activeBiz);
@@ -1053,7 +1068,8 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, isLocalCacheReady, sessionBusinessId, cloudRestartKey, loadData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, isLocalCacheReady, sessionBusinessId, cloudRestartKey, loadData, currentUser?.id]);
 
   const retryCloudConnection = useCallback(() => {
     setCloudRestartKey((k) => k + 1);
@@ -2403,6 +2419,26 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
           } finally {
             refreshState();
           }
+        },
+        flowPackOrders: (entries) => {
+          const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
+          try { return db.flowPackOrders(entries, user); } finally { refreshState(); }
+        },
+        flowBillShop: (orderIds, options) => {
+          const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
+          try { return db.flowBillShop(orderIds, options, user); } finally { refreshState(); }
+        },
+        flowEditOrder: (orderId, lines) => {
+          const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
+          try { return { changes: db.flowEditOrder(orderId, lines, user).changes }; } finally { refreshState(); }
+        },
+        flowReviseInvoice: (invoiceId, lines, reason) => {
+          const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
+          try { return db.flowReviseInvoice(invoiceId, lines, reason, user); } finally { refreshState(); }
+        },
+        flowCancelRemaining: (orderId, reason) => {
+          const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
+          try { db.flowCancelRemaining(orderId, reason, user); } finally { refreshState(); }
         },
         syncWithCloud,
         forcePushToCloud,

@@ -104,3 +104,14 @@ export function stripSecrets<T>(item: T): T {
   }
   return (copy || item) as T;
 }
+
+// Retailer logins (shop app) only get these stores. Used by the server and the retailer device.
+/** Catalogue data every retailer of the company may see. */
+export const RETAILER_SHARED_STORES = [
+  'fmcg_products', 'fmcg_categories', 'fmcg_product_categories', 'fmcg_batches', 'fmcg_inventory',
+  'fmcg_godowns', 'fmcg_business_companies', 'fmcg_companies', 'fmcg_product_aliases'
+];
+/** Records that belong to one retailer (data.retailer_id). */
+export const RETAILER_OWN_STORES = [
+  'fmcg_orders', 'fmcg_invoices', 'fmcg_payments', 'fmcg_delivery_challans', 'fmcg_sales_returns', 'fmcg_fulfilments'
+];
