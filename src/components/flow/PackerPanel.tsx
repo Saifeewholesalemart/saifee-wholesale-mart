@@ -12,7 +12,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import type { Order } from '@/lib/db';
 import { flowOrderStage, flowRemainingQty, flowOrderedQty, flowShopKey, flowChannelLabel, splitBaseQuantity } from '@/lib/db';
-import { productLabel, customerName, formatWhen } from './flowUi';
+import { productLabel, customerName, formatWhen, sortByOrderSort, OrderSort } from './flowUi';
 import { CheckCircle2, ChevronLeft, PackageOpen } from 'lucide-react';
 import { useUrlStep } from '@/lib/useUrlStep';
 
@@ -33,7 +33,7 @@ function freeStockExcluding(batches: { product_id: string; quantity: number }[],
   return free;
 }
 
-export default function PackerPanel({ compact = false, filter }: { compact?: boolean; filter?: (o: Order) => boolean }) {
+export default function PackerPanel({ compact = false, filter, sort = 'oldest' }: { compact?: boolean; filter?: (o: Order) => boolean; sort?: OrderSort }) {
   const { orders, products, batches, retailers, flowPackOrders } = useDb();
   // Packing screen is kept in the URL (?pack=...) so the phone Back button goes one screen back
   const [packParam, setPackParam] = useUrlStep<string>('pack', '', null);
@@ -66,8 +66,13 @@ export default function PackerPanel({ compact = false, filter }: { compact?: boo
         const k = flowShopKey(o);
         map.set(k, [...(map.get(k) || []), o]);
       });
-    return Array.from(map.entries()).map(([key, list]) => ({ key, orders: list }));
-  }, [orders, freeAll, filter]);
+    const list = Array.from(map.entries()).map(([key, list]) => ({ key, orders: list }));
+    return sortByOrderSort(list, sort, {
+      time: g => new Date(g.orders[0].order_date || g.orders[0].created_at || 0).getTime(),
+      lines: g => g.orders.reduce((s, o) => s + (o.items || []).filter(it => flowRemainingQty(it) > 0).length, 0),
+      amount: g => g.orders.reduce((s, o) => s + (Number(o.total_amount) || 0), 0)
+    });
+  }, [orders, freeAll, filter, sort]);
 
   const group = openKey ? groups.find(g => g.key === openKey) || null : null;
   const groupOrders = group?.orders || [];

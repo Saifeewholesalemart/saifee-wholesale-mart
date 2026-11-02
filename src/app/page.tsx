@@ -7,7 +7,6 @@ import { useRouter } from 'next/navigation';
 import { homePathFor } from '@/lib/useUrlStep';
 import { 
   Package, 
-  Smartphone, 
   Lock, 
   Eye, 
   EyeOff, 
@@ -16,65 +15,11 @@ import {
   AlertCircle, 
   CheckCircle2, 
   Headphones, 
-  Sparkles, 
   X,
   PhoneCall,
   Mail,
-  MapPin,
-  Building2,
-  Boxes,
-  Store,
-  Shield
+  MapPin
 } from 'lucide-react';
-
-// Built-in fail-safe demo credentials map for seamless, zero-friction developer & user testing
-const BUILTIN_DEMO_ACCOUNTS = [
-  {
-    mobile: '9826012345',
-    passwords: ['admin', 'admin123'],
-    profileId: 'p-admin-1',
-    roleLabel: 'Distributor Administrator',
-    targetRoute: '/admin/orders',
-    role: 'admin',
-    profile_type: 'ADMIN'
-  },
-  {
-    mobile: '9826011111',
-    passwords: ['sales', 'sales123'],
-    profileId: 'p-dist-sales-1',
-    roleLabel: 'Distributor Sales Rep',
-    targetRoute: '/salesperson/dashboard',
-    role: 'sales_dist',
-    profile_type: 'SALESPERSON'
-  },
-  {
-    mobile: '9826022222',
-    passwords: ['sales', 'sales123'],
-    profileId: 'p-co-sales-1',
-    roleLabel: 'Company Sales Rep (Parle)',
-    targetRoute: '/salesperson/dashboard',
-    role: 'sales_co',
-    profile_type: 'SALESPERSON'
-  },
-  {
-    mobile: '1234567890',
-    passwords: ['packer', 'packer123', 'staff', 'staff123'],
-    profileId: 'p-staff-packer-1',
-    roleLabel: 'Warehouse Staff & Packer',
-    targetRoute: '/staff/dashboard',
-    role: 'staff',
-    profile_type: 'STAFF'
-  },
-  {
-    mobile: '9826110001',
-    passwords: ['retail', 'retail123'],
-    profileId: 'p-retailer-ganesh',
-    roleLabel: 'Retail Shop Partner (Shree Ganesh)',
-    targetRoute: '/retailer/home',
-    role: 'retailer',
-    profile_type: 'RETAILER'
-  }
-];
 
 export default function Home() {
   const { setCurrentUser, profiles, retailers, activeCompany, isAuthenticated, isAuthLoading, currentUser } = useDb();
@@ -96,7 +41,6 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successRole, setSuccessRole] = useState<string | null>(null);
   const [showSupportModal, setShowSupportModal] = useState(false);
-  const [showQuickFill, setShowQuickFill] = useState(true);
 
   // Load remembered mobile number on mount
   useEffect(() => {
@@ -122,12 +66,6 @@ export default function Home() {
   const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setErrorMessage(null);
     setPassword(e.target.value);
-  };
-
-  const handleQuickFill = (mobile: string, pwd: string) => {
-    setMobileNumber(mobile);
-    setPassword(pwd);
-    setErrorMessage(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -389,113 +327,6 @@ export default function Home() {
               </button>
             </form>
 
-            {/* Quick Demo Credentials Assistant */}
-            <div className="mt-5 pt-4 border-t border-slate-800/80">
-              <div className="flex items-center justify-between text-xs text-slate-400 font-semibold mb-2.5">
-                <span className="flex items-center gap-1.5 text-slate-300">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Demo &amp; Testing Accounts (1-Click Fill)</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowQuickFill(!showQuickFill)}
-                  className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded font-mono cursor-pointer transition-colors"
-                >
-                  {showQuickFill ? 'Hide ▲' : 'Show ▼'}
-                </button>
-              </div>
-
-              {showQuickFill && (
-                <div className="grid grid-cols-2 gap-2 text-left animate-in fade-in slide-in-from-top-1 duration-150">
-                  {/* Admin Account */}
-                  <button
-                    type="button"
-                    onClick={() => handleQuickFill('9826012345', 'admin')}
-                    className="p-2.5 bg-slate-950/70 hover:bg-slate-800/90 border border-slate-800 hover:border-indigo-500/60 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
-                  >
-                    <div className="text-[11px] font-bold text-indigo-400 flex items-center justify-between">
-                      <span className="flex items-center gap-1">
-                        <Shield className="w-3 h-3 text-indigo-400" />
-                        <span>Admin ERP</span>
-                      </span>
-                      <span className="text-[9px] bg-indigo-500/20 text-indigo-300 px-1 rounded font-mono">Orders</span>
-                    </div>
-                    <div className="text-[10px] text-slate-300 font-mono mt-1">9826012345</div>
-                    <div className="text-[9px] text-slate-500">pwd: admin</div>
-                  </button>
-
-                  {/* Distributor Sales */}
-                  <button
-                    type="button"
-                    onClick={() => handleQuickFill('9826011111', 'sales')}
-                    className="p-2.5 bg-slate-950/70 hover:bg-slate-800/90 border border-slate-800 hover:border-cyan-500/60 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
-                  >
-                    <div className="text-[11px] font-bold text-cyan-400 flex items-center justify-between">
-                      <span className="flex items-center gap-1">
-                        <Smartphone className="w-3 h-3 text-cyan-400" />
-                        <span>Distributor Sales</span>
-                      </span>
-                      <span className="text-[9px] bg-cyan-500/20 text-cyan-300 px-1 rounded font-mono">Sales</span>
-                    </div>
-                    <div className="text-[10px] text-slate-300 font-mono mt-1">9826011111</div>
-                    <div className="text-[9px] text-slate-500">pwd: sales</div>
-                  </button>
-
-                  {/* Company Sales */}
-                  <button
-                    type="button"
-                    onClick={() => handleQuickFill('9826022222', 'sales')}
-                    className="p-2.5 bg-slate-950/70 hover:bg-slate-800/90 border border-slate-800 hover:border-blue-500/60 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
-                  >
-                    <div className="text-[11px] font-bold text-blue-400 flex items-center justify-between">
-                      <span className="flex items-center gap-1">
-                        <Building2 className="w-3 h-3 text-blue-400" />
-                        <span>Company Sales</span>
-                      </span>
-                      <span className="text-[9px] bg-blue-500/20 text-blue-300 px-1 rounded font-mono">Parle</span>
-                    </div>
-                    <div className="text-[10px] text-slate-300 font-mono mt-1">9826022222</div>
-                    <div className="text-[9px] text-slate-500">pwd: sales</div>
-                  </button>
-
-                  {/* Staff / Packer */}
-                  <button
-                    type="button"
-                    onClick={() => handleQuickFill('1234567890', 'packer')}
-                    className="p-2.5 bg-slate-950/70 hover:bg-slate-800/90 border border-slate-800 hover:border-amber-500/60 rounded-xl text-left transition-all cursor-pointer group shadow-xs"
-                  >
-                    <div className="text-[11px] font-bold text-amber-400 flex items-center justify-between">
-                      <span className="flex items-center gap-1">
-                        <Boxes className="w-3 h-3 text-amber-400" />
-                        <span>Staff / Packer</span>
-                      </span>
-                      <span className="text-[9px] bg-amber-500/20 text-amber-300 px-1 rounded font-mono">Floor</span>
-                    </div>
-                    <div className="text-[10px] text-slate-300 font-mono mt-1">1234567890</div>
-                    <div className="text-[9px] text-slate-500">pwd: packer</div>
-                  </button>
-
-                  {/* Retailer Direct */}
-                  <button
-                    type="button"
-                    onClick={() => handleQuickFill('9826110001', 'retail')}
-                    className="p-2.5 bg-slate-950/70 hover:bg-slate-800/90 border border-slate-800 hover:border-emerald-500/60 rounded-xl text-left transition-all cursor-pointer group col-span-2 shadow-xs"
-                  >
-                    <div className="text-[11px] font-bold text-emerald-400 flex items-center justify-between">
-                      <span className="flex items-center gap-1">
-                        <Store className="w-3 h-3 text-emerald-400" />
-                        <span>Retail Shop Portal (Shree Ganesh Super Market)</span>
-                      </span>
-                      <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-mono">Shop</span>
-                    </div>
-                    <div className="flex items-center justify-between mt-1 text-[10px]">
-                      <span className="text-slate-300 font-mono">9826110001</span>
-                      <span className="text-slate-500">pwd: retail</span>
-                    </div>
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
 
           {/* Secure Trade Guarantee Pill */}

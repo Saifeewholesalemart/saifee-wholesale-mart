@@ -23,8 +23,12 @@ export default function LastBillingRatesModal({
   onApplyRate
 }: LastBillingRatesModalProps) {
   const { getLastBillingRates, products, retailers, currentUser } = useDb();
-  // Our purchase cost and margin are never shown to a retailer
-  const hideCost = currentUser?.role === 'retailer';
+  // Purchase cost and margin are shown only to admin and staff (biller) — never to retailers or salesmen
+  const viewerType = String((currentUser as any)?.profile_type || '').toUpperCase();
+  const hideCost = !(
+    currentUser?.role === 'admin' || currentUser?.role === 'staff' ||
+    viewerType === 'ADMIN' || viewerType === 'SUPERUSER' || viewerType === 'STAFF'
+  );
 
   // Close on ESC key
   useEffect(() => {

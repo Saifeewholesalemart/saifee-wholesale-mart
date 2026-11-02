@@ -10,9 +10,10 @@ import React, { useMemo, useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import type { Invoice, Product } from '@/lib/db';
 import {
-  computeFreeStockByProduct, flowOrderStage, flowRemainingQty, flowOrderedQty, flowItemRate, flowChannelLabel, FlowStage
+  computeFreeStockByProduct, flowOrderStage, flowRemainingQty, flowOrderedQty, flowItemRate, flowChannelLabel, FlowStage, isWalkInRetailerId
 } from '@/lib/db';
-import { productLabel, customerName, formatINR, formatWhen } from './flowUi';
+import { productLabel, customerName, formatINR, formatWhen, purchaseRateOf, marginPercent } from './flowUi';
+import RateHistoryPanel from './RateHistoryPanel';
 import InvoicePreviewModal from '@/components/orders/InvoicePreviewModal';
 import { X } from 'lucide-react';
 
@@ -35,14 +36,18 @@ type EditLine = { key: string; refId?: string; productId: string; name: string; 
 
 /** Qty + rate table with remove and "add item" search. Used for order edit and bill edit. */
 function LineEditor({
-  lines, setLines, products, qtyLabel
+  lines, setLines, products, qtyLabel, batches, retailerId
 }: {
   lines: EditLine[];
   setLines: (fn: (prev: EditLine[]) => EditLine[]) => void;
   products: Product[];
   qtyLabel: string;
+  batches: { product_id: string; quantity: number; expiry_date?: string; purchase_rate?: number }[];
+  retailerId: string | null;
 }) {
   const [search, setSearch] = useState('');
+  const [rateKey, setRateKey] = useState<string | null>(null);
+  const purchaseOf = (productId: string) => purchaseRateOf(products.find(p => p.id === productId), batches);
   const matches = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (q.length < 2) return [];
@@ -75,6 +80,22 @@ function LineEditor({
                 <td className="px-3 py-2">
                   <div className="font-semibold text-slate-900">{l.name}</div>
                   {l.note && <div className="text-xs text-slate-600">{l.note}</div>}
+                  {(() => {
+                    const pr = purchaseOf(l.productId);
+                    const m = marginPercent(Number(l.rate) || 0, pr);
+                    return (
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                        <span className="text-slate-700">
+                          Purchase: <strong className="text-slate-900">{pr > 0 ? formatINR(pr) : 'Not known'}</strong>
+                          {m !== null && <span className={`ml-1.5 font-semibold ${m < 0 ? 'text-red-700' : 'text-green-800'}`}>{m < 0 ? 'Loss ' : 'Margin '}{Math.abs(m).toFixed(1)}%</span>}
+                        </span>
+                        <button type="button" onClick={() => setRateKey(l.key)}
+                          className="min-h-8 px-2.5 rounded-md border border-slate-300 bg-white font-bold text-indigo-800 hover:bg-indigo-50">
+                          Last rates
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </td>
                 <td className="px-3 py-2 text-right">
                   <label className="sr-only" htmlFor={`q-${l.key}`}>Quantity for {l.name}</label>
@@ -99,6 +120,20 @@ function LineEditor({
           </tbody>
         </table>
       </div>
+      {rateKey && (() => {
+        const l = lines.find(x => x.key === rateKey);
+        if (!l) return null;
+        return (
+          <RateHistoryPanel
+            productId={l.productId}
+            retailerId={retailerId}
+            purchaseRate={purchaseOf(l.productId)}
+            currentRate={Number(l.rate) || 0}
+            onUseRate={r => { setLines(prev => prev.map(x => (x.key === l.key ? { ...x, rate: String(r) } : x))); setRateKey(null); }}
+            onClose={() => setRateKey(null)}
+          />
+        );
+      })()}
       <div className="flex flex-col gap-1.5">
         <label htmlFor="add-item-search" className="text-xs font-semibold text-slate-600">Add item</label>
         <input id="add-item-search" type="search" value={search} onChange={e => setSearch(e.target.value)}
@@ -233,7 +268,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
               {order.flow_ready_to_bill && (
                 <p className="text-sm text-amber-900 bg-amber-50 rounded-lg px-3 py-2">This order is packed. Saving a change sends it back to To Pack.</p>
               )}
-              <LineEditor lines={lines} setLines={setLines} products={products} qtyLabel="Qty to supply (pcs)" />
+              <LineEditor lines={lines} setLines={setLines} products={products} qtyLabel="Qty to supply (pcs)" batches={batches} retailerId={isWalkInRetailerId(order.retailer_id) ? null : order.retailer_id} />
               <div className="flex flex-wrap gap-2 justify-end">
                 <button type="button" onClick={() => setMode('view')} className="min-h-11 px-4 rounded-lg border border-slate-300 bg-white font-semibold">Discard</button>
                 <button type="button" disabled={invalid} onClick={saveOrder} className="min-h-11 px-5 rounded-lg bg-indigo-700 hover:bg-indigo-800 disabled:bg-slate-400 text-white font-bold">Save order</button>
@@ -249,7 +284,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
                 The invoice keeps its number and is marked “Revised”. Stock and the customer’s balance change by the difference. The old version is kept in the history.
                 If this bill is already in a filed GST return, check with your CA (a credit or debit note may be needed).
               </p>
-              <LineEditor lines={lines} setLines={setLines} products={products} qtyLabel="Billed qty (pcs)" />
+              <LineEditor lines={lines} setLines={setLines} products={products} qtyLabel="Billed qty (pcs)" batches={batches} retailerId={isWalkInRetailerId(order.retailer_id) ? null : order.retailer_id} />
               <label className="flex flex-col gap-1 text-sm">
                 <span className="text-xs font-semibold text-slate-600">Reason (shown in history)</span>
                 <input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. 2 pcs returned, rate corrected"

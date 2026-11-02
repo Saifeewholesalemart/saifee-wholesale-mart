@@ -13,15 +13,16 @@ import { useDb } from '@/context/DbContext';
 import type { Invoice, DeliveryChallan, Order } from '@/lib/db';
 import {
   computeFreeStockByProduct, flowOrderStage, flowRemainingQty, flowItemRate, flowBillLineAmounts,
-  flowShopKey, flowChannelLabel, isIntraStateSupply
+  flowShopKey, flowChannelLabel, isIntraStateSupply, isWalkInRetailerId
 } from '@/lib/db';
-import { productLabel, customerName, formatINR, formatWhen } from './flowUi';
+import { productLabel, customerName, formatINR, formatWhen, purchaseRateOf, marginPercent, sortByOrderSort, OrderSort } from './flowUi';
+import RateHistoryPanel from './RateHistoryPanel';
 import InvoicePreviewModal from '@/components/orders/InvoicePreviewModal';
-import { CheckCircle2, Receipt } from 'lucide-react';
+import { CheckCircle2, Receipt, History } from 'lucide-react';
 
 type Mode = 'Cash' | 'UPI' | 'Credit';
 
-export default function BillerPanel({ filter }: { filter?: (o: Order) => boolean }) {
+export default function BillerPanel({ filter, sort = 'oldest' }: { filter?: (o: Order) => boolean; sort?: OrderSort }) {
   const { orders, products, batches, retailers, invoices, activeCompany, flowBillShop } = useDb();
   const [selKey, setSelKey] = useState<string | null>(null);
   const [rates, setRates] = useState<Record<string, string>>({});
@@ -30,6 +31,7 @@ export default function BillerPanel({ filter }: { filter?: (o: Order) => boolean
   const [error, setError] = useState('');
   const [done, setDone] = useState<{ invoice: Invoice; challan?: DeliveryChallan; shortfall: string; retailerId: string; mode: Mode } | null>(null);
   const [preview, setPreview] = useState(false);
+  const [rateLine, setRateLine] = useState<string | null>(null);
 
   const freeAll = useMemo(() => computeFreeStockByProduct(batches, orders), [batches, orders]);
   const groups = useMemo(() => {
@@ -42,8 +44,13 @@ export default function BillerPanel({ filter }: { filter?: (o: Order) => boolean
         const k = flowShopKey(o);
         map.set(k, [...(map.get(k) || []), o]);
       });
-    return Array.from(map.entries()).map(([key, list]) => ({ key, orders: list }));
-  }, [orders, freeAll, filter]);
+    const list = Array.from(map.entries()).map(([key, list]) => ({ key, orders: list }));
+    return sortByOrderSort(list, sort, {
+      time: g => new Date(g.orders[0].packed_at || 0).getTime(),
+      lines: g => g.orders.reduce((s, o) => s + (o.items || []).filter(it => (Number(it.flow_packed_qty) || 0) > 0).length, 0),
+      amount: g => g.orders.reduce((s, o) => s + (Number(o.total_amount) || 0), 0)
+    });
+  }, [orders, freeAll, filter, sort]);
 
   const current = (selKey && groups.find(g => g.key === selKey)) || (!done ? groups[0] : null) || null;
   const first = current?.orders[0];
@@ -63,9 +70,10 @@ export default function BillerPanel({ filter }: { filter?: (o: Order) => boolean
         const units = it.units_per_trading_unit || product?.units_per_box_carton || 1;
         const gst = (product?.gst_percent !== undefined && product?.gst_percent !== null) ? Number(product.gst_percent) : (Number(it.gst_percent) || 0);
         const amt = flowBillLineAmounts(qty, units, rate, gst, intra);
-        return { id: it.id, order: o, name: productLabel(product), qty, baseRate, rate, raw, amt };
+        const purchase = purchaseRateOf(product, batches);
+        return { id: it.id, productId: it.product_id, order: o, name: productLabel(product), qty, baseRate, rate, raw, amt, purchase, margin: marginPercent(rate, purchase) };
       }));
-  }, [current, products, rates, intra]);
+  }, [current, products, batches, rates, intra]);
 
   const shortLines = useMemo(() => {
     if (!current) return [];
@@ -195,6 +203,20 @@ export default function BillerPanel({ filter }: { filter?: (o: Order) => boolean
                         {current.orders.length > 1 && (
                           <div className="text-xs text-slate-600">{l.order.order_number} · {flowChannelLabel(l.order)}</div>
                         )}
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                          <span className="text-slate-700">
+                            Purchase: <strong className="text-slate-900">{l.purchase > 0 ? formatINR(l.purchase) : 'Not known'}</strong>
+                            {l.margin !== null && (
+                              <span className={`ml-1.5 font-semibold ${l.margin < 0 ? 'text-red-700' : 'text-green-800'}`}>
+                                {l.margin < 0 ? 'Loss ' : 'Margin '}{Math.abs(l.margin).toFixed(1)}%
+                              </span>
+                            )}
+                          </span>
+                          <button type="button" onClick={() => setRateLine(l.id)}
+                            className="min-h-8 px-2.5 rounded-md border border-slate-300 bg-white font-bold text-indigo-800 hover:bg-indigo-50 inline-flex items-center gap-1">
+                            <History className="w-3.5 h-3.5" aria-hidden="true" /> Last rates
+                          </button>
+                        </div>
                       </td>
                       <td className="px-3 py-3 text-right font-bold">{l.qty}</td>
                       <td className="px-3 py-3 text-right">
@@ -273,6 +295,21 @@ export default function BillerPanel({ filter }: { filter?: (o: Order) => boolean
           </>
         )}
       </section>
+
+      {rateLine && (() => {
+        const l = lines.find(x => x.id === rateLine);
+        if (!l || !first) return null;
+        return (
+          <RateHistoryPanel
+            productId={l.productId}
+            retailerId={isWalkInRetailerId(first.retailer_id) ? null : first.retailer_id}
+            purchaseRate={l.purchase}
+            currentRate={l.rate}
+            onUseRate={r => { setRates(prev => ({ ...prev, [l.id]: String(r) })); setRateLine(null); }}
+            onClose={() => setRateLine(null)}
+          />
+        );
+      })()}
 
       {preview && doneInvoice && (
         <InvoicePreviewModal

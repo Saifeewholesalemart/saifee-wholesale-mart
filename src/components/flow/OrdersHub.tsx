@@ -16,7 +16,7 @@ import BillerPanel from './BillerPanel';
 import OrderDetailModal, { StageBadge } from './OrderDetailModal';
 import {
   productLabel, customerName, formatINR, formatWhen, EMPTY_FILTER, OrderFilter, DatePreset,
-  orderMatchesFilter, dateInRange, countActiveFilters
+  orderMatchesFilter, dateInRange, countActiveFilters, OrderSort, ORDER_SORT_OPTIONS, sortByOrderSort
 } from './flowUi';
 import InvoicePreviewModal from '@/components/orders/InvoicePreviewModal';
 import SpotOrderModal from '@/components/orders/SpotOrderModal';
@@ -64,7 +64,8 @@ export default function OrdersHub() {
   };
   const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null);
   const [spotOpen, setSpotOpen] = useState(false);
-  const [sort, setSort] = useState<'new' | 'old' | 'high' | 'low'>('new');
+  const [sort, setSortState] = useState<OrderSort>('oldest');
+  const setSort = (v: OrderSort) => { setSortState(v); setPage(1); };
   const [page, setPage] = useState(1);
 
   const set = (patch: Partial<OrderFilter>) => { setFilter(f => ({ ...f, ...patch })); setPage(1); };
@@ -94,14 +95,19 @@ export default function OrdersHub() {
   const byStage = (s: FlowStage) => filtered.filter(o => stageOf.get(o.id) === s);
   const shopsIn = (list: Order[]) => new Set(list.map(o => flowShopKey(o))).size;
 
+  const orderTime = (o: Order) => new Date(o.order_date || o.created_at || 0).getTime();
   const toPack = byStage('to_pack');
   const ready = byStage('ready_to_bill');
-  const backorder = byStage('backorder');
+  const backorder = sortByOrderSort(byStage('backorder'), sort, {
+    time: orderTime,
+    lines: o => (o.items || []).filter(it => flowRemainingQty(it) > 0).length,
+    amount: o => Number(o.total_amount) || 0
+  });
 
   // Billed tab lists invoices (one invoice can hold several orders of one shop)
   const billedInvoices = useMemo(() => {
     const q = filter.search.trim().toLowerCase();
-    return invoices
+    const list = invoices
       .filter(inv => (inv as any).status !== 'Cancelled')
       .filter(inv => dateInRange(inv.date, filter))
       .filter(inv => !filter.retailerId || inv.retailer_id === filter.retailerId)
@@ -118,19 +124,19 @@ export default function OrdersHub() {
           ...(inv.items || []).map(i => i.product_name || products.find(p => p.id === i.product_id)?.name)]
           .filter(Boolean).join(' ').toLowerCase();
         return hay.includes(q);
-      })
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [invoices, orders, retailers, products, filter]);
+      });
+    return sortByOrderSort(list, sort, {
+      time: inv => new Date(inv.date).getTime(),
+      lines: inv => (inv.items || []).length,
+      amount: inv => Number(inv.grand_total) || 0
+    });
+  }, [invoices, orders, retailers, products, filter, sort]);
 
-  const allSorted = useMemo(() => {
-    const list = [...filtered];
-    const t = (o: Order) => new Date(o.order_date || o.created_at || 0).getTime();
-    if (sort === 'new') list.sort((a, b) => t(b) - t(a));
-    if (sort === 'old') list.sort((a, b) => t(a) - t(b));
-    if (sort === 'high') list.sort((a, b) => (b.total_amount || 0) - (a.total_amount || 0));
-    if (sort === 'low') list.sort((a, b) => (a.total_amount || 0) - (b.total_amount || 0));
-    return list;
-  }, [filtered, sort]);
+  const allSorted = useMemo(() => sortByOrderSort(filtered, sort, {
+    time: orderTime,
+    lines: o => (o.items || []).length,
+    amount: o => Number(o.total_amount) || 0
+  }), [filtered, sort]);
 
   const cities = useMemo(() => Array.from(new Set(retailers.map(r => r.city).filter(Boolean) as string[])).sort(), [retailers]);
   const creators = useMemo(() => Array.from(new Set(orders.map(o => o.created_by).filter(Boolean) as string[])).sort(), [orders]);
@@ -227,6 +233,11 @@ export default function OrdersHub() {
               </button>
             ))}
           </div>
+          <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">Sort
+            <select value={sort} onChange={e => setSort(e.target.value as OrderSort)} className={selectCls} aria-label="Sort orders">
+              {ORDER_SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </label>
           <button type="button" aria-expanded={showFilters} onClick={() => setShowFilters(v => !v)}
             className="min-h-11 px-4 rounded-lg border border-slate-300 bg-white text-sm font-bold text-slate-800">
             {showFilters ? 'Hide filters' : `Filters${activeFilterCount ? ` (${activeFilterCount})` : ''}`}
@@ -286,8 +297,8 @@ export default function OrdersHub() {
         )}
       </section>
 
-      {tab === 'to_pack' && <PackerPanel filter={matches} />}
-      {tab === 'ready_to_bill' && <BillerPanel filter={matches} />}
+      {tab === 'to_pack' && <PackerPanel filter={matches} sort={sort} />}
+      {tab === 'ready_to_bill' && <BillerPanel filter={matches} sort={sort} />}
 
       {tab === 'billed' && (
         <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
@@ -390,14 +401,7 @@ export default function OrdersHub() {
         <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
           <div className="px-5 py-3 border-b border-slate-200 flex flex-wrap justify-between items-center gap-2">
             <h2 className="text-base font-bold text-slate-900">All orders</h2>
-            <label className="flex items-center gap-2 text-sm text-slate-600">Sort
-              <select value={sort} onChange={e => setSort(e.target.value as any)} className={selectCls}>
-                <option value="new">Newest first</option>
-                <option value="old">Oldest first</option>
-                <option value="high">Amount: high to low</option>
-                <option value="low">Amount: low to high</option>
-              </select>
-            </label>
+
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[820px] text-sm border-collapse">
