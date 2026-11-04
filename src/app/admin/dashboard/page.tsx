@@ -2,6 +2,7 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
+import { computeFreeStockByProduct, flowOrderStage, flowRemainingQty, FlowStage } from '@/lib/db';
 import Link from 'next/link';
 import { 
   TrendingUp, ShoppingCart, Users, AlertTriangle, 
@@ -27,20 +28,21 @@ export default function AdminDashboard() {
 
   // Multi-Godown Live Storage Stats
   const godownStats = useMemo(() => {
+    const productById = new Map(products.map(prod => [prod.id, prod]));
     return godowns.map(g => {
       const gInv = inventory.filter(inv => inv.godown_id === g.id);
       const totalPhysicalCartons = gInv.reduce((sum, inv) => {
-        const p = products.find(prod => prod.id === inv.product_id);
+        const p = productById.get(inv.product_id);
         const upb = p?.units_per_box_carton || 1;
         return sum + Math.floor(inv.physical_qty / upb);
       }, 0);
       const totalAvailableCartons = gInv.reduce((sum, inv) => {
-        const p = products.find(prod => prod.id === inv.product_id);
+        const p = productById.get(inv.product_id);
         const upb = p?.units_per_box_carton || 1;
         return sum + Math.floor(inv.available_qty / upb);
       }, 0);
       const totalValuation = gInv.reduce((sum, inv) => {
-        const p = products.find(prod => prod.id === inv.product_id);
+        const p = productById.get(inv.product_id);
         return sum + (inv.physical_qty * (p?.purchase_price || 0) / (p?.units_per_box_carton || 1));
       }, 0);
       const activeTransfersOut = stockTransfers.filter(t => t.from_godown_id === g.id && (t.status === 'Dispatched' || t.status === 'Received')).length;
@@ -57,30 +59,25 @@ export default function AdminDashboard() {
     });
   }, [godowns, inventory, products, stockTransfers]);
 
-  // Operational Order Pipeline counts
-  const newOrders = orders.filter(ord => ord.status === 'Submitted');
-  const underReviewOrders = orders.filter(ord => ord.status === 'Under Review');
-  const readyPackingOrders = orders.filter(ord => ord.status === 'Confirmed' || ord.status === 'Partially Confirmed');
-  const readyDispatchOrders = orders.filter(ord => ord.status === 'Packed');
-  const dispatchedOrders = orders.filter(ord => ord.status === 'Dispatched');
-  const deliveredOrders = orders.filter(ord => ord.status === 'Delivered');
+  // Order counts by stage — same stages as the Orders page (To Pack → Ready to Bill → Billed, plus Backorder)
+  const stageCounts = useMemo(() => {
+    const free = computeFreeStockByProduct(batches, orders);
+    const counts: Record<FlowStage, number> = { to_pack: 0, ready_to_bill: 0, billed: 0, backorder: 0, cancelled: 0 };
+    const backorderOrders: typeof orders = [];
+    orders.forEach(o => {
+      const st = flowOrderStage(o, free);
+      counts[st] += 1;
+      if (st === 'backorder') backorderOrders.push(o);
+    });
+    return { counts, backorderOrders };
+  }, [orders, batches]);
 
-  // Pending Backorder Stats
-  const eligiblePendingOrders = orders.filter(o => 
-    o.status !== 'Delivered' && 
-    o.status !== 'Cancelled' && 
-    o.items?.some(item => (item.pending_qty || 0) > 0)
-  );
-
-  const pendingRetailersCount = new Set(eligiblePendingOrders.map(o => o.retailer_id)).size;
+  // Backorder stats (orders waiting for stock)
+  const eligiblePendingOrders = stageCounts.backorderOrders;
   const pendingOrdersCount = eligiblePendingOrders.length;
-  
   let pendingCartonsCount = 0;
   eligiblePendingOrders.forEach(o => {
-    o.items?.forEach(item => {
-      const p = item.pending_qty || 0;
-      if (p > 0) pendingCartonsCount += p;
-    });
+    o.items?.forEach(item => { pendingCartonsCount += flowRemainingQty(item); });
   });
 
   // City-wise pending backorder aggregation
@@ -95,7 +92,7 @@ export default function AdminDashboard() {
       map[city].orderCount += 1;
       map[city].retailerCount.add(ord.retailer_id);
       ord.items?.forEach(i => {
-        map[city].cartonCount += (i.pending_qty || 0);
+        map[city].cartonCount += flowRemainingQty(i);
       });
     });
     return map;
@@ -145,7 +142,7 @@ export default function AdminDashboard() {
         <div>
           <h2 className="text-lg sm:text-xl font-black text-slate-800">Saifee Stores &bull; Distributor Operations Hub</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Real-time pipeline: Review &rarr; Confirmation &rarr; Batch Allocation &rarr; Dispatch &rarr; Invoicing.
+            Order flow: To Pack &rarr; Ready to Bill &rarr; Billed. Short items wait in Backorder until stock arrives.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -245,76 +242,45 @@ export default function AdminDashboard() {
           </Link>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-          {/* 1. New Orders */}
-          <Link href="/admin/orders?status=Submitted">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Link href="/admin/orders?tab=to_pack">
             <div className="bg-white p-4 rounded-xl border border-slate-200 hover:border-amber-400 hover:shadow-md transition-all text-left group">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-600 uppercase">1. New</span>
-                <span className="w-2 h-2 rounded-full bg-amber-400 group-hover:animate-ping" />
+                <span className="text-xs font-bold text-slate-600 uppercase">To Pack</span>
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
               </div>
-              <span className="text-xl font-black text-amber-600 block mt-1">{newOrders.length}</span>
-              <span className="text-xs font-medium text-slate-500 block mt-0.5">Submitted</span>
+              <span className="text-xl font-black text-amber-700 block mt-1">{stageCounts.counts.to_pack}</span>
+              <span className="text-xs font-medium text-slate-500 block mt-0.5">Orders waiting to be packed</span>
             </div>
           </Link>
-
-          {/* 2. Under Review */}
-          <Link href="/admin/orders?status=Under%20Review">
-            <div className="bg-white p-4 rounded-xl border border-slate-200 hover:border-blue-400 hover:shadow-md transition-all text-left group">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-600 uppercase">2. Review</span>
-                <span className="w-2 h-2 rounded-full bg-blue-400" />
-              </div>
-              <span className="text-xl font-black text-blue-600 block mt-1">{underReviewOrders.length}</span>
-              <span className="text-xs font-medium text-slate-500 block mt-0.5">Under Review</span>
-            </div>
-          </Link>
-
-          {/* 3. Confirmed / Packing */}
-          <Link href="/admin/orders?status=Confirmed">
+          <Link href="/admin/orders?tab=ready_to_bill">
             <div className="bg-white p-4 rounded-xl border border-slate-200 hover:border-purple-400 hover:shadow-md transition-all text-left group">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-600 uppercase">3. Allocate</span>
+                <span className="text-xs font-bold text-slate-600 uppercase">Ready to Bill</span>
                 <span className="w-2 h-2 rounded-full bg-purple-500" />
               </div>
-              <span className="text-xl font-black text-purple-700 block mt-1">{readyPackingOrders.length}</span>
-              <span className="text-xs font-medium text-slate-500 block mt-0.5">Ready to Pack</span>
+              <span className="text-xl font-black text-purple-700 block mt-1">{stageCounts.counts.ready_to_bill}</span>
+              <span className="text-xs font-medium text-slate-500 block mt-0.5">Packed, bill not made yet</span>
             </div>
           </Link>
-
-          {/* 4. Packed / Ready for Dispatch */}
-          <Link href="/admin/orders?status=Packed">
+          <Link href="/admin/orders?tab=billed">
             <div className="bg-white p-4 rounded-xl border border-slate-200 hover:border-emerald-400 hover:shadow-md transition-all text-left group">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-600 uppercase">4. Dispatch</span>
+                <span className="text-xs font-bold text-slate-600 uppercase">Billed</span>
                 <span className="w-2 h-2 rounded-full bg-emerald-500" />
               </div>
-              <span className="text-xl font-black text-emerald-700 block mt-1">{readyDispatchOrders.length}</span>
-              <span className="text-xs font-medium text-slate-500 block mt-0.5">Ready for Van</span>
+              <span className="text-xl font-black text-emerald-700 block mt-1">{stageCounts.counts.billed}</span>
+              <span className="text-xs font-medium text-slate-500 block mt-0.5">Orders fully billed</span>
             </div>
           </Link>
-
-          {/* 5. Dispatched */}
-          <Link href="/admin/orders?status=Dispatched">
-            <div className="bg-white p-4 rounded-xl border border-slate-200 hover:border-indigo-400 hover:shadow-md transition-all text-left group">
+          <Link href="/admin/orders?tab=backorder">
+            <div className="bg-white p-4 rounded-xl border border-slate-200 hover:border-cyan-400 hover:shadow-md transition-all text-left group">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-600 uppercase">5. Invoiced</span>
-                <span className="w-2 h-2 rounded-full bg-indigo-500" />
-              </div>
-              <span className="text-xl font-black text-indigo-700 block mt-1">{dispatchedOrders.length}</span>
-              <span className="text-xs font-medium text-slate-500 block mt-0.5">Dispatched</span>
-            </div>
-          </Link>
-
-          {/* 6. Pending Backorders */}
-          <Link href="/admin/orders?pending_only=true">
-            <div className="bg-white p-4 rounded-xl border border-cyan-200 bg-cyan-50/20 hover:border-cyan-400 hover:shadow-md transition-all text-left group">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-cyan-700 uppercase">Backorders</span>
+                <span className="text-xs font-bold text-slate-600 uppercase">Backorder</span>
                 <span className="w-2 h-2 rounded-full bg-cyan-500" />
               </div>
-              <span className="text-xl font-black text-cyan-800 block mt-1">{pendingOrdersCount}</span>
-              <span className="text-xs font-bold text-cyan-600 block mt-0.5">{pendingCartonsCount} Cartons</span>
+              <span className="text-xl font-black text-cyan-700 block mt-1">{pendingOrdersCount}</span>
+              <span className="text-xs font-medium text-slate-500 block mt-0.5">{pendingCartonsCount} pcs waiting for stock</span>
             </div>
           </Link>
         </div>
@@ -436,18 +402,18 @@ export default function AdminDashboard() {
               Object.entries(cityPendingMap).map(([cityName, stat]) => (
                 <Link
                   key={cityName}
-                  href={`/admin/orders?city=${encodeURIComponent(cityName)}&pending_only=true`}
+                  href="/admin/orders?tab=backorder"
                   className="p-3 bg-slate-50 hover:bg-cyan-50 border border-slate-100 hover:border-cyan-200 rounded-xl flex items-center justify-between transition-colors group block"
                 >
                   <div>
                     <span className="font-extrabold text-slate-800 text-xs group-hover:text-cyan-900 block">{cityName}</span>
                     <span className="text-xs text-slate-500 font-medium">
-                      {stat.retailerCount.size} Stores &bull; {stat.orderCount} Pending Orders
+                      {stat.retailerCount.size} Stores &bull; {stat.orderCount} Orders waiting for stock
                     </span>
                   </div>
                   <div className="text-right">
                     <span className="px-2 py-0.5 bg-cyan-100 text-cyan-800 rounded font-black text-xs">
-                      {stat.cartonCount} CTN
+                      {stat.cartonCount} pcs
                     </span>
                   </div>
                 </Link>

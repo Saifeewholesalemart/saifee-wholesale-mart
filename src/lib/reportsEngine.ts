@@ -13,6 +13,43 @@ import {
 // FILTER STATE INTERFACE
 // ----------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Fast lookups (built once per data array, reused by every report).
+// Reports used to scan the whole product / stock list for every row, which froze
+// the screen with 6000+ items. Same results, just indexed.
+// ---------------------------------------------------------------------------
+const __byIdCache = new WeakMap<object, Map<string, any>>();
+function byId<T extends { id: string }>(arr: T[] | undefined | null): { get: (id: string | undefined | null) => T | undefined } {
+  const list = arr || [];
+  let m = __byIdCache.get(list) as Map<string, T> | undefined;
+  if (!m) {
+    m = new Map<string, T>();
+    for (const x of list) if (x && !m.has(x.id)) m.set(x.id, x);
+    __byIdCache.set(list, m);
+  }
+  const map = m;
+  return { get: (id: string | undefined | null) => (id == null ? undefined : map.get(id)) };
+}
+const __byProductCache = new WeakMap<object, Map<string, any[]>>();
+function byProductId<T extends { product_id: string }>(arr: T[] | undefined | null): Map<string, T[]> {
+  const list = arr || [];
+  let m = __byProductCache.get(list) as Map<string, T[]> | undefined;
+  if (!m) {
+    m = new Map<string, T[]>();
+    for (const x of list) {
+      if (!x) continue;
+      const g = m.get(x.product_id);
+      if (g) g.push(x); else m.set(x.product_id, [x]);
+    }
+    __byProductCache.set(list, m);
+  }
+  return m;
+}
+/** Rows of this product, in the original order (a fresh copy, safe to change). */
+function rowsOfProduct<T extends { product_id: string }>(arr: T[] | undefined | null, productId: string): T[] {
+  return (byProductId(arr).get(productId) || []).slice();
+}
+
 export type DatePreset = 
   | 'today' 
   | 'yesterday' 
@@ -223,7 +260,7 @@ export function getOrderSalespersonId(order: Order, db: DbState): string | undef
   // Check if order items belong exclusively to a company that has a company salesperson
   if (order.items && order.items.length > 0) {
     const compIds = Array.from(new Set(order.items.map(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       return prod?.company_id;
     }).filter(Boolean)));
 
@@ -299,7 +336,7 @@ export function getInvoiceSalespersonId(inv: Invoice, db: DbState): string | und
   // Check if invoice items belong exclusively to a company that has a company salesperson
   if (inv.items && inv.items.length > 0) {
     const compIds = Array.from(new Set(inv.items.map(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       return prod?.company_id;
     }).filter(Boolean)));
 
@@ -328,7 +365,7 @@ export function getInvoiceSalespersonId(inv: Invoice, db: DbState): string | und
 export function getInvoiceSalespersonName(inv: Invoice, db: DbState): string {
   const spId = getInvoiceSalespersonId(inv, db);
   if (spId) {
-    const profile = db.profiles.find(p => p.id === spId);
+    const profile = byId(db.profiles).get(spId);
     if (profile) return profile.name;
   }
   return 'Distributor Sales';
@@ -337,7 +374,7 @@ export function getInvoiceSalespersonName(inv: Invoice, db: DbState): string {
 export function getOrderSalespersonName(order: Order, db: DbState): string {
   const spId = getOrderSalespersonId(order, db);
   if (spId) {
-    const profile = db.profiles.find(p => p.id === spId);
+    const profile = byId(db.profiles).get(spId);
     if (profile) return profile.name;
   }
   return 'Distributor Sales';
@@ -381,7 +418,7 @@ export function isInvoiceMatchingSearch(
   if (inv.order_ref_id?.toLowerCase().includes(q)) return true;
 
   // 2. Retailer Info
-  const ret = db.retailers.find(r => r.id === inv.retailer_id);
+  const ret = byId(db.retailers).get(inv.retailer_id);
   if (ret) {
     if (ret.shop_name?.toLowerCase().includes(q)) return true;
     if (ret.owner_name?.toLowerCase().includes(q)) return true;
@@ -400,7 +437,7 @@ export function isInvoiceMatchingSearch(
       if ((item as any).product_name?.toLowerCase().includes(q)) return true;
       if (item.packing?.toLowerCase().includes(q)) return true;
       if ((item as any).hsn_code?.toLowerCase().includes(q)) return true;
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       if (prod) {
         if (prod.name?.toLowerCase().includes(q)) return true;
         if (prod.brand?.toLowerCase().includes(q)) return true;
@@ -426,20 +463,20 @@ export function isOrderMatchingSearch(
   if (order.order_number?.toLowerCase().includes(q)) return true;
   if (order.id?.toLowerCase().includes(q)) return true;
 
-  const ret = db.retailers.find(r => r.id === order.retailer_id);
+  const ret = byId(db.retailers).get(order.retailer_id);
   if (ret) {
     if (ret.shop_name?.toLowerCase().includes(q)) return true;
     if (ret.owner_name?.toLowerCase().includes(q)) return true;
     if (ret.city?.toLowerCase().includes(q)) return true;
   }
 
-  const sp = db.profiles.find(p => p.id === order.created_by);
+  const sp = byId(db.profiles).get(order.created_by);
   if (sp && sp.name?.toLowerCase().includes(q)) return true;
 
   if (order.items && order.items.length > 0) {
     const hasItemMatch = order.items.some(item => {
       if (item.product_name?.toLowerCase().includes(q)) return true;
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       if (prod) {
         if (prod.name?.toLowerCase().includes(q)) return true;
         if (prod.brand?.toLowerCase().includes(q)) return true;
@@ -474,7 +511,7 @@ export function isInvoiceMatchingReportFilters(
 
   if (f.companyId || f.category || f.brand || f.productId || f.variantPacking) {
     const hasMatchingItem = inv.items?.some(item => {
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       if (!prod) return false;
       if (f.companyId && prod.company_id !== f.companyId) return false;
       if (f.category && prod.category !== f.category) return false;
@@ -538,7 +575,7 @@ export function getSalesSummary(filters: ReportFilterState, db: DbState, user: U
 
     const items = inv.items || [];
     const invLineGrossSum = items.reduce((sum, item) => {
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
       const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor(item.quantity / unitsPerPack);
       const lQty = item.loose_qty !== undefined ? item.loose_qty : (item.quantity % unitsPerPack);
@@ -553,7 +590,7 @@ export function getSalesSummary(filters: ReportFilterState, db: DbState, user: U
     const unallocatedBillDiscount = Math.max(0, (inv.discount_amount || 0) - invLineDiscountsSum);
 
     items.forEach(item => {
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -597,7 +634,7 @@ export function getSalesSummary(filters: ReportFilterState, db: DbState, user: U
     if (f.salespersonId && (!inv || !isInvoiceMatchingSalesperson(inv, f.salespersonId, db))) return;
 
     sr.items?.forEach(sri => {
-      const prod = db.products.find(p => p.id === sri.product_id);
+      const prod = byId(db.products).get(sri.product_id);
       if (f.companyId && prod?.company_id !== f.companyId) return;
       if (f.category && prod?.category !== f.category) return;
       if (f.brand && prod?.brand !== f.brand) return;
@@ -685,7 +722,7 @@ export function getProductWiseSales(filters: ReportFilterState, db: DbState, use
 
     const items = inv.items || [];
     const invLineGrossSum = items.reduce((sum, item) => {
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
       const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor(item.quantity / unitsPerPack);
       const lQty = item.loose_qty !== undefined ? item.loose_qty : (item.quantity % unitsPerPack);
@@ -700,7 +737,7 @@ export function getProductWiseSales(filters: ReportFilterState, db: DbState, use
     const unallocatedBillDiscount = Math.max(0, (inv.discount_amount || 0) - invLineDiscountsSum);
 
     items.forEach(item => {
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -765,7 +802,7 @@ export function getProductWiseSales(filters: ReportFilterState, db: DbState, use
     if (f.salespersonId && (!inv || !isInvoiceMatchingSalesperson(inv, f.salespersonId, db))) return;
 
     sr.items?.forEach(sri => {
-      const prod = db.products.find(p => p.id === sri.product_id);
+      const prod = byId(db.products).get(sri.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -804,7 +841,7 @@ export function getProductWiseSales(filters: ReportFilterState, db: DbState, use
     const netSales = Math.max(0, agg.grossSales - agg.discount - agg.salesReturn);
     if (netQty <= 0 && netSales <= 0 && agg.grossSales <= 0) return;
 
-    const prod = db.products.find(p => p.id === prodId)!;
+    const prod = byId(db.products).get(prodId)!;
     const company = db.companies.find(c => c.id === prod.company_id);
 
     const avgSellingRate = netQty > 0 ? netSales / netQty : (agg.grossQuantity > 0 ? agg.grossSales / agg.grossQuantity : 0);
@@ -891,7 +928,7 @@ export function getDailySales(filters: ReportFilterState, db: DbState, user: Use
 
     const items = inv.items || [];
     const invLineGrossSum = items.reduce((sum, item) => {
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
       const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor(item.quantity / unitsPerPack);
       const lQty = item.loose_qty !== undefined ? item.loose_qty : (item.quantity % unitsPerPack);
@@ -912,7 +949,7 @@ export function getDailySales(filters: ReportFilterState, db: DbState, user: Use
     curr.netAmount += inv.grand_total;
 
     items.forEach(item => {
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -954,7 +991,7 @@ export function getDailySales(filters: ReportFilterState, db: DbState, user: Use
     let retVal = 0;
     let retQty = 0;
     sr.items?.forEach(sri => {
-      const prod = db.products.find(p => p.id === sri.product_id);
+      const prod = byId(db.products).get(sri.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -1059,7 +1096,7 @@ export function getMonthlySales(filters: ReportFilterState, db: DbState, user: U
 
     const items = inv.items || [];
     const invLineGrossSum = items.reduce((sum, item) => {
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
       const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor(item.quantity / unitsPerPack);
       const lQty = item.loose_qty !== undefined ? item.loose_qty : (item.quantity % unitsPerPack);
@@ -1077,7 +1114,7 @@ export function getMonthlySales(filters: ReportFilterState, db: DbState, user: U
     curr.outstanding += inv.outstanding_amount;
 
     items.forEach(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -1124,7 +1161,7 @@ export function getMonthlySales(filters: ReportFilterState, db: DbState, user: U
 
     let retVal = 0;
     sr.items?.forEach(sri => {
-      const prod = db.products.find(p => p.id === sri.product_id);
+      const prod = byId(db.products).get(sri.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -1245,7 +1282,7 @@ export function getQuarterlySales(filters: ReportFilterState, db: DbState, user:
 
     const items = inv.items || [];
     const invLineGrossSum = items.reduce((sum, item) => {
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
       const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor(item.quantity / unitsPerPack);
       const lQty = item.loose_qty !== undefined ? item.loose_qty : (item.quantity % unitsPerPack);
@@ -1263,7 +1300,7 @@ export function getQuarterlySales(filters: ReportFilterState, db: DbState, user:
     curr.outstanding += inv.outstanding_amount;
 
     items.forEach(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -1310,7 +1347,7 @@ export function getQuarterlySales(filters: ReportFilterState, db: DbState, user:
 
     let retVal = 0;
     sr.items?.forEach(sri => {
-      const prod = db.products.find(p => p.id === sri.product_id);
+      const prod = byId(db.products).get(sri.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -1409,12 +1446,12 @@ export function getInvoiceWiseSales(filters: ReportFilterState, db: DbState, use
   return db.invoices
     .filter(inv => isInvoiceMatchingReportFilters(inv, f, db, dateRange))
     .map(inv => {
-      const ret = db.retailers.find(r => r.id === inv.retailer_id);
+      const ret = byId(db.retailers).get(inv.retailer_id);
       const salespersonName = getInvoiceSalespersonName(inv, db);
 
       const items = inv.items || [];
       const invLineGrossSum = items.reduce((sum, item) => {
-        const prod = db.products.find(p => p.id === item.product_id);
+        const prod = byId(db.products).get(item.product_id);
         const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
         const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor(item.quantity / unitsPerPack);
         const lQty = item.loose_qty !== undefined ? item.loose_qty : (item.quantity % unitsPerPack);
@@ -1499,7 +1536,7 @@ export function getProductWiseProfit(filters: ReportFilterState, db: DbState, us
     if (!isInvoiceMatchingReportFilters(inv, f, db, dateRange)) return;
 
     inv.items?.forEach(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -1530,7 +1567,7 @@ export function getProductWiseProfit(filters: ReportFilterState, db: DbState, us
 
   const rows: ProfitReportRow[] = [];
   map.forEach((agg, prodId) => {
-    const prod = db.products.find(p => p.id === prodId)!;
+    const prod = byId(db.products).get(prodId)!;
     const company = db.companies.find(c => c.id === prod.company_id);
     const grossProfit = agg.netSales - agg.cogs;
     const grossMargin = agg.netSales > 0 ? (grossProfit / agg.netSales) * 100 : 0;
@@ -1578,7 +1615,7 @@ export function getRetailerWiseProfit(filters: ReportFilterState, db: DbState, u
 
     // Check matching items if category/company/brand filter is active
     const matchingItems = (inv.items || []).filter(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       if (!prod) return false;
       if (f.companyId && prod.company_id !== f.companyId) return false;
       if (f.category && prod.category !== f.category) return false;
@@ -1598,7 +1635,7 @@ export function getRetailerWiseProfit(filters: ReportFilterState, db: DbState, u
       curr.netSales += lineTaxable;
       curr.discount += i.discount || 0;
 
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       let costRate = prod?.purchase_price || 0;
       if (i.batch_number) {
         const b = db.batches.find(batch => batch.product_id === i.product_id && batch.batch_number === i.batch_number);
@@ -1615,7 +1652,7 @@ export function getRetailerWiseProfit(filters: ReportFilterState, db: DbState, u
 
   const rows: ProfitReportRow[] = [];
   map.forEach((agg, retId) => {
-    const ret = db.retailers.find(r => r.id === retId);
+    const ret = byId(db.retailers).get(retId);
     if (!ret) return;
 
     const grossProfit = agg.netSales - agg.cogs;
@@ -1656,7 +1693,7 @@ export function getCompanyWiseProfit(filters: ReportFilterState, db: DbState, us
     if (!isInvoiceMatchingReportFilters(inv, f, db, dateRange)) return;
 
     inv.items?.forEach(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -1739,7 +1776,7 @@ export function getInvoiceWiseProfit(filters: ReportFilterState, db: DbState, us
   return db.invoices
     .filter(inv => isInvoiceMatchingReportFilters(inv, f, db, dateRange))
     .map(inv => {
-      const ret = db.retailers.find(r => r.id === inv.retailer_id);
+      const ret = byId(db.retailers).get(inv.retailer_id);
       const salespersonName = getInvoiceSalespersonName(inv, db);
 
       let totalQty = 0;
@@ -1747,7 +1784,7 @@ export function getInvoiceWiseProfit(filters: ReportFilterState, db: DbState, us
 
       inv.items?.forEach(i => {
         totalQty += i.quantity;
-        const prod = db.products.find(p => p.id === i.product_id);
+        const prod = byId(db.products).get(i.product_id);
         let costRate = prod?.purchase_price || 0;
         if (i.batch_number) {
           const b = db.batches.find(batch => batch.product_id === i.product_id && batch.batch_number === i.batch_number);
@@ -1920,7 +1957,7 @@ export function getRetailerSalesSummary(filters: ReportFilterState, db: DbState,
 
   const rows: RetailerSalesSummaryRow[] = [];
   retMap.forEach((agg, retId) => {
-    const ret = db.retailers.find(r => r.id === retId);
+    const ret = byId(db.retailers).get(retId);
     if (!ret) return;
     if (f.salespersonId && agg.orderCount === 0 && agg.invoiceCount === 0) return;
 
@@ -2024,7 +2061,7 @@ export function getRetailerOutstandingAging(filters: ReportFilterState, db: DbSt
           totalCreditNotes += sr.total_amount;
         } else {
           sr.items?.forEach(item => {
-            const prod = db.products.find(p => p.id === item.product_id);
+            const prod = byId(db.products).get(item.product_id);
             const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
             const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor(item.quantity / unitsPerPack);
             const lQty = item.loose_qty !== undefined ? item.loose_qty : (item.quantity % unitsPerPack);
@@ -2114,7 +2151,7 @@ export function getCompanyWiseSales(filters: ReportFilterState, db: DbState, use
   db.invoices.forEach(inv => {
     if (!isInvoiceMatchingReportFilters(inv, f, db, dateRange)) return;
     inv.items?.forEach(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -2150,7 +2187,7 @@ export function getCompanyWiseSales(filters: ReportFilterState, db: DbState, use
     const inv = db.invoices.find(i => i.id === sr.invoice_id);
     if (f.salespersonId && (!inv || !isInvoiceMatchingSalesperson(inv, f.salespersonId, db))) return;
     sr.items?.forEach(item => {
-      const prod = db.products.find(p => p.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       if (!prod) return;
       if (f.category && prod.category !== f.category) return;
       const curr = compMap.get(prod.company_id);
@@ -2218,7 +2255,7 @@ export function getBrandWiseSales(filters: ReportFilterState, db: DbState, user:
   db.invoices.forEach(inv => {
     if (!isInvoiceMatchingReportFilters(inv, f, db, dateRange)) return;
     inv.items?.forEach(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -2302,7 +2339,7 @@ export function getCategoryWiseSales(filters: ReportFilterState, db: DbState, us
     if (!isInvoiceMatchingReportFilters(inv, f, db, dateRange)) return;
 
     inv.items?.forEach(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -2418,7 +2455,7 @@ export function getSalespersonSales(filters: ReportFilterState, db: DbState, use
         if (!brandInCompany) return;
       }
       if (f.productId && sp.company_id) {
-        const prod = db.products.find(p => p.id === f.productId);
+        const prod = byId(db.products).get(f.productId);
         if (prod && prod.company_id !== sp.company_id) return;
       }
     }
@@ -2447,7 +2484,7 @@ export function getSalespersonSales(filters: ReportFilterState, db: DbState, use
     let hasMatchingItems = true;
     if (f.companyId || f.category || f.brand || f.productId || f.variantPacking) {
       hasMatchingItems = (o.items || []).some(item => {
-        const prod = db.products.find(p => p.id === item.product_id);
+        const prod = byId(db.products).get(item.product_id);
         if (!prod) return false;
         if (f.companyId && prod.company_id !== f.companyId) return false;
         if (f.category && prod.category !== f.category) return false;
@@ -2474,7 +2511,7 @@ export function getSalespersonSales(filters: ReportFilterState, db: DbState, use
 
     // Filter items matching company / category / brand / product
     const matchingItems = (inv.items || []).filter(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       if (!prod) return false;
       if (f.companyId && prod.company_id !== f.companyId) return false;
       if (f.category && prod.category !== f.category) return false;
@@ -2522,7 +2559,7 @@ export function getSalespersonSales(filters: ReportFilterState, db: DbState, use
 
     matchingItems.forEach(i => {
       curr.quantity += i.quantity;
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       let cost = prod?.purchase_price || 0;
       if (i.batch_number && prod) {
         const b = db.batches.find(batch => batch.product_id === prod.id && batch.batch_number === i.batch_number);
@@ -2537,7 +2574,7 @@ export function getSalespersonSales(filters: ReportFilterState, db: DbState, use
 
   const rows: SalespersonSalesRow[] = [];
   spMap.forEach((agg, spId) => {
-    const sp = db.profiles.find(p => p.id === spId);
+    const sp = byId(db.profiles).get(spId);
     if (!sp) return;
 
     // If a company/brand/product filter is active and the salesperson has 0 orders, 0 invoices, 0 sales for that company/brand, skip them
@@ -2642,7 +2679,7 @@ export function getPurchaseSummary(filters: ReportFilterState, db: DbState, user
       let totalGst = 0;
 
       const matchingItems = (p.items || []).filter(i => {
-        const prod = (db.products || []).find(pr => pr.id === i.product_id);
+        const prod = byId(db.products).get(i.product_id);
         if (!prod) return false;
         if (f.companyId && f.companyId !== 'all' && prod.company_id !== f.companyId) return false;
         if (f.category && f.category !== 'all' && prod.category !== f.category) return false;
@@ -2657,7 +2694,7 @@ export function getPurchaseSummary(filters: ReportFilterState, db: DbState, user
       const itemsToCount = (f.companyId || f.category || f.productId) ? matchingItems : (p.items || []);
 
       itemsToCount.forEach(i => {
-        const prod = (db.products || []).find(pr => pr.id === i.product_id);
+        const prod = byId(db.products).get(i.product_id);
         const unitsPerPack = i.units_per_box_carton || i.units_per_trading_unit || prod?.units_per_box_carton || 1;
         const cQty = i.carton_qty !== undefined ? i.carton_qty : Math.floor(i.quantity / unitsPerPack);
         const lQty = i.loose_qty !== undefined ? i.loose_qty : (i.quantity % unitsPerPack);
@@ -2735,7 +2772,7 @@ export function getPurchaseRateHistory(filters: ReportFilterState, db: DbState, 
     const supplierName = supp?.name || (p as any).supplier_name || p.supplier_id || 'Supplier';
 
     p.items?.forEach(item => {
-      const prod = (db.products || []).find(pr => pr.id === item.product_id);
+      const prod = byId(db.products).get(item.product_id);
       if (!prod) return;
       if (f.companyId && f.companyId !== 'all' && prod.company_id !== f.companyId) return;
       if (f.category && f.category !== 'all' && prod.category !== f.category) return;
@@ -2826,8 +2863,8 @@ export function getCurrentStock(filters: ReportFilterState, db: DbState, user: U
     if (f.productId && prod.id !== f.productId) return;
 
     const comp = db.companies.find(c => c.id === prod.company_id);
-    const inv = db.inventory.find(i => i.product_id === prod.id);
-    const prodBatches = db.batches.filter(b => b.product_id === prod.id);
+    const inv = rowsOfProduct(db.inventory, prod.id)[0];
+    const prodBatches = rowsOfProduct(db.batches, prod.id);
     const unitsPerPack = prod.units_per_box_carton || prod.units_per_trading_unit || 1;
     const tradingUnit = prod.trading_unit || 'Box';
     const baseUnit = prod.base_unit || 'Piece';
@@ -3028,15 +3065,15 @@ export function getStockMovement(filters: ReportFilterState, db: DbState, user: 
   return db.ledger
     .filter(entry => {
       if (!isDateInRange(entry.created_at, dateRange)) return false;
-      const prod = db.products.find(p => p.id === entry.product_id);
+      const prod = byId(db.products).get(entry.product_id);
       if (f.companyId && prod?.company_id !== f.companyId) return false;
       if (f.category && prod?.category !== f.category) return false;
       if (f.productId && prod?.id !== f.productId) return false;
       return true;
     })
     .map(entry => {
-      const prod = db.products.find(p => p.id === entry.product_id);
-      const userProf = db.profiles.find(p => p.id === entry.user_id);
+      const prod = byId(db.products).get(entry.product_id);
+      const userProf = byId(db.profiles).get(entry.user_id);
       const unitsPerPack = prod?.units_per_box_carton || prod?.units_per_trading_unit || 1;
 
       return {
@@ -3084,7 +3121,7 @@ export function getPaymentCollection(filters: ReportFilterState, db: DbState, us
       return true;
     })
     .map(p => {
-      const ret = db.retailers.find(r => r.id === p.retailer_id);
+      const ret = byId(db.retailers).get(p.retailer_id);
       return {
         paymentId: p.id,
         paymentDate: p.date.slice(0, 10),
@@ -3136,7 +3173,7 @@ export function getHSNWiseSales(filters: ReportFilterState, db: DbState, user: U
     if (!isInvoiceMatchingReportFilters(inv, f, db, dateRange)) return;
 
     inv.items?.forEach(i => {
-      const prod = db.products.find(p => p.id === i.product_id);
+      const prod = byId(db.products).get(i.product_id);
       if (!prod) return;
       if (f.companyId && prod.company_id !== f.companyId) return;
       if (f.category && prod.category !== f.category) return;
@@ -3217,7 +3254,7 @@ export function getOrderSummary(filters: ReportFilterState, db: DbState, user: U
       // Filter by company/category/brand if specified
       if (f.companyId || f.category || f.brand || f.productId) {
         const hasMatchingItem = (o.items || []).some(i => {
-          const prod = db.products.find(p => p.id === i.product_id);
+          const prod = byId(db.products).get(i.product_id);
           if (!prod) return false;
           if (f.companyId && prod.company_id !== f.companyId) return false;
           if (f.category && prod.category !== f.category) return false;
@@ -3231,7 +3268,7 @@ export function getOrderSummary(filters: ReportFilterState, db: DbState, user: U
       return true;
     })
     .map(o => {
-      const ret = db.retailers.find(r => r.id === o.retailer_id);
+      const ret = byId(db.retailers).get(o.retailer_id);
       const salespersonName = getOrderSalespersonName(o, db);
 
       let ordered = 0;
@@ -3295,7 +3332,7 @@ export function getBatchExpiryReport(filters: ReportFilterState, db: DbState, us
   const rows: BatchExpiryRow[] = [];
 
   db.batches.forEach(b => {
-    const prod = db.products.find(p => p.id === b.product_id);
+    const prod = byId(db.products).get(b.product_id);
     if (!prod) return;
     if (f.companyId && prod.company_id !== f.companyId) return;
     if (f.category && prod.category !== f.category) return;
@@ -3926,7 +3963,7 @@ export function getPartyItemReport(
 
     // Salesperson resolution
     const spId = srcOrder ? getOrderSalespersonId(srcOrder, db) : getInvoiceSalespersonId(inv, db);
-    const spProfile = spId ? db.profiles.find(p => p.id === spId) : undefined;
+    const spProfile = spId ? byId(db.profiles).get(spId) : undefined;
     const spName = spProfile?.full_name || spProfile?.name || getInvoiceSalespersonName(inv, db);
 
     // Apply Salesperson Filter
@@ -4677,7 +4714,7 @@ export function getItemReportByParty(
     const srcOrder = srcOrderId ? orderMap.get(srcOrderId) : undefined;
 
     const spId = srcOrder ? getOrderSalespersonId(srcOrder, db) : getInvoiceSalespersonId(inv, db);
-    const spProfile = spId ? db.profiles.find(p => p.id === spId) : undefined;
+    const spProfile = spId ? byId(db.profiles).get(spId) : undefined;
     const spName = spProfile?.full_name || spProfile?.name || getInvoiceSalespersonName(inv, db);
 
     if (f.salespersonId && f.salespersonId !== 'all') {
@@ -4909,7 +4946,7 @@ export function getItemReportByParty(
     const baseUnit = prod.base_unit || 'Piece';
 
     // Closing Inventory (Current Physical Godown Stock)
-    let rawInvRows = (db.inventory || []).filter(i => i.product_id === prod.id);
+    let rawInvRows = rowsOfProduct(db.inventory, prod.id);
     if (f.companyId && f.companyId !== 'all') {
       rawInvRows = rawInvRows.filter(i => (i.business_id || 'biz-saifee') === f.companyId);
     }
@@ -4952,8 +4989,7 @@ export function getItemReportByParty(
       let e = gInv?.expired_qty || 0;
 
       if (!gInv) {
-        const gBatches = (db.batches || []).filter(b => 
-          b.product_id === prod.id && 
+        const gBatches = rowsOfProduct(db.batches, prod.id).filter(b => 
           (b.godown_id === g.id || b.godown?.toLowerCase().includes(g.name.toLowerCase()))
         );
         if (gBatches.length > 0) {
@@ -5096,7 +5132,7 @@ export function getItemReportByParty(
       partyPurchaseBreakdown,
       salesTransactions: accum.salesTransactions,
       purchaseTransactions: accum.purchaseTransactions,
-      stockMovements: (db.ledger || []).filter(l => l.product_id === prod.id)
+      stockMovements: rowsOfProduct(db.ledger, prod.id)
     });
   });
 

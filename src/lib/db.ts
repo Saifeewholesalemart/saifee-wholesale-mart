@@ -4653,6 +4653,17 @@ class FMCGDatabase {
       code = `RET-${String(nextNum).padStart(5, '0')}`;
     }
 
+    // Retailer code must be unique (it is also used for login)
+    const usedCodes = new Set(retailers.map(r => (r.retailer_code || '').trim().toUpperCase()).filter(Boolean));
+    if (usedCodes.has(code)) {
+      if (data.retailer_code && data.retailer_code.trim()) {
+        throw new Error(`Retailer code ${code} is already used by another shop.`);
+      }
+      const m = code.match(/RET-0*(\d+)/i);
+      let n = m ? parseInt(m[1], 10) : 124;
+      do { n += 1; code = `RET-${String(n).padStart(5, '0')}`; } while (usedCodes.has(code));
+    }
+
     const newId = `ret-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
     const newRetailer: Retailer = {
@@ -4886,26 +4897,48 @@ class FMCGDatabase {
     this.saveStore('fmcg_product_categories', [...otherBiz, ...tagged]);
   }
 
+  /**
+   * Product <-> category links grouped once and reused until the store changes.
+   * (Pages call these per product row; scanning 6000+ links each time froze the screen.)
+   */
+  private pcIndexCache: { src: unknown; biz: string; byProduct: Map<string, ProductCategory[]>; byCategory: Map<string, ProductCategory[]> } | null = null;
+
+  private getProductCategoryIndex() {
+    const biz = this.getActiveBusinessCompanyId();
+    let src = this.memoryStore['fmcg_product_categories_v4'];
+    if (!src) { this.getProductCategories(biz); src = this.memoryStore['fmcg_product_categories_v4']; }
+    const c = this.pcIndexCache;
+    if (c && src && c.src === src && c.biz === biz) return c;
+    const byProduct = new Map<string, ProductCategory[]>();
+    const byCategory = new Map<string, ProductCategory[]>();
+    this.getProductCategories(biz).forEach(pc => {
+      const a = byProduct.get(pc.product_id); if (a) a.push(pc); else byProduct.set(pc.product_id, [pc]);
+      const b = byCategory.get(pc.category_id); if (b) b.push(pc); else byCategory.set(pc.category_id, [pc]);
+    });
+    const next = { src, biz, byProduct, byCategory };
+    if (src) this.pcIndexCache = next;
+    return next;
+  }
+
   getCategoriesForProduct(productId: string): Category[] {
-    const pcs = this.getProductCategories().filter(pc => pc.product_id === productId);
+    const pcs = this.getProductCategoryIndex().byProduct.get(productId) || [];
+    if (pcs.length === 0) return [];
     const catMap = new Map(this.getCategories().map(c => [c.id, c]));
     return pcs.map(pc => catMap.get(pc.category_id)).filter((c): c is Category => Boolean(c));
   }
 
   getCategoryIdsForProduct(productId: string): string[] {
-    return this.getProductCategories()
-      .filter(pc => pc.product_id === productId)
-      .map(pc => pc.category_id);
+    return (this.getProductCategoryIndex().byProduct.get(productId) || []).map(pc => pc.category_id);
   }
 
   getProductsForCategory(categoryId: string): Product[] {
-    const pcs = this.getProductCategories().filter(pc => pc.category_id === categoryId);
+    const pcs = this.getProductCategoryIndex().byCategory.get(categoryId) || [];
     const prodMap = new Map(this.getProducts().map(p => [p.id, p]));
     return pcs.map(pc => prodMap.get(pc.product_id)).filter((p): p is Product => Boolean(p));
   }
 
   getProductCountForCategory(categoryId: string): number {
-    return this.getProductCategories().filter(pc => pc.category_id === categoryId).length;
+    return (this.getProductCategoryIndex().byCategory.get(categoryId) || []).length;
   }
 
   assignCategoriesToProduct(productId: string, categoryIds: string[]): ProductCategory[] {
@@ -6504,8 +6537,15 @@ class FMCGDatabase {
     const rawInv = this.getInventory(activeBiz);
     const godowns = this.getGodowns(activeBiz);
 
+    // Group inventory rows by product once (was a full scan per product)
+    const rowsByProduct = new Map<string, typeof rawInv>();
+    rawInv.forEach(i => {
+      const list = rowsByProduct.get(i.product_id);
+      if (list) list.push(i); else rowsByProduct.set(i.product_id, [i]);
+    });
+
     return products.map(prod => {
-      const prodRows = rawInv.filter(i => i.product_id === prod.id);
+      const prodRows = rowsByProduct.get(prod.id) || [];
       let totPhysical = 0;
       let totReserved = 0;
       let totAvailable = 0;

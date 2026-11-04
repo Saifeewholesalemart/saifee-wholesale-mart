@@ -396,7 +396,7 @@ export default function InvoiceEditModal({
               <div className="flex items-center gap-1.5 text-xs text-amber-200 font-bold">
                 <Store className="w-4 h-4 text-amber-300" />
                 <span>RETAILER: {retailer.shop_name}</span>
-                <span className="text-slate-300 font-normal text-xs">({retailer.owner_name}, {retailer.city || 'MH'})</span>
+                <span className="text-slate-300 font-normal text-xs">({retailer.owner_name}, {retailer.city || '-'})</span>
               </div>
             </div>
           </div>

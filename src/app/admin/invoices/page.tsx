@@ -644,7 +644,7 @@ function AdminInvoicesContent() {
               <option value="all">All Retailer Stores ({retailers.length})</option>
               {retailers.map(r => (
                 <option key={r.id} value={r.id}>
-                  {r.shop_name} ({r.city || 'MH'})
+                  {r.shop_name} ({r.city || '-'})
                 </option>
               ))}
             </select>
@@ -800,7 +800,7 @@ function AdminInvoicesContent() {
 
                       {/* City, Date, Items summary */}
                       <div className="text-xs text-slate-500 font-medium flex items-center gap-2">
-                        <span>{ret?.city || 'MH'}</span>
+                        <span>{ret?.city || '-'}</span>
                         <span>&bull;</span>
                         <span>{formatDate(inv.date)}</span>
                         <span>&bull;</span>
@@ -888,7 +888,7 @@ function AdminInvoicesContent() {
                     <div className="flex items-center gap-2 text-xs font-bold text-amber-200">
                       <Store className="w-4 h-4 text-amber-300 shrink-0" />
                       <span>RETAILER: {ret?.shop_name}</span>
-                      <span className="text-slate-300 font-medium text-xs">({ret?.owner_name}, {ret?.city || 'MH'} &bull; Mob: {ret?.mobile})</span>
+                      <span className="text-slate-300 font-medium text-xs">({ret?.owner_name}, {ret?.city || '-'} &bull; Mob: {ret?.mobile})</span>
                     </div>
                   );
                 })()}

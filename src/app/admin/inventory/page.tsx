@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useDeferredValue, useRef } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
   Search, Filter, History, Package, ClipboardList, Info, Tags, 
@@ -33,14 +33,21 @@ export default function AdminInventory() {
     activeCompany
   } = useDb();
   
-  const getCategoryIdsForProduct = (productId: string) => {
-    return (productCategories || []).filter(pc => pc.product_id === productId).map(pc => pc.category_id);
-  };
+  // Lookup maps built once (the page used to scan every list for every product row)
+  const catIdsByProduct = useMemo(() => {
+    const m = new Map<string, string[]>();
+    (productCategories || []).forEach(pc => {
+      const list = m.get(pc.product_id);
+      if (list) list.push(pc.category_id); else m.set(pc.product_id, [pc.category_id]);
+    });
+    return m;
+  }, [productCategories]);
+  const categoryById = useMemo(() => new Map((categories || []).map(c => [c.id, c])), [categories]);
 
-  const getCategoriesForProduct = (productId: string) => {
-    const ids = getCategoryIdsForProduct(productId);
-    return (categories || []).filter(c => ids.includes(c.id));
-  };
+  const getCategoryIdsForProduct = (productId: string) => catIdsByProduct.get(productId) || [];
+
+  const getCategoriesForProduct = (productId: string) =>
+    getCategoryIdsForProduct(productId).map(id => categoryById.get(id)).filter(Boolean) as NonNullable<ReturnType<typeof categoryById.get>>[];
 
   const [activeTab, setActiveTab] = useState<'status' | 'batches' | 'transfers' | 'ledger'>('status');
   const [searchTerm, setSearchTerm] = useState('');
@@ -89,11 +96,34 @@ export default function AdminInventory() {
   const [adjustBatchNumber, setAdjustBatchNumber] = useState('');
   const [adjustError, setAdjustError] = useState('');
 
-  // Consolidated Inventory Map
-  const consolidatedInv = getConsolidatedInventory();
+  // Consolidated Inventory Map (recomputed only when stock data changes)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const consolidatedInv = useMemo(() => getConsolidatedInventory(), [products, inventory, godowns, activeCompany?.id]);
+  const consByProduct = useMemo(() => new Map(consolidatedInv.map(c => [c.product_id, c])), [consolidatedInv]);
+  const inventoryByKey = useMemo(() => new Map(inventory.map(i => [`${i.product_id}|${i.godown_id}`, i])), [inventory]);
+  const godownNameById = useMemo(() => new Map(godowns.map(g => [g.id, g.name])), [godowns]);
+  const batchesByProduct = useMemo(() => {
+    const m = new Map<string, typeof batches>();
+    batches.forEach(b => {
+      if (!(b.quantity > 0)) return;
+      const list = m.get(b.product_id);
+      if (list) list.push(b); else m.set(b.product_id, [b]);
+    });
+    return m;
+  }, [batches]);
+
+  // Typing stays instant; the long list filters right after
+  const deferredSearch = useDeferredValue(searchTerm);
+
+  // Long lists are drawn in steps while scrolling (all 6000+ rows at once froze the page)
+  const ROW_STEP = 60;
+  const [rowLimit, setRowLimit] = useState(ROW_STEP);
+  const moreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { setRowLimit(ROW_STEP); }, [deferredSearch, filterCompany, filterCategory, selectedGodownId, activeTab]);
 
   // Filter products
-  const filteredProducts = products.filter(p => {
+  const filteredProducts = useMemo(() => products.filter(p => {
+    const searchTerm = deferredSearch;
     const matchComp = filterCompany === 'all' || p.company_id === filterCompany;
     const catIds = getCategoryIdsForProduct(p.id);
     const matchCat = filterCategory === 'all' 
@@ -110,7 +140,19 @@ export default function AdminInventory() {
       (p.barcode && p.barcode.includes(searchTerm));
 
     return matchComp && matchCat && matchSearch;
-  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [products, deferredSearch, filterCompany, filterCategory, catIdsByProduct]);
+  const visibleProducts = filteredProducts.slice(0, rowLimit);
+  const hasMoreRows = filteredProducts.length > rowLimit;
+  useEffect(() => {
+    const el = moreRef.current;
+    if (!el || !hasMoreRows || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) setRowLimit(l => l + ROW_STEP);
+    }, { rootMargin: '800px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMoreRows, rowLimit, activeTab]);
 
   // Open New Transfer Modal
   const openNewTransferModal = () => {
@@ -484,9 +526,9 @@ export default function AdminInventory() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs">
-                {filteredProducts.map((p) => {
+                {visibleProducts.map((p) => {
                   const assignedCats = getCategoriesForProduct(p.id);
-                  const consItem = consolidatedInv.find(c => c.product_id === p.id);
+                  const consItem = consByProduct.get(p.id);
                   const unitsPerPack = p.units_per_box_carton || 1;
 
                   if (selectedGodownId === 'all') {
@@ -568,7 +610,7 @@ export default function AdminInventory() {
                     );
                   } else {
                     // Specific Godown View
-                    const godownRow = inventory.find(i => i.product_id === p.id && i.godown_id === selectedGodownId);
+                    const godownRow = inventoryByKey.get(`${p.id}|${selectedGodownId}`);
                     const physical = godownRow ? godownRow.physical_qty : 0;
                     const reserved = godownRow ? godownRow.reserved_qty : 0;
                     const available = godownRow ? godownRow.available_qty : 0;
@@ -640,6 +682,11 @@ export default function AdminInventory() {
               </tbody>
             </table>
           </div>
+          {hasMoreRows && (
+            <div ref={moreRef} className="py-4 text-center text-xs font-semibold text-slate-500">
+              Showing {visibleProducts.length} of {filteredProducts.length} products · scroll for more
+            </div>
+          )}
         </div>
       )}
 
@@ -661,16 +708,17 @@ export default function AdminInventory() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs">
-                {filteredProducts.map((p) => {
-                  let prodBatches = batches.filter(b => b.product_id === p.id && b.quantity > 0);
+                {visibleProducts.map((p) => {
+                  let prodBatches = batchesByProduct.get(p.id) || [];
                   if (selectedGodownId !== 'all') {
-                    prodBatches = prodBatches.filter(b => b.godown_id === selectedGodownId || b.godown === godowns.find(g => g.id === selectedGodownId)?.name);
+                    const selName = godownNameById.get(selectedGodownId);
+                    prodBatches = prodBatches.filter(b => b.godown_id === selectedGodownId || b.godown === selName);
                   }
                   if (prodBatches.length === 0) return null;
                   
                   return prodBatches.map((b, idx) => {
                     const gName = b.godown_id 
-                      ? (godowns.find(g => g.id === b.godown_id)?.name || b.godown || 'Main Godown') 
+                      ? (godownNameById.get(b.godown_id) || b.godown || 'Main Godown') 
                       : (b.godown || 'Main Godown');
 
                     return (
@@ -717,6 +765,11 @@ export default function AdminInventory() {
               </tbody>
             </table>
           </div>
+          {hasMoreRows && (
+            <div ref={moreRef} className="py-4 text-center text-xs font-semibold text-slate-500">
+              Showing {visibleProducts.length} of {filteredProducts.length} products · scroll for more
+            </div>
+          )}
         </div>
       )}
 

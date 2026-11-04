@@ -22,7 +22,7 @@ import { CheckCircle2, Receipt, History } from 'lucide-react';
 
 type Mode = 'Cash' | 'UPI' | 'Credit';
 
-export default function BillerPanel({ filter, sort = 'oldest' }: { filter?: (o: Order) => boolean; sort?: OrderSort }) {
+export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { filter?: (o: Order) => boolean; sort?: OrderSort; onOpenOrder?: (orderId: string) => void }) {
   const { orders, products, batches, retailers, invoices, activeCompany, flowBillShop } = useDb();
   const [selKey, setSelKey] = useState<string | null>(null);
   const [rates, setRates] = useState<Record<string, string>>({});
@@ -175,7 +175,15 @@ export default function BillerPanel({ filter, sort = 'oldest' }: { filter?: (o: 
               <div>
                 <strong className="text-[17px] text-slate-900 block">{customerName(first, retailers)}</strong>
                 <span className="text-sm text-slate-600">
-                  {current.orders.map(o => `${o.order_number} (${flowChannelLabel(o)})`).join(' + ')}
+                  {current.orders.map((o, i) => (
+                    <React.Fragment key={o.id}>
+                      {i > 0 && ' + '}
+                      {onOpenOrder ? (
+                        <button type="button" onClick={() => onOpenOrder(o.id)} className="font-semibold text-indigo-800 underline">{o.order_number}</button>
+                      ) : o.order_number}
+                      {` (${flowChannelLabel(o)})`}
+                    </React.Fragment>
+                  ))}
                   {retailer?.city ? ` · ${retailer.city}` : ''}
                 </span>
               </div>

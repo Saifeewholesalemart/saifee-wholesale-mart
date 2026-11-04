@@ -17,6 +17,8 @@ import AddRetailerModal from '@/components/AddRetailerModal';
 import PendingItemWarningCard, { CartPendingSummaryBanner } from '@/components/orders/PendingItemWarningCard';
 import PendingDeliveryWarningModal from '@/components/orders/PendingDeliveryWarningModal';
 import OrderReviewModal from '@/components/orders/OrderReviewModal';
+import DutyBar from '@/components/tracking/DutyBar';
+import { recordOrderLocation } from '@/lib/salesTracking';
 
 export default function SalesDashboard() {
   const { 
@@ -471,6 +473,9 @@ export default function SalesDashboard() {
       logPendingOrderProceedActivity(selectedRetailer.id, relevantWarnings, ord.order_number);
     }
 
+    // Save where this order was taken (only if the salesman agreed to location sharing)
+    void recordOrderLocation(ord.id, `${ord.order_number} · ${selectedRetailer.shop_name}`);
+
     setLatestOrderNum(ord.order_number);
     setCart({});
     setShowPendingWarningModal(false);
@@ -580,6 +585,9 @@ export default function SalesDashboard() {
 
       {/* Main Container */}
       <main className="flex-1 p-4 space-y-4 max-w-md mx-auto w-full">
+        {currentUser && (currentUser.role === 'sales_dist' || currentUser.role === 'sales_co') && (
+          <DutyBar userId={currentUser.id} />
+        )}
         
         {/* Toggle between Take Order and Order History */}
         {orderStep !== 'success' && (

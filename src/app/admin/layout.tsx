@@ -8,7 +8,7 @@ import { usePathname } from 'next/navigation';
 import { 
   LayoutDashboard, Combine, PackageCheck, Package, 
   FileSpreadsheet, FileText, Users, DollarSign, RotateCcw, 
-  TrendingUp, Settings, LogOut, Menu, X, ArrowLeft, Cpu, ClipboardList, Tags, Boxes, Warehouse, ArrowLeftRight, Zap, UserCog, Store, Database
+  TrendingUp, Settings, LogOut, Menu, X, ArrowLeft, Cpu, ClipboardList, Tags, Boxes, Warehouse, ArrowLeftRight, Zap, UserCog, Store, Database, MapPin
 } from 'lucide-react';
 import { CompanySwitcher } from '@/components/CompanySwitcher';
 import { CompanySwitchingOverlay } from '@/components/CompanySwitchingOverlay';
@@ -33,6 +33,7 @@ const MENU_ITEMS: MenuItem[] = [
   { name: 'Inventory & Batch', path: '/admin/inventory', icon: Boxes },
   { name: 'Invoices (GST)', path: '/admin/invoices', icon: FileSpreadsheet },
   { name: 'Manage Profiles', path: '/admin/profiles', icon: UserCog },
+  { name: 'Salesman Tracking', path: '/admin/tracking', icon: MapPin },
   { name: 'Payments & Ledger', path: '/admin/payments', icon: DollarSign },
   { name: 'Cash Flow', path: '/admin/cash-flow', icon: ArrowLeftRight },
   { name: 'Returns History', path: '/admin/returns', icon: RotateCcw },

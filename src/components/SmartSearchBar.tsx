@@ -155,7 +155,7 @@ export default function SmartSearchBar({
           results.push({
             id: `ret-${ret.id}`,
             title: ret.shop_name,
-            subtitle: `${ret.owner_name} • ${ret.city || 'MH'} • Mob: ${ret.mobile}`,
+            subtitle: `${ret.owner_name} • ${ret.city || '-'} • Mob: ${ret.mobile}`,
             category: 'retailer',
             badge: 'Retailer',
             data: ret,

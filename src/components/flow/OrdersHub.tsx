@@ -297,8 +297,8 @@ export default function OrdersHub() {
         )}
       </section>
 
-      {tab === 'to_pack' && <PackerPanel filter={matches} sort={sort} />}
-      {tab === 'ready_to_bill' && <BillerPanel filter={matches} sort={sort} />}
+      {tab === 'to_pack' && <PackerPanel filter={matches} sort={sort} onOpenOrder={setDetailId} />}
+      {tab === 'ready_to_bill' && <BillerPanel filter={matches} sort={sort} onOpenOrder={setDetailId} />}
 
       {tab === 'billed' && (
         <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">

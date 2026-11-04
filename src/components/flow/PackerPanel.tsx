@@ -33,7 +33,8 @@ function freeStockExcluding(batches: { product_id: string; quantity: number }[],
   return free;
 }
 
-export default function PackerPanel({ compact = false, filter, sort = 'oldest' }: { compact?: boolean; filter?: (o: Order) => boolean; sort?: OrderSort }) {
+export default function PackerPanel({ compact = false, filter, sort = 'oldest', onOpenOrder }: { compact?: boolean; filter?: (o: Order) => boolean; sort?: OrderSort; onOpenOrder?: (orderId: string) => void }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const { orders, products, batches, retailers, flowPackOrders } = useDb();
   // Packing screen is kept in the URL (?pack=...) so the phone Back button goes one screen back
   const [packParam, setPackParam] = useUrlStep<string>('pack', '', null);
@@ -220,13 +221,52 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest' }
                   <span className="text-xs font-semibold text-amber-900 bg-amber-100 rounded px-2 py-0.5">Backorder — stock arrived</span>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => openGroup(g.key)}
-                className="min-h-12 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-base"
-              >
-                {g.orders.length > 1 ? `Pack all ${g.orders.length} orders` : 'Start packing'}
-              </button>
+              {expanded[g.key] && (
+                <div id={`details-${g.key}`} className="flex flex-col gap-2.5 border-t border-slate-100 pt-3">
+                  {g.orders.map(o => (
+                    <div key={o.id} className="flex flex-col gap-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
+                        {onOpenOrder ? (
+                          <button type="button" onClick={() => onOpenOrder(o.id)}
+                            className="font-mono font-bold text-indigo-800 underline min-h-8">
+                            {o.order_number}
+                          </button>
+                        ) : (
+                          <span className="font-mono font-bold text-slate-800">{o.order_number}</span>
+                        )}
+                        <span className="font-semibold text-indigo-800 bg-indigo-50 rounded px-1.5 py-0.5">{flowChannelLabel(o)}</span>
+                        <span>{formatWhen(o.order_date || o.created_at)}</span>
+                      </div>
+                      <ul className="text-sm text-slate-800 flex flex-col gap-0.5 pl-1">
+                        {(o.items || []).filter(it => flowRemainingQty(it) > 0).map(it => (
+                          <li key={it.id} className="flex justify-between gap-3">
+                            <span className="min-w-0">{productLabel(products.find(p => p.id === it.product_id), (it as any).product_name || 'Item')}</span>
+                            <strong className="whitespace-nowrap">{flowRemainingQty(it)} pcs</strong>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  aria-expanded={!!expanded[g.key]}
+                  aria-controls={`details-${g.key}`}
+                  onClick={() => setExpanded(prev => ({ ...prev, [g.key]: !prev[g.key] }))}
+                  className="min-h-12 px-4 rounded-lg border border-slate-300 bg-white text-slate-800 font-bold text-sm hover:bg-slate-50"
+                >
+                  {expanded[g.key] ? 'Hide details' : 'View details'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openGroup(g.key)}
+                  className="flex-1 min-h-12 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-base"
+                >
+                  {g.orders.length > 1 ? `Pack all ${g.orders.length} orders` : 'Start packing'}
+                </button>
+              </div>
             </div>
           );
         })}

@@ -356,20 +356,6 @@ export default function AdminReports() {
             <span className="hidden sm:inline">{showDiagnostics ? 'Hide Diagnostics' : 'Filter Diagnostics'}</span>
           </button>
 
-          {/* Role Switcher for Testing Access Control */}
-          <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
-            <Shield className="w-4 h-4 text-slate-500 ml-1.5" />
-            <span className="text-xs font-bold text-slate-500 uppercase mr-1">Role:</span>
-            <select
-              value={currentUser?.id || 'p-admin-1'}
-              onChange={(e) => setCurrentUser(e.target.value)}
-              className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-800 outline-none cursor-pointer"
-            >
-              <option value="p-admin-1">Distributor Admin (Full Access)</option>
-              <option value="p-dist-sales-1">Distributor Salesperson (Rajesh)</option>
-              <option value="p-co-sales-1">Company Salesperson (Parle Suresh)</option>
-            </select>
-          </div>
         </div>
       </div>
 
