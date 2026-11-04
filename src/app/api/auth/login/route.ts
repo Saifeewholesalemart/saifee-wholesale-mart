@@ -67,6 +67,19 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. Verify Account Active Status
+    const approval = String((matchedProfile as any).approval_status || 'approved');
+    if (approval === 'pending') {
+      return NextResponse.json(
+        { success: false, error: 'Your shop registration is waiting for approval by Saifee Wholesale Mart. You can log in once it is approved.' },
+        { status: 403 }
+      );
+    }
+    if (approval === 'rejected') {
+      return NextResponse.json(
+        { success: false, error: 'Your shop registration was not approved. Please contact Saifee Wholesale Mart.' },
+        { status: 403 }
+      );
+    }
     if (matchedProfile.active === false || matchedProfile.status === 'INACTIVE') {
       return NextResponse.json(
         { success: false, error: 'Your account is currently disabled. Please contact the administrator.' },

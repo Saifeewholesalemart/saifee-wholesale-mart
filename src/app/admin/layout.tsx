@@ -8,7 +8,7 @@ import { usePathname } from 'next/navigation';
 import { 
   LayoutDashboard, Combine, PackageCheck, Package, 
   FileSpreadsheet, FileText, Users, DollarSign, RotateCcw, 
-  TrendingUp, Settings, LogOut, Menu, X, ArrowLeft, Cpu, ClipboardList, Tags, Boxes, Warehouse, ArrowLeftRight, Zap, UserCog, Store, Database, MapPin
+  TrendingUp, Settings, LogOut, Menu, X, ArrowLeft, Cpu, ClipboardList, Tags, Boxes, Warehouse, ArrowLeftRight, Zap, UserCog, Store, Database, MapPin, BadgeCheck
 } from 'lucide-react';
 import { CompanySwitcher } from '@/components/CompanySwitcher';
 import { CompanySwitchingOverlay } from '@/components/CompanySwitchingOverlay';
@@ -33,6 +33,7 @@ const MENU_ITEMS: MenuItem[] = [
   { name: 'Inventory & Batch', path: '/admin/inventory', icon: Boxes },
   { name: 'Invoices (GST)', path: '/admin/invoices', icon: FileSpreadsheet },
   { name: 'Manage Profiles', path: '/admin/profiles', icon: UserCog },
+  { name: 'Shop Approvals', path: '/admin/approvals', icon: BadgeCheck },
   { name: 'Salesman Tracking', path: '/admin/tracking', icon: MapPin },
   { name: 'Payments & Ledger', path: '/admin/payments', icon: DollarSign },
   { name: 'Cash Flow', path: '/admin/cash-flow', icon: ArrowLeftRight },
@@ -55,6 +56,22 @@ function AdminSidebar({
   onItemClick?: () => void;
 }) {
   const isActive = (path: string) => pathname === path;
+
+  // Number of shops waiting for approval (badge on "Shop Approvals")
+  const [pendingShops, setPendingShops] = useState(0);
+  React.useEffect(() => {
+    let stop = false;
+    const load = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      fetch('/api/admin/shop-approvals?count=1', { credentials: 'same-origin', cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(j => { if (!stop && j?.success) setPendingShops(Number(j.pending) || 0); })
+        .catch(() => undefined);
+    };
+    load();
+    const id = setInterval(load, 120000);
+    return () => { stop = true; clearInterval(id); };
+  }, [pathname]);
 
   return (
     <div className="flex flex-col h-full bg-slate-900 text-slate-300 select-none">
@@ -91,6 +108,11 @@ function AdminSidebar({
             >
               <Icon className={`w-4 h-4 shrink-0 ${active ? 'text-white' : 'text-slate-400'}`} />
               <span className="truncate">{item.name}</span>
+              {item.path === '/admin/approvals' && pendingShops > 0 && (
+                <span className="ml-auto min-w-5 h-5 px-1.5 rounded-full bg-amber-400 text-slate-900 text-[11px] font-black flex items-center justify-center" aria-label={`${pendingShops} waiting`}>
+                  {pendingShops}
+                </span>
+              )}
             </Link>
           );
         })}

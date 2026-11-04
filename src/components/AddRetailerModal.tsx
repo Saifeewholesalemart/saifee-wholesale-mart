@@ -9,8 +9,10 @@ import { Store, User, Phone, MapPin, Building, CreditCard, ShieldCheck, X, Check
 interface AddRetailerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess?: (newRetailer: Retailer) => void;
+  onSuccess?: (newRetailer: Retailer, info?: string) => void;
   initialData?: Retailer | null;
+  /** Salesman registering a shop in the field: shop waits for admin approval; optional app login */
+  salesmanId?: string | null;
   isQuickAdd?: boolean;
   defaultCity?: string;
   title?: string;
@@ -25,7 +27,8 @@ export default function AddRetailerModal({
   initialData = null,
   isQuickAdd = false,
   defaultCity = 'Khachrod',
-  title
+  title,
+  salesmanId = null
 }: AddRetailerModalProps) {
   const { createRetailer, updateRetailer, retailers, categories } = useDb();
 
@@ -48,6 +51,8 @@ export default function AddRetailerModal({
 
   // Error & loading states
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
+  // Optional app login for the shop (salesman flow)
+  const [loginPassword, setLoginPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // Suggested code preview
@@ -109,6 +114,7 @@ export default function AddRetailerModal({
       }
       setErrors({});
       setSubmitting(false);
+      setLoginPassword('');
     }
   }, [isOpen, initialData, defaultCity, isQuickAdd, retailers]);
 
@@ -148,6 +154,10 @@ export default function AddRetailerModal({
       }
     }
 
+    if (salesmanId && !isEditing && loginPassword && loginPassword.length < 6) {
+      newErrors.loginPassword = 'Password must be at least 6 characters (or leave it empty)';
+    }
+
     const limitNum = parseFloat(creditLimit);
     if (isNaN(limitNum) || limitNum < 0) {
       newErrors.creditLimit = 'Please enter a valid positive credit limit amount';
@@ -157,7 +167,7 @@ export default function AddRetailerModal({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
@@ -197,11 +207,41 @@ export default function AddRetailerModal({
           credit_limit: parsedCreditLimit,
           active,
           category_access_mode: categoryAccessMode,
-          assigned_category_ids: categoryAccessMode === 'all' ? [] : assignedCategoryIds
+          assigned_category_ids: categoryAccessMode === 'all' ? [] : assignedCategoryIds,
+          ...(salesmanId ? { approval_status: 'pending' as const, registered_by: salesmanId } : {})
         });
 
         if (created) {
-          onSuccess?.(created);
+          let info: string | undefined;
+          if (salesmanId) {
+            info = 'Admin will verify this shop.';
+            if (loginPassword) {
+              try {
+                const res = await fetch('/api/sales/shop-login', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  credentials: 'same-origin',
+                  body: JSON.stringify({
+                    retailer_id: created.id,
+                    shop_name: created.shop_name,
+                    owner_name: created.owner_name,
+                    mobile: created.mobile,
+                    city: created.city,
+                    address: created.address,
+                    gstin: created.gstin || '',
+                    password: loginPassword
+                  })
+                });
+                const json = await res.json().catch(() => null);
+                info = res.ok && json?.success
+                  ? 'Admin will verify this shop. The shop can log in with its mobile number after approval.'
+                  : `Shop saved, but the app login was not created: ${json?.error || 'please try again from admin.'}`;
+              } catch {
+                info = 'Shop saved, but the app login was not created (no internet). Ask admin to create it.';
+              }
+            }
+          }
+          onSuccess?.(created, info);
           onClose();
         }
       }
@@ -538,6 +578,27 @@ export default function AddRetailerModal({
               </div>
             )}
           </div>
+
+          {salesmanId && !isEditing && (
+            <div className="pt-3 border-t border-slate-100 flex flex-col gap-1.5">
+              <label htmlFor="shop-login-password" className="block text-slate-700 font-bold">
+                App login password for the shop (optional)
+              </label>
+              <input
+                id="shop-login-password"
+                type="text"
+                autoComplete="new-password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="At least 6 characters — leave empty if not needed"
+                className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-500 outline-none"
+              />
+              {errors.loginPassword && <span className="text-xs font-semibold text-red-700">{errors.loginPassword}</span>}
+              <span className="text-xs text-slate-500">
+                The shop logs in with its mobile number and this password after admin approves the shop. You can take orders for it right away.
+              </span>
+            </div>
+          )}
 
           {/* Footer Actions */}
           <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">

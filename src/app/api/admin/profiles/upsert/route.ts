@@ -174,6 +174,17 @@ export async function POST(req: NextRequest) {
       throw dbErr;
     }
 
+    // Admin switched a pending shop login on from Manage Profiles: treat it as approved
+    if (active && savedRow?.approval_status === 'pending') {
+      try {
+        await executeRawQuery(
+          `UPDATE profiles SET approval_status = 'approved', approved_by = $2, approved_at = now() WHERE id = $1`,
+          [savedRow.id, auth.session.userId]
+        );
+        savedRow.approval_status = 'approved';
+      } catch { /* column missing until 020 is run */ }
+    }
+
     return NextResponse.json({ success: true, profile: sanitizeProfile(savedRow) });
   } catch (err: any) {
     console.error('[API Admin Profiles Upsert Error]:', err);

@@ -183,6 +183,10 @@ export interface Retailer {
   assigned_category_ids?: string[]; // Custom assigned category IDs for this retailer
   created_at?: string;
   updated_at?: string;
+  approval_status?: 'pending' | 'approved' | 'rejected'; // shop registered by itself / a salesman waits for admin
+  registered_by?: string; // 'self' or the salesman's profile id
+  approved_by?: string;
+  approved_at?: string;
 }
 
 export interface Category {
@@ -4618,6 +4622,8 @@ class FMCGDatabase {
     active?: boolean;
     category_access_mode?: 'all' | 'custom';
     assigned_category_ids?: string[];
+    approval_status?: 'pending' | 'approved' | 'rejected';
+    registered_by?: string;
   }): Retailer {
     const activeBiz = this.getActiveBusinessCompanyId();
     const retailers = this.getRetailers(activeBiz);
@@ -4681,7 +4687,9 @@ class FMCGDatabase {
       outstanding: 0,
       active,
       category_access_mode,
-      assigned_category_ids
+      assigned_category_ids,
+      ...(data.approval_status ? { approval_status: data.approval_status } : {}),
+      ...(data.registered_by ? { registered_by: data.registered_by } : {})
     };
 
     retailers.unshift(newRetailer);

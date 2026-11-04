@@ -4,6 +4,7 @@ import { getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { homePathFor } from '@/lib/useUrlStep';
 import { 
   Package, 
@@ -326,6 +327,13 @@ export default function Home() {
                 )}
               </button>
             </form>
+
+            <div className="mt-5 pt-4 border-t border-slate-800/80 text-center text-sm text-slate-400">
+              New shop?{' '}
+              <Link href="/register" className="font-bold text-indigo-300 hover:text-indigo-200 underline underline-offset-2">
+                Register your shop
+              </Link>
+            </div>
 
           </div>
 

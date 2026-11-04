@@ -1399,11 +1399,12 @@ export default function SalesDashboard() {
         isQuickAdd={true}
         title="Register New Shop (Field Booking)"
         defaultCity={selectedRetailer?.city || 'Khachrod'}
-        onSuccess={(newRetailer) => {
+        salesmanId={currentUser?.id || null}
+        onSuccess={(newRetailer, info) => {
           setSelectedRetailerId(newRetailer.id);
           setOrderStep('catalog');
           setSalesToast({
-            message: `Shop "${newRetailer.shop_name}" registered! Starting order booking.`,
+            message: `Shop "${newRetailer.shop_name}" registered! Starting order booking.${info ? ` ${info}` : ''}`,
             type: 'success'
           });
         }}
