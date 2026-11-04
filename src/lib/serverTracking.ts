@@ -207,3 +207,18 @@ export async function getSalesmanDay(businessId: string, userId: string, range: 
   );
   return res.rows;
 }
+
+/** Where orders were taken (last RETENTION_DAYS), newest first. Used to show shops on the map. */
+export async function getOrderPoints(businessId: string): Promise<TrackingPoint[]> {
+  const res = await executeRawQuery<TrackingPoint>(
+    `SELECT user_id, kind, lat, lng, accuracy_m, battery_pct, ref_id, ref_label,
+            to_char(recorded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS recorded_at
+       FROM salesman_locations
+      WHERE business_id = $1 AND kind = 'order' AND lat IS NOT NULL AND lng IS NOT NULL
+        AND recorded_at > now() - ($2 || ' days')::interval
+      ORDER BY recorded_at DESC
+      LIMIT 5000`,
+    [businessId, String(RETENTION_DAYS)]
+  );
+  return res.rows;
+}

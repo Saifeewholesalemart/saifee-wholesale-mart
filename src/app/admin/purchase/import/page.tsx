@@ -22,6 +22,8 @@ interface ExtractedLine {
   pack_size: string;
   quantity: number;
   trading_unit: 'Box' | 'Carton' | string;
+  /** Unit of the billed quantity and rate. null = not printed on the bill -> admin must choose. */
+  bill_unit: 'carton' | 'piece' | null;
   purchase_rate: number;
   discount: number;
   free_quantity: number;
@@ -51,6 +53,21 @@ interface ExtractedInvoice {
   invoice_date: string;
   total_amount: number;
   lines: ExtractedLine[];
+}
+
+/** Unit printed on the bill -> 'carton' | 'piece'; anything unclear -> null (admin chooses). */
+function billUnitFrom(raw?: string | null): 'carton' | 'piece' | null {
+  const u = (raw || '').trim().toLowerCase().replace(/[.\s]/g, '');
+  if (!u) return null;
+  if (/^(ctn|ctns|carton|cartons|box|boxes|bx|case|cases|cs|cse|outer|outers)$/.test(u)) return 'carton';
+  if (/^(pc|pcs|piece|pieces|nos|no|n|unit|units|pkt|pkts|packet|packets|pouch|pouches|ea|each|sachet|sachets|bottle|bottles|btl|tube|tubes)$/.test(u)) return 'piece';
+  return null;
+}
+
+/** Pieces that go into stock for this line (billed + free), using the chosen unit. */
+function linePieces(l: { quantity: number; free_quantity: number; bill_unit: 'carton' | 'piece' | null; units_per_pack: number }): number {
+  const per = l.bill_unit === 'carton' ? Math.max(1, l.units_per_pack || 1) : 1;
+  return ((l.quantity || 0) + (l.free_quantity || 0)) * per;
 }
 
 // Helper: Extract pack size number (units per carton)
@@ -390,8 +407,8 @@ export default function AIPurchaseImport() {
         const resolvedProd = products.find(p => p.id === matchedId) || products.find(p => p.id === suggestedId);
         const finalCompId = resolvedProd?.company_id || lineCompanyId;
         const unitsPerPack = resolvedProd?.units_per_box_carton || parsePackSizeNumber(line.pack_size) || 1;
-        const isPieceUnit = (line.trading_unit && (line.trading_unit.toLowerCase() === 'piece' || line.trading_unit.toLowerCase() === 'pouch'));
-        const initialRateUom: 'carton' | 'piece' = isPieceUnit ? 'piece' : 'carton';
+        const billUnit = billUnitFrom(line.trading_unit);
+        const initialRateUom: 'carton' | 'piece' = billUnit === 'piece' ? 'piece' : 'carton';
         const initialLandedCarton = initialRateUom === 'piece' ? (line.purchase_rate * unitsPerPack) : line.purchase_rate;
         const initialSellingPrice = resolvedProd?.selling_price && resolvedProd.selling_price > 0
           ? resolvedProd.selling_price
@@ -406,7 +423,8 @@ export default function AIPurchaseImport() {
           sku: line.sku,
           pack_size: line.pack_size || (resolvedProd?.pack_size || `${unitsPerPack} units/carton`),
           quantity: line.quantity,
-          trading_unit: line.trading_unit || 'Carton',
+          trading_unit: line.trading_unit || '',
+          bill_unit: billUnit,
           purchase_rate: line.purchase_rate,
           discount: line.discount || 0,
           free_quantity: line.free_quantity || 0,
@@ -701,6 +719,20 @@ export default function AIPurchaseImport() {
       return;
     }
 
+    // 2b. Every line needs its unit (Carton or Pieces); cartons need pieces per carton
+    const noUnit = verificationData.lines.filter(l => !l.bill_unit);
+    if (noUnit.length > 0) {
+      alert(`Please choose Carton or Pieces for ${noUnit.length} item(s). The bill does not say which unit was billed.`);
+      document.getElementById(noUnit[0].id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    const noPack = verificationData.lines.filter(l => l.bill_unit === 'carton' && !(l.units_per_pack > 1));
+    if (noPack.length > 0) {
+      alert(`Please enter how many pieces are in one carton for ${noPack.length} item(s).`);
+      document.getElementById(noPack[0].id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
     // 3. Resolve any remaining unmatched lines under their assigned company
     const resolvedLines = verificationData.lines.map(l => {
       let productId = l.matched_product_id;
@@ -744,9 +776,13 @@ export default function AIPurchaseImport() {
       invoice_date: verificationData.invoice_date || new Date().toISOString().split('T')[0],
       total_amount: verificationData.total_amount,
       items: resolvedLines.map(l => {
-        const piecePurchaseRate = l.purchase_rate || 0;
+        // Stock is kept in pieces. Billed in cartons -> convert quantity and rate to pieces.
+        const per = l.bill_unit === 'carton' ? Math.max(1, l.units_per_pack || 1) : 1;
+        const piecePurchaseRate = (l.purchase_rate || 0) / per;
         const pieceSellingRate = l.selling_price || 0;
-        const pieceQty = l.quantity || 0;
+        const pieceQty = (l.quantity || 0) * per;
+        const pieceFreeQty = (l.free_quantity || 0) * per;
+        const pieceDiscount = (l.discount || 0) / per;
 
         return {
           product_id: l.matched_product_id,
@@ -763,8 +799,8 @@ export default function AIPurchaseImport() {
           loose_rate: Math.round(piecePurchaseRate * 100) / 100,
           selling_price: Math.round(pieceSellingRate * 100) / 100,
           loose_selling_price: Math.round(pieceSellingRate * 100) / 100,
-          discount: l.discount || 0,
-          free_quantity: l.free_quantity || 0,
+          discount: Math.round(pieceDiscount * 10000) / 10000,
+          free_quantity: pieceFreeQty,
           mrp: l.mrp || 0,
           gst_percent: (l.gst_percent !== undefined && l.gst_percent !== null) ? Number(l.gst_percent) : 0,
           hsn: l.hsn || '',
@@ -1007,7 +1043,20 @@ export default function AIPurchaseImport() {
   const fuzzyMatchesCount = verificationData?.lines.filter(l => l.confidence === 'YELLOW').length || 0;
   const unmatchedCount = verificationData?.lines.filter(l => l.confidence === 'RED').length || 0;
   const unassignedCompanyCount = verificationData?.lines.filter(l => !l.company_id).length || 0;
-  const isFullyResolved = linesCount > 0 && fuzzyMatchesCount === 0 && unmatchedCount === 0 && unassignedCompanyCount === 0;
+  const unitMissingCount = verificationData?.lines.filter(l => !l.bill_unit).length || 0;
+  const badPackCount = verificationData?.lines.filter(l => l.bill_unit === 'carton' && !(l.units_per_pack > 1)).length || 0;
+  const isFullyResolved = linesCount > 0 && fuzzyMatchesCount === 0 && unmatchedCount === 0 && unassignedCompanyCount === 0 && unitMissingCount === 0 && badPackCount === 0;
+
+  /** Sets the bill unit for one line (or all lines when lineId is null). */
+  const setBillUnit = (lineId: string | null, unit: 'carton' | 'piece') => {
+    if (!verificationData) return;
+    setVerificationData({
+      ...verificationData,
+      lines: verificationData.lines.map(l => (lineId === null || l.id === lineId)
+        ? { ...l, bill_unit: unit, rate_uom: unit, trading_unit: unit === 'carton' ? 'Carton' : 'Piece' }
+        : l)
+    });
+  };
 
   return (
     <div className="space-y-6 pb-24">
@@ -1521,12 +1570,36 @@ export default function AIPurchaseImport() {
                 </button>
                 {(!isFullyResolved || !selectedSupplierId) && (
                   <span className="absolute bottom-full right-0 mb-2 w-64 p-2.5 bg-slate-800 text-white text-xs rounded-lg shadow-lg font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity text-center leading-normal z-20">
-                    {!selectedSupplierId ? 'Select database supplier' : unassignedCompanyCount > 0 ? `Assign company to all ${unassignedCompanyCount} remaining items` : 'Resolve all items before confirming'}
+                    {!selectedSupplierId ? 'Select database supplier' : unassignedCompanyCount > 0 ? `Assign company to all ${unassignedCompanyCount} remaining items` : unitMissingCount > 0 ? `Choose Carton or Pieces for ${unitMissingCount} item(s)` : badPackCount > 0 ? `Enter pieces per carton for ${badPackCount} item(s)` : 'Resolve all items before confirming'}
                   </span>
                 )}
               </div>
             </div>
           </div>
+
+          {unitMissingCount > 0 && (
+            <div role="alert" className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-amber-900">
+                <strong>{unitMissingCount} item{unitMissingCount === 1 ? '' : 's'}:</strong> the bill does not say whether the quantity is in cartons or pieces.
+                Choose the unit for each item below, or set all at once.
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => {
+                  if (!verificationData) return;
+                  setVerificationData({ ...verificationData, lines: verificationData.lines.map(l => l.bill_unit ? l : { ...l, bill_unit: 'carton', rate_uom: 'carton', trading_unit: 'Carton' }) });
+                }} className="min-h-10 px-4 rounded-lg bg-white border border-amber-400 text-amber-900 font-bold text-sm">All remaining: Carton</button>
+                <button type="button" onClick={() => {
+                  if (!verificationData) return;
+                  setVerificationData({ ...verificationData, lines: verificationData.lines.map(l => l.bill_unit ? l : { ...l, bill_unit: 'piece', rate_uom: 'piece', trading_unit: 'Piece' }) });
+                }} className="min-h-10 px-4 rounded-lg bg-white border border-amber-400 text-amber-900 font-bold text-sm">All remaining: Pieces</button>
+              </div>
+            </div>
+          )}
+          {unitMissingCount === 0 && badPackCount > 0 && (
+            <div role="alert" className="rounded-2xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
+              <strong>{badPackCount} carton item{badPackCount === 1 ? '' : 's'}:</strong> enter how many pieces are in one carton (Pcs / carton), so the right stock is added.
+            </div>
+          )}
 
           {/* 6. Main Product List Table */}
           <div className="erp-card bg-white border border-slate-200/80 rounded-2xl overflow-hidden shadow-sm">
@@ -1538,8 +1611,8 @@ export default function AIPurchaseImport() {
                     <th className="py-4 px-3 w-[260px]">Product Details &amp; Printed MRP</th>
                     <th className="py-4 px-3 w-[220px]">Company / Manufacturer</th>
                     <th className="py-4 px-3 w-[220px]">Matched Product / Master</th>
-                    <th className="py-4 px-3 w-[140px] text-center">Stock Inward Qty (Pcs)</th>
-                    <th className="py-4 px-3 w-[160px]">Purchase Rate / Pc (₹)</th>
+                    <th className="py-4 px-3 w-[190px] text-center">Billed Qty &amp; Unit</th>
+                    <th className="py-4 px-3 w-[160px]">Purchase Rate (₹)</th>
                     <th className="py-4 px-3 w-[180px] text-right bg-emerald-50/40 border-x border-emerald-100/60">Wholesale Selling Rate</th>
                     <th className="py-4 px-3 w-[110px] text-right">Taxable (₹)</th>
                     <th className="py-4 px-3 w-[80px] text-center">GST</th>
@@ -1565,8 +1638,11 @@ export default function AIPurchaseImport() {
                       const pieceInwardQty = line.quantity || 0;
                       const pieceFreeQty = line.free_quantity || 0;
 
-                      const marginPercent = pieceSellingRate > 0 ? (((pieceSellingRate - piecePurchaseRate) / pieceSellingRate) * 100) : 0;
-                      const isNegativeMargin = pieceSellingRate > 0 && pieceSellingRate < piecePurchaseRate;
+                      // Margin is compared per piece (selling rate is per piece)
+                      const perCarton = line.bill_unit === 'carton' ? Math.max(1, line.units_per_pack || 1) : 1;
+                      const ratePerPiece = piecePurchaseRate / perCarton;
+                      const marginPercent = pieceSellingRate > 0 ? (((pieceSellingRate - ratePerPiece) / pieceSellingRate) * 100) : 0;
+                      const isNegativeMargin = pieceSellingRate > 0 && pieceSellingRate < ratePerPiece;
 
                       const discLine = (line.discount || 0) * pieceInwardQty;
                       const taxable = Math.max(0, (piecePurchaseRate * pieceInwardQty) - discLine);
@@ -1732,9 +1808,29 @@ export default function AIPurchaseImport() {
                             )}
                           </td>
 
-                          {/* 5. Stock Inward Qty (Pcs) */}
-                          <td className="py-4 px-3 text-center border-r border-slate-50">
+                          {/* 5. Billed Qty & Unit */}
+                          <td className={`py-4 px-3 text-center border-r border-slate-50 ${!line.bill_unit ? 'bg-amber-50/70' : ''}`}>
                             <div className="space-y-1.5">
+                              <div role="group" aria-label="Unit billed" className="flex justify-center">
+                                {(['carton', 'piece'] as const).map(u => (
+                                  <button key={u} type="button" aria-pressed={line.bill_unit === u}
+                                    onClick={() => setBillUnit(line.id, u)}
+                                    className={`min-h-8 px-2.5 text-[11px] font-bold border ${u === 'carton' ? 'rounded-l-lg' : 'rounded-r-lg -ml-px'} ${line.bill_unit === u ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'}`}>
+                                    {u === 'carton' ? 'Carton' : 'Pieces'}
+                                  </button>
+                                ))}
+                              </div>
+                              {!line.bill_unit && (
+                                <div className="text-[10px] font-bold text-amber-800">Unit not on bill — choose one</div>
+                              )}
+                              {line.bill_unit === 'carton' && (
+                                <label className="flex items-center justify-center gap-1 text-[10px] font-bold text-slate-600">
+                                  Pcs / carton
+                                  <input type="number" min="1" value={line.units_per_pack || ''}
+                                    onChange={(e) => handleUpdateLineField(line.id, 'units_per_pack', parseInt(e.target.value) || 0)}
+                                    className={`w-14 border rounded text-center py-0.5 font-bold text-xs bg-white font-mono ${line.units_per_pack > 1 ? 'border-slate-300' : 'border-red-400'}`} />
+                                </label>
+                              )}
                               <div className="flex items-center justify-center gap-1.5">
                                 <div className="flex flex-col items-center">
                                   <input
@@ -1759,7 +1855,9 @@ export default function AIPurchaseImport() {
                                 </div>
                               </div>
                               <div className="text-[10px] font-bold text-indigo-700">
-                                Total: {(pieceInwardQty + pieceFreeQty)} Pcs
+                                {line.bill_unit
+                                  ? `Stock in: ${linePieces(line)} Pcs`
+                                  : `Total: ${pieceInwardQty + pieceFreeQty} (unit?)`}
                               </div>
                             </div>
                           </td>
@@ -1768,7 +1866,7 @@ export default function AIPurchaseImport() {
                           <td className="py-4 px-3 space-y-1.5 border-r border-slate-50">
                             <div>
                               <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
-                                <span>Rate / Pc (₹):</span>
+                                <span>{line.bill_unit === 'carton' ? 'Rate / Carton (₹):' : line.bill_unit === 'piece' ? 'Rate / Pc (₹):' : 'Rate (₹):'}</span>
                               </div>
                               <div className="relative flex items-center">
                                 <span className="text-xs text-slate-500 font-bold absolute left-1.5">₹</span>

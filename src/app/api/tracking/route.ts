@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/authSession';
 import { isServerDatabaseConfigured } from '@/lib/serverDb';
-import { getSalesmanDay, getSalesmenSummary, istDayRange } from '@/lib/serverTracking';
+import { getOrderPoints, getSalesmanDay, getSalesmenSummary, istDayRange } from '@/lib/serverTracking';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +12,7 @@ function todayIst(): string {
 /**
  * GET /api/tracking            -> all salesmen with last location and duty state (admin only)
  * GET /api/tracking?user=ID&date=YYYY-MM-DD -> one salesman's points for that day (IST)
+ * GET /api/tracking?shops=1     -> places where orders were taken (to show shops on the map)
  */
 export async function GET(req: NextRequest) {
   try {
@@ -36,6 +37,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Invalid date.' }, { status: 400 });
     }
 
+    if (url.searchParams.get('shops')) {
+      return NextResponse.json({ success: true, points: await getOrderPoints(businessId) });
+    }
     if (userId) {
       const points = await getSalesmanDay(businessId, userId, range);
       return NextResponse.json({ success: true, date, points });

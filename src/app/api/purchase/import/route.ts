@@ -11,6 +11,16 @@ const CANDIDATE_MODELS = [
   'gemini-3.5-flash'
 ];
 
+/** 'Carton' | 'Piece' when the printed unit is clear, otherwise null (the screen then asks the user). */
+function normalizeBillUnit(raw: unknown): 'Carton' | 'Piece' | null {
+  if (typeof raw !== 'string') return null;
+  const u = raw.trim().toLowerCase().replace(/[.\s]/g, '');
+  if (!u) return null;
+  if (/^(ctn|ctns|carton|cartons|box|boxes|bx|case|cases|cs|cse|outer|outers)$/.test(u)) return 'Carton';
+  if (/^(pc|pcs|piece|pieces|nos|no|n|unit|units|pkt|pkts|packet|packets|pouch|pouches|ea|each|sachet|sachets|bottle|bottles|btl|tube|tubes)$/.test(u)) return 'Piece';
+  return null;
+}
+
 async function generateWithFallback(genAI: GoogleGenerativeAI, prompt: string, docPart: any) {
   let lastError: any = null;
 
@@ -135,7 +145,7 @@ export async function POST(request: NextRequest) {
         3. For items:
            - "description": The printed product name/description.
            - "quantity": Number of units purchased (e.g. cartons/boxes/bags).
-           - "unit": e.g. "Carton" or "Box" or "Bag" or "Unit" as printed on the invoice.
+           - "unit": the unit of the quantity EXACTLY as printed on that line or its column header (e.g. "CTN", "Box", "Case", "Pcs", "Nos", "Pkt"). If no unit is printed, return null. Never guess.
            - "free_quantity": Quantity given free under schemes if printed, otherwise return null or 0.
            - "purchase_rate": The purchase rate per unit/carton/box.
            - "gst_rate": The GST percent for this line item (e.g. 18, 12, 5, 28, 0, or null).
@@ -162,7 +172,7 @@ export async function POST(request: NextRequest) {
               "hsn": "HSN Code",
               "packing": "Pack size display, e.g. 24 units/carton",
               "quantity": 10,
-              "unit": "Carton",
+              "unit": "CTN or Pcs as printed, or null",
               "free_quantity": 0,
               "purchase_rate": 100.00,
               "discount": 0.00,
@@ -194,7 +204,8 @@ export async function POST(request: NextRequest) {
         sku: item.sku || null,
         pack_size: item.packing || '',
         quantity: typeof item.quantity === 'number' ? item.quantity : parseInt(item.quantity) || 0,
-        trading_unit: (item.unit && (item.unit.toLowerCase().includes('box') ? 'Box' : 'Carton')) || 'Carton',
+        // Unit of the billed quantity: only when the bill clearly says it. Otherwise null -> the user is asked.
+        trading_unit: normalizeBillUnit(item.unit),
         purchase_rate: typeof item.purchase_rate === 'number' ? item.purchase_rate : parseFloat(item.purchase_rate) || 0,
         discount: typeof item.discount === 'number' ? item.discount : parseFloat(item.discount) || 0,
         free_quantity: typeof item.free_quantity === 'number' ? item.free_quantity : parseInt(item.free_quantity) || 0,

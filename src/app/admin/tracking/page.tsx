@@ -8,7 +8,8 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MapPin, RefreshCw, Battery, ShoppingBag, ChevronLeft } from 'lucide-react';
+import { MapPin, RefreshCw, Battery, ShoppingBag, ChevronLeft, ExternalLink, Store } from 'lucide-react';
+import { useDb } from '@/context/DbContext';
 
 type Kind = 'ping' | 'duty_start' | 'duty_end' | 'order' | 'consent';
 interface Point {
@@ -51,6 +52,12 @@ function loadLeaflet(): Promise<any> {
       css.href = LEAFLET_CSS;
       document.head.appendChild(css);
     }
+    if (!document.getElementById('shop-label-style')) {
+      const st = document.createElement('style');
+      st.id = 'shop-label-style';
+      st.textContent = '.shop-label{background:rgba(255,255,255,.92);border:1px solid #bfdbfe;color:#1e3a8a;font-weight:700;font-size:11px;padding:1px 5px;box-shadow:none}.shop-label:before{display:none}';
+      document.head.appendChild(st);
+    }
     const js = document.createElement('script');
     js.src = LEAFLET_JS;
     js.async = true;
@@ -92,6 +99,23 @@ function distanceKm(points: { lat: number; lng: number }[]): number {
 function esc(t: string): string {
   return t.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 }
+/** Opens this exact spot in Google Maps (app on phone, website on computer) — shows area and shop names. */
+function gmapsUrl(lat: number, lng: number): string {
+  return `https://www.google.com/maps/search/?api=1&query=${lat.toFixed(6)},${lng.toFixed(6)}`;
+}
+function gmapsLinkHtml(lat: number, lng: number): string {
+  return `<a href="${gmapsUrl(lat, lng)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:6px;font-weight:700;color:#3730a3;text-decoration:underline">Open in Google Maps</a>`;
+}
+
+interface ShopSpot {
+  key: string;
+  name: string;
+  lat: number;
+  lng: number;
+  lastOrderAt: string;
+  orders: number;
+}
+
 function isLive(s: Salesman): boolean {
   return s.on_duty && !!s.last && Date.now() - Date.parse(s.last.recorded_at) < LIVE_MINUTES * 60000;
 }
@@ -106,6 +130,9 @@ export default function SalesmanTrackingPage() {
   const [dayPoints, setDayPoints] = useState<Point[] | null>(null);
   const [dayLoading, setDayLoading] = useState(false);
   const [mapError, setMapError] = useState('');
+  const [orderPoints, setOrderPoints] = useState<Point[]>([]);
+  const [showShops, setShowShops] = useState(true);
+  const { orders, retailers } = useDb();
 
   const mapEl = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
@@ -113,6 +140,38 @@ export default function SalesmanTrackingPage() {
   const fittedOnce = useRef(false);
 
   // ---------------------------------------------------------------- data
+  const loadShops = useCallback(async () => {
+    try {
+      const res = await fetch('/api/tracking?shops=1', { credentials: 'same-origin', cache: 'no-store' });
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.success) setOrderPoints(json.points || []);
+    } catch { /* shops layer is optional */ }
+  }, []);
+
+  // Shop location = where its latest order was taken (best GPS accuracy wins when several are close in time)
+  const shops = useMemo<ShopSpot[]>(() => {
+    const orderById = new Map(orders.map(o => [o.id, o]));
+    const retailerById = new Map(retailers.map(r => [r.id, r]));
+    const byShop = new Map<string, ShopSpot>();
+    orderPoints.forEach(p => {
+      if (p.lat == null || p.lng == null) return;
+      if ((p.accuracy_m ?? 0) > 150) return; // too rough to mark a shop
+      const order = p.ref_id ? orderById.get(p.ref_id) : undefined;
+      const retailer = order ? retailerById.get(order.retailer_id) : undefined;
+      const labelName = (p.ref_label || '').split(' · ').slice(1).join(' · ').trim();
+      const name = retailer?.shop_name || labelName;
+      if (!name) return;
+      const key = retailer?.id || `name:${name.toLowerCase()}`;
+      const existing = byShop.get(key);
+      if (!existing) {
+        byShop.set(key, { key, name, lat: p.lat, lng: p.lng, lastOrderAt: p.recorded_at, orders: 1 });
+      } else {
+        existing.orders += 1; // points come newest first: keep the newest position
+      }
+    });
+    return Array.from(byShop.values());
+  }, [orderPoints, orders, retailers]);
+
   const loadSummary = useCallback(async () => {
     try {
       const res = await fetch('/api/tracking', { credentials: 'same-origin', cache: 'no-store' });
@@ -146,11 +205,12 @@ export default function SalesmanTrackingPage() {
 
   useEffect(() => {
     void loadSummary();
+    void loadShops();
     const id = setInterval(() => {
-      if (document.visibilityState === 'visible') void loadSummary();
+      if (document.visibilityState === 'visible') { void loadSummary(); void loadShops(); }
     }, 60000);
     return () => clearInterval(id);
-  }, [loadSummary]);
+  }, [loadSummary, loadShops]);
 
   useEffect(() => {
     if (!selected) { setDayPoints(null); return; }
@@ -210,6 +270,17 @@ export default function SalesmanTrackingPage() {
     layer.clearLayers();
     const bounds: [number, number][] = [];
 
+    if (showShops) {
+      const labelAll = shops.length <= 60;
+      shops.forEach(sh => {
+        const m = L.circleMarker([sh.lat, sh.lng], { radius: 6, color: '#1e3a8a', weight: 2, fillColor: '#93c5fd', fillOpacity: 0.95 })
+          .bindPopup(`<strong>${esc(sh.name)}</strong><br>Last order ${timeAgo(sh.lastOrderAt)} · ${sh.orders} order${sh.orders === 1 ? '' : 's'} (90 days)<br>${gmapsLinkHtml(sh.lat, sh.lng)}`);
+        if (labelAll) m.bindTooltip(esc(sh.name), { permanent: true, direction: 'right', offset: [8, 0], className: 'shop-label' });
+        else m.bindTooltip(esc(sh.name));
+        m.addTo(layer);
+      });
+    }
+
     if (selected && dayPoints) {
       const line = route.pts.map(p => [p.lat, p.lng] as [number, number]);
       if (line.length > 1) L.polyline(line, { color: '#4338ca', weight: 4, opacity: 0.8 }).addTo(layer);
@@ -217,13 +288,13 @@ export default function SalesmanTrackingPage() {
         bounds.push([p.lat, p.lng]);
         if (p.kind === 'ping') {
           L.circleMarker([p.lat, p.lng], { radius: 3, color: '#4338ca', weight: 1, fillOpacity: 0.7 })
-            .bindPopup(`${clock(p.recorded_at)}${p.battery_pct != null ? ` · Battery ${p.battery_pct}%` : ''}`).addTo(layer);
+            .bindPopup(`${clock(p.recorded_at)}${p.battery_pct != null ? ` · Battery ${p.battery_pct}%` : ''}<br>${gmapsLinkHtml(p.lat, p.lng)}`).addTo(layer);
         } else if (p.kind === 'order') {
           L.circleMarker([p.lat, p.lng], { radius: 9, color: '#15803d', weight: 2, fillColor: '#22c55e', fillOpacity: 0.9 })
-            .bindPopup(`<strong>Order</strong> ${clock(p.recorded_at)}<br>${esc(p.ref_label || '')}`).addTo(layer);
+            .bindPopup(`<strong>Order</strong> ${clock(p.recorded_at)}<br>${esc(p.ref_label || '')}<br>${gmapsLinkHtml(p.lat, p.lng)}`).addTo(layer);
         } else if (p.kind === 'duty_start' || p.kind === 'duty_end') {
           L.circleMarker([p.lat, p.lng], { radius: 8, color: '#0f172a', weight: 2, fillColor: p.kind === 'duty_start' ? '#fbbf24' : '#94a3b8', fillOpacity: 1 })
-            .bindPopup(`${p.kind === 'duty_start' ? 'Duty started' : 'Duty ended'} ${clock(p.recorded_at)}`).addTo(layer);
+            .bindPopup(`${p.kind === 'duty_start' ? 'Duty started' : 'Duty ended'} ${clock(p.recorded_at)}<br>${gmapsLinkHtml(p.lat, p.lng)}`).addTo(layer);
         }
       });
     } else {
@@ -236,8 +307,7 @@ export default function SalesmanTrackingPage() {
           fillColor: live ? '#22c55e' : '#cbd5e1', fillOpacity: 0.95
         })
           .bindTooltip(esc(s.name), { permanent: true, direction: 'top', offset: [0, -10] })
-          .bindPopup(`<strong>${esc(s.name)}</strong><br>${live ? 'On duty' : 'Not live'} · ${timeAgo(s.last.recorded_at)}${s.last.battery_pct != null ? `<br>Battery ${s.last.battery_pct}%` : ''}`)
-          .on('click', () => setSelected(s.user_id))
+          .bindPopup(`<strong>${esc(s.name)}</strong><br>${live ? 'On duty' : 'Not live'} · ${timeAgo(s.last.recorded_at)}${s.last.battery_pct != null ? `<br>Battery ${s.last.battery_pct}%` : ''}<br>${gmapsLinkHtml(s.last.lat, s.last.lng)}`)
           .addTo(layer);
       });
     }
@@ -245,7 +315,7 @@ export default function SalesmanTrackingPage() {
     if (bounds.length === 1) map.setView(bounds[0], 15);
     else if (bounds.length > 1 && (selected || !fittedOnce.current)) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
     if (!selected && bounds.length > 0) fittedOnce.current = true;
-  }, [salesmen, selected, dayPoints, route]);
+  }, [salesmen, selected, dayPoints, route, shops, showShops]);
 
   // ---------------------------------------------------------------- UI
   const liveCount = salesmen.filter(isLive).length;
@@ -305,7 +375,13 @@ export default function SalesmanTrackingPage() {
                             {p.kind === 'order' ? 'Order' : p.kind === 'duty_start' ? 'Duty started' : 'Duty ended'}
                           </span>
                           {p.ref_label && <span className="block text-xs text-slate-600 break-words">{p.ref_label}</span>}
-                          {p.lat == null && <span className="block text-xs text-amber-800">Location not available at this time</span>}
+                          {p.lat == null ? (
+                            <span className="block text-xs text-amber-800">Location not available at this time</span>
+                          ) : p.lng != null && (
+                            <a href={gmapsUrl(p.lat, p.lng)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-800 underline min-h-7">
+                              <ExternalLink className="w-3 h-3" aria-hidden="true" /> Google Maps
+                            </a>
+                          )}
                         </span>
                       </li>
                     ))}
@@ -323,8 +399,9 @@ export default function SalesmanTrackingPage() {
               {salesmen.map(s => {
                 const live = isLive(s);
                 return (
-                  <button key={s.user_id} type="button" onClick={() => { setSelected(s.user_id); setDate(todayIst()); }}
-                    className="text-left bg-white border border-slate-200 hover:bg-slate-50 rounded-xl p-3.5 flex flex-col gap-1">
+                  <div key={s.user_id} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                  <button type="button" onClick={() => { setSelected(s.user_id); setDate(todayIst()); }}
+                    className="w-full text-left hover:bg-slate-50 p-3.5 flex flex-col gap-1">
                     <span className="flex justify-between gap-2 items-center">
                       <strong className="text-[15px] text-slate-900">{s.name}</strong>
                       <span className={`text-xs font-bold rounded px-2 py-0.5 ${live ? 'bg-green-100 text-green-800' : s.on_duty ? 'bg-amber-100 text-amber-900' : 'bg-slate-100 text-slate-700'}`}>
@@ -338,6 +415,13 @@ export default function SalesmanTrackingPage() {
                     </span>
                     {!s.consent && <span className="text-xs text-amber-800">Has not started duty in the app yet.</span>}
                   </button>
+                  {s.last && s.last.lat != null && s.last.lng != null && (
+                    <a href={gmapsUrl(s.last.lat, s.last.lng)} target="_blank" rel="noopener noreferrer"
+                      className="min-h-10 px-3.5 border-t border-slate-100 text-sm font-semibold text-indigo-800 flex items-center gap-1.5 hover:bg-indigo-50">
+                      <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" /> Open last location in Google Maps
+                    </a>
+                  )}
+                  </div>
                 );
               })}
               {updatedAt && <p className="text-xs text-slate-500">Updated {timeAgo(updatedAt)} · refreshes every minute</p>}
@@ -348,6 +432,13 @@ export default function SalesmanTrackingPage() {
         {/* Map */}
         <section className="flex-[999_1_480px] min-w-0 bg-white border border-slate-200 rounded-xl overflow-hidden isolate">
           {mapError && <div className="px-4 py-2 text-sm text-amber-900 bg-amber-50">{mapError}</div>}
+          <div className="px-4 py-2.5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2 text-sm">
+            <label className="flex items-center gap-2 font-semibold text-slate-800 cursor-pointer min-h-9">
+              <input type="checkbox" checked={showShops} onChange={e => setShowShops(e.target.checked)} className="w-4 h-4" />
+              <Store className="w-4 h-4 text-blue-800" aria-hidden="true" /> Show shops ({shops.length})
+            </label>
+            <span className="text-xs text-slate-500">Shop dots come from where orders were taken. Tap any dot for Google Maps.</span>
+          </div>
           <div ref={mapEl} className="w-full h-[60vh] min-h-[360px] bg-slate-100" role="region" aria-label="Map of salesman locations" />
         </section>
       </div>
