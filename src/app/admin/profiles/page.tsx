@@ -9,7 +9,7 @@ import {
   Tags, Search, Edit, KeyRound, Power, Check, X, Eye, EyeOff,
   AlertCircle, Sparkles, CheckCircle2,
   Phone, MapPin, RefreshCw, AlertTriangle, Layers,
-  CreditCard, Filter, UserCog, HardHat, Briefcase, Plus, ChevronDown
+  CreditCard, Filter, UserCog, HardHat, Briefcase, Plus, ChevronDown, Trash2
 } from 'lucide-react';
 
 const COMMON_JOB_ROLES = [
@@ -30,7 +30,7 @@ export default function ManageProfilesPage() {
     profiles, retailers, companies, categories,
     createRetailerProfile, createSalespersonProfile, createStaffProfile,
     updateSalespersonProfile, updateRetailerProfile, updateStaffProfile,
-    resetProfilePassword, toggleProfileStatus
+    resetProfilePassword, toggleProfileStatus, deleteProfilePermanently
   } = useDb();
 
   const router = useRouter();
@@ -120,6 +120,28 @@ export default function ManageProfilesPage() {
   const [pwdModalSubmitting, setPwdModalSubmitting] = useState(false);
 
   const [confirmStatusModal, setConfirmStatusModal] = useState<{ profileId: string; name: string; currentActive: boolean } | null>(null);
+  // Permanent delete
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: 'retailer' | 'salesperson' | 'staff'; name: string; profileId?: string; retailerId?: string; hasLogin: boolean } | null>(null);
+  const [deleteTyped, setDeleteTyped] = useState('');
+  const [deleteRemoveShop, setDeleteRemoveShop] = useState(true);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const openDelete = (t: { kind: 'retailer' | 'salesperson' | 'staff'; name: string; profileId?: string; retailerId?: string; hasLogin: boolean }) => {
+    setDeleteTarget(t);
+    setDeleteTyped('');
+    setDeleteRemoveShop(true);
+  };
+  const runDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    const r = await deleteProfilePermanently({
+      profileId: deleteTarget.profileId,
+      retailerId: deleteTarget.retailerId,
+      removeShop: deleteTarget.kind === 'retailer' ? deleteRemoveShop : false
+    });
+    setDeleteBusy(false);
+    showToast(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) setDeleteTarget(null);
+  };
   const [viewScopeModal, setViewScopeModal] = useState<Profile | null>(null);
 
   // Active Companies & Categories
@@ -1716,6 +1738,17 @@ export default function ManageProfilesPage() {
                                   >
                                     <Power className="w-3.5 h-3.5" />
                                   </button>
+
+                                  {/* Delete permanently */}
+                                  <button
+                                    type="button"
+                                    onClick={() => openDelete({ kind: 'retailer', name: r.shop_name, profileId: row.profileId !== r.id ? row.profileId : undefined, retailerId: r.id, hasLogin: row.profileId !== r.id })}
+                                    title="Delete permanently"
+                                    aria-label="Delete permanently"
+                                    className="p-1.5 rounded-lg border bg-white hover:bg-red-50 text-red-700 border-red-200 transition-colors cursor-pointer shadow-2xs"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
                                 </div>
                               </td>
                             </tr>
@@ -1821,6 +1854,17 @@ export default function ManageProfilesPage() {
                                       }`}
                                   >
                                     <Power className="w-3.5 h-3.5" />
+                                  </button>
+
+                                  {/* Delete permanently */}
+                                  <button
+                                    type="button"
+                                    onClick={() => openDelete({ kind: 'staff', name: `${st.full_name || st.name} (${st.custom_role || 'Staff'})`, profileId: st.id, hasLogin: true })}
+                                    title="Delete permanently"
+                                    aria-label="Delete permanently"
+                                    className="p-1.5 rounded-lg border bg-white hover:bg-red-50 text-red-700 border-red-200 transition-colors cursor-pointer shadow-2xs"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
                               </td>
@@ -1956,6 +2000,17 @@ export default function ManageProfilesPage() {
                                   >
                                     <Power className="w-3.5 h-3.5" />
                                   </button>
+
+                                  {/* Delete permanently */}
+                                  <button
+                                    type="button"
+                                    onClick={() => openDelete({ kind: 'salesperson', name: sp.name, profileId: sp.id, hasLogin: true })}
+                                    title="Delete permanently"
+                                    aria-label="Delete permanently"
+                                    className="p-1.5 rounded-lg border bg-white hover:bg-red-50 text-red-700 border-red-200 transition-colors cursor-pointer shadow-2xs"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
                                 </div>
                               </td>
                             </tr>
@@ -2088,6 +2143,48 @@ export default function ManageProfilesPage() {
                   }`}
               >
                 {confirmStatusModal.currentActive ? 'Deactivate' : 'Activate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent delete confirmation */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/60" role="dialog" aria-modal="true" aria-labelledby="delete-profile-title">
+          <div className="bg-white border border-slate-200 rounded-t-2xl sm:rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 shrink-0 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-center justify-center">
+                <Trash2 className="w-5 h-5" aria-hidden="true" />
+              </div>
+              <div>
+                <h3 id="delete-profile-title" className="text-base font-black text-slate-900">Delete permanently?</h3>
+                <p className="text-sm text-slate-600 mt-0.5"><strong className="text-slate-900">{deleteTarget.name}</strong></p>
+              </div>
+            </div>
+            <ul className="text-sm text-slate-700 list-disc pl-5 flex flex-col gap-1">
+              {deleteTarget.hasLogin && <li>The login is deleted. This person can no longer sign in.</li>}
+              {deleteTarget.kind === 'salesperson' && <li>Their location history is deleted too.</li>}
+              <li>Orders and bills already made stay in your records.</li>
+              <li>This cannot be undone. To stop someone for a while, use Deactivate instead.</li>
+            </ul>
+            {deleteTarget.kind === 'retailer' && (
+              <label className="flex items-start gap-2.5 text-sm text-slate-800 cursor-pointer">
+                <input type="checkbox" checked={deleteRemoveShop} onChange={e => setDeleteRemoveShop(e.target.checked)} className="w-5 h-5 mt-0.5" />
+                <span>Also remove the shop from the shop list <span className="text-slate-500">(only if it has no orders, bills or payments)</span></span>
+              </label>
+            )}
+            <label className="flex flex-col gap-1.5 text-sm">
+              <span className="font-semibold text-slate-700">Type <strong>DELETE</strong> to confirm</span>
+              <input value={deleteTyped} onChange={e => setDeleteTyped(e.target.value)} autoCapitalize="characters" autoComplete="off"
+                className="min-h-11 border border-slate-300 rounded-lg px-3 font-mono focus:border-red-500 outline-none" />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}
+                className="min-h-11 px-4 rounded-lg border border-slate-300 font-semibold text-sm">Cancel</button>
+              <button type="button" onClick={() => void runDelete()} disabled={deleteBusy || deleteTyped.trim().toUpperCase() !== 'DELETE'}
+                className="min-h-11 px-5 rounded-lg bg-red-700 hover:bg-red-800 disabled:bg-slate-300 text-white font-bold text-sm">
+                {deleteBusy ? 'Deleting…' : 'Delete permanently'}
               </button>
             </div>
           </div>

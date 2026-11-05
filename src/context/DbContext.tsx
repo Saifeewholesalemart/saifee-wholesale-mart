@@ -486,6 +486,8 @@ interface DbContextType {
   updateRetailerProfile: (retailerId: string, updates: Parameters<typeof db.updateRetailerProfile>[1]) => { retailer: Retailer; profile: Profile | null } | null;
   resetProfilePassword: (profileId: string, newPassword: string) => boolean;
   toggleProfileStatus: (profileId: string, forcedStatus?: boolean) => Profile | null;
+  /** Permanently deletes a login (and, for a shop without history, the shop record). */
+  deleteProfilePermanently: (target: { profileId?: string; retailerId?: string; removeShop?: boolean }) => Promise<{ ok: boolean; message: string; shopRemoved?: boolean }>;
   updateProfile: (id: string, updates: Partial<Profile>) => Profile | null;
   createProduct: (...args: Parameters<typeof db.createProduct>) => Product;
   createFullProduct: (productData: Parameters<typeof db.createFullProduct>[0]) => Product;
@@ -1841,6 +1843,39 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     return res;
   };
 
+  const deleteProfilePermanently = async (target: { profileId?: string; retailerId?: string; removeShop?: boolean }) => {
+    try {
+      const res = await fetch('/api/admin/profiles/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ profile_id: target.profileId || undefined, retailer_id: target.retailerId || undefined, remove_shop: !!target.removeShop })
+      });
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok || !data.success) {
+        return { ok: false, message: data.error || `Could not delete (HTTP ${res.status}).` };
+      }
+      // Remove from this device right away (other devices drop it on their next check)
+      const gone = new Set<string>(Array.isArray(data.deletedProfileIds) ? data.deletedProfileIds : []);
+      if (gone.size > 0) {
+        try { db.saveProfiles(db.getProfiles().filter(p => !gone.has(p.id))); } catch {}
+      }
+      if (data.shopRemoved && data.retailerId) {
+        try {
+          const biz = db.getActiveBusinessCompanyId();
+          db.saveRetailers(db.getRetailers(biz).filter(r => r.id !== data.retailerId), biz);
+        } catch {}
+      }
+      refreshState();
+      const msg = data.shopRemoved
+        ? 'Login and shop deleted permanently.'
+        : data.shopKeptReason || 'Login deleted permanently.';
+      return { ok: true, message: msg, shopRemoved: !!data.shopRemoved };
+    } catch (e: any) {
+      return { ok: false, message: e?.message || 'No internet connection. Please try again.' };
+    }
+  };
+
   const updateProfile = (id: string, updates: Partial<Profile>) => {
     const res = db.updateProfile(id, updates);
     refreshState();
@@ -2291,6 +2326,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         updateRetailerProfile,
         resetProfilePassword,
         toggleProfileStatus,
+        deleteProfilePermanently,
         updateProfile,
         createProduct,
         createFullProduct,

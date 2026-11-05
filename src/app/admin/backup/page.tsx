@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useDb } from '@/context/DbContext';
+import ReloadFromCloudCard from '@/components/ReloadFromCloudCard';
 import { 
   Database, Download, Upload, ShieldCheck, Clock, FileSpreadsheet, 
   FileText, CheckCircle2, AlertTriangle, RefreshCw, Trash2, HardDrive, 
@@ -380,6 +381,7 @@ export default function DatabaseBackupPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 space-y-8 font-sans">
+      <ReloadFromCloudCard />
       {/* Toast Notification */}
       {toastMessage && (
         <div 

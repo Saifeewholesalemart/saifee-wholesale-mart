@@ -713,6 +713,141 @@ function restrictLocalDataToRetailer(retailerId: string) {
   }
 }
 
+/**
+ * Cloud is the single source of truth. When DATA_EPOCH changes (new code version, or the
+ * "Reload all data from cloud" button), the device throws away its local copy and loads
+ * everything fresh. This removes old leftovers (demo data, double imports, old profiles)
+ * that a device kept from before, which made phone and laptop show different numbers.
+ * Changes still waiting to be uploaded (outbox) are never thrown away.
+ */
+const DATA_EPOCH = '2026-11-04-a';
+const epochKey = (biz: string) => `fmcg_data_epoch_v1_${biz}`;
+
+function purgeLocalCopy(): number {
+  const pending = new Map<string, Set<string>>();
+  outbox.forEach(e => {
+    (pending.get(e.store) || pending.set(e.store, new Set()).get(e.store)!).add(e.id);
+  });
+  // Keep the logged-in person's own profile so the session stays valid while reloading
+  let meId = '';
+  try { meId = db.getCurrentUser()?.id || ''; } catch { /* no user yet */ }
+  if (meId) (pending.get('fmcg_profiles') || pending.set('fmcg_profiles', new Set()).get('fmcg_profiles')!).add(meId);
+  let removed = 0;
+  applyingRemote++;
+  try {
+    for (const store of db.listLoadedStoreKeys()) {
+      if (!(isCloudSyncedStore(store) || store === 'fmcg_profiles')) continue;
+      const items = db.getRawStore(store);
+      if (!Array.isArray(items) || items.length === 0) continue;
+      const keep = pending.get(store);
+      const remove: string[] = [];
+      items.forEach((it: any) => {
+        const id = resolveRecordId(store, it);
+        if (id && !keep?.has(id)) remove.push(id);
+      });
+      if (remove.length > 0) {
+        db.applyCloudRecords(store, [], remove);
+        removed += remove.length;
+      }
+    }
+  } finally {
+    applyingRemote--;
+  }
+  return removed;
+}
+
+// ---------------------------------------------------------------------------
+// Daily silent check: remove records this device still keeps but the cloud no longer has.
+// Nobody has to press anything; it runs in the background about once every 12 hours.
+// ---------------------------------------------------------------------------
+const RECONCILE_EVERY_MS = 12 * 3600 * 1000;
+const reconcileKey = (biz: string) => `fmcg_reconcile_at_v1_${biz}`;
+let sessionRetailerId: string | null = null;
+let reconciling = false;
+
+export async function reconcileWithCloud(force = false): Promise<number> {
+  if (reconciling || !ready || sessionRetailerId || !activeBusinessId) return 0;
+  if (!sessionBusinessId || sessionBusinessId !== activeBusinessId) return 0;
+  const biz = activeBusinessId;
+  const last = Date.parse((await getIdbItem<string>(reconcileKey(biz))) || '') || 0;
+  if (!force && Date.now() - last < RECONCILE_EVERY_MS) return 0;
+  if (!isOnline()) return 0;
+  reconciling = true;
+  try {
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const t = ctrl ? setTimeout(() => ctrl.abort(), 60000) : null;
+    const res = await fetch('/api/cloud/ids', { cache: 'no-store', credentials: 'same-origin', signal: ctrl?.signal });
+    if (t) clearTimeout(t);
+    if (!res.ok) return 0;
+    const json = await res.json().catch(() => null);
+    if (!json?.success || json.businessId !== biz || !json.stores || biz !== activeBusinessId) return 0;
+
+    const pending = new Map<string, Set<string>>();
+    outbox.forEach(e => { (pending.get(e.store) || pending.set(e.store, new Set()).get(e.store)!).add(e.id); });
+    let meId = '';
+    try { meId = db.getCurrentUser()?.id || ''; } catch { /* none */ }
+    // Anything touched shortly before the server answered is kept (it may still be on its way)
+    const cutoff = (Date.parse(json.at) || Date.now()) - 10 * 60 * 1000;
+
+    let removed = 0;
+    applyingRemote++;
+    try {
+      for (const store of Object.keys(json.stores)) {
+        if (APPEND_ONLY_STORES.has(store)) continue;
+        const cloud = new Set<string>(Array.isArray(json.stores[store]) ? json.stores[store] : []);
+        const items = db.getRawStore(store);
+        if (!Array.isArray(items) || items.length === 0) continue;
+        // Safety: an empty cloud list for a store that has many records here looks like a server
+        // problem, not a real "everything deleted" — leave it alone.
+        if (cloud.size === 0 && items.length > 20) continue;
+        const keep = pending.get(store);
+        const remove: string[] = [];
+        items.forEach((it: any) => {
+          const id = resolveRecordId(store, it);
+          if (!id || cloud.has(id) || keep?.has(id)) return;
+          if (store === 'fmcg_profiles' && id === meId) return;
+          const touched = Date.parse(String(it?.updated_at || it?.created_at || '')) || 0;
+          if (touched > cutoff) return;
+          remove.push(id);
+        });
+        if (remove.length > 0) {
+          db.applyCloudRecords(store, [], remove);
+          removed += remove.length;
+        }
+      }
+    } finally {
+      applyingRemote--;
+    }
+    await setIdbItem(reconcileKey(biz), new Date().toISOString()).catch(() => {});
+    if (removed > 0) {
+      rebuildAllKnown();
+      if (onDataChanged) onDataChanged();
+    }
+    return removed;
+  } catch {
+    return 0;
+  } finally {
+    reconciling = false;
+  }
+}
+
+/**
+ * "Reload all data from cloud": saves pending changes first, then reloads the page;
+ * on start the device drops its local copy and loads everything fresh.
+ */
+export async function requestFullCloudReload(): Promise<{ ok: boolean; message: string }> {
+  if (outbox.size > 0) {
+    const saved = await flushOutbox().catch(() => false);
+    if (!saved || outbox.size > 0) {
+      return { ok: false, message: 'Some changes are not saved to the cloud yet. Please check the internet and try again.' };
+    }
+  }
+  const biz = activeBusinessId || db.getActiveBusinessCompanyId();
+  await setIdbItem(epochKey(biz), '').catch(() => {});
+  if (typeof window !== 'undefined') window.location.reload();
+  return { ok: true, message: 'Reloading…' };
+}
+
 export async function startCloudSession(options: {
   businessId: string;
   sessionBusinessId: string | null;
@@ -722,6 +857,7 @@ export async function startCloudSession(options: {
 }): Promise<boolean> {
   const token = ++startToken;
   ready = false;
+  sessionRetailerId = options.retailerId || null;
   activeBusinessId = options.businessId;
   sessionBusinessId = options.sessionBusinessId;
   onDataChanged = options.onDataChanged;
@@ -767,6 +903,16 @@ export async function startCloudSession(options: {
     // Who is using this device decides how much data it keeps (retailer: own shop only,
     // everyone else: full company). When that changes (e.g. a retailer logs out and a
     // salesman logs in on the same phone), reload everything fresh from the cloud.
+    // New data version (or manual full reload): drop the device's local copy, load fresh
+    let purgedForReload = false;
+    if ((await getIdbItem<string>(epochKey(options.businessId))) !== DATA_EPOCH) {
+      purgeLocalCopy();
+      await setIdbItem(CHECKPOINT_PREFIX + options.businessId, '').catch(() => {});
+      await setIdbItem(`fmcg_normalized_backfill_v2_${options.businessId}`, '').catch(() => {});
+      await setIdbItem(epochKey(options.businessId), DATA_EPOCH);
+      purgedForReload = true;
+    }
+
     const scopeTag = options.retailerId ? `retailer:${options.retailerId}` : 'full';
     const scopeKey = `fmcg_data_scope_v1_${options.businessId}`;
     const scopeChanged = (await getIdbItem<string>(scopeKey)) !== scopeTag;
@@ -786,7 +932,8 @@ export async function startCloudSession(options: {
     const cpKey = CHECKPOINT_PREFIX + options.businessId;
     const cp = await getIdbItem<string>(cpKey);
     // One-time upload of device-only records: only on a truly new device, not after a scope reload
-    const firstLoad = !cp && !scopeChanged;
+    // (never after a purge: the device has nothing of its own to upload)
+    const firstLoad = !cp && !scopeChanged && !purgedForReload;
     const since = cp ? new Date(new Date(cp).getTime() - POLL_OVERLAP_MS).toISOString() : null;
     const recordsPromise = fetchCloudRecords(options.businessId, since).then(
       value => ({ value, error: null as any }),
@@ -855,9 +1002,18 @@ export async function startCloudSession(options: {
     if (onDataChanged) onDataChanged();
     if (outbox.size > 0) void flushOutbox();
 
+    // Background check against the cloud (after a full reload it is not needed today)
+    if (purgedForReload) {
+      await setIdbItem(reconcileKey(options.businessId), new Date().toISOString()).catch(() => {});
+    } else {
+      // Right after loading, in the background (the app is already usable)
+      setTimeout(() => { if (token === startToken) void reconcileWithCloud(); }, 0);
+    }
+
     pollTimer = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       void pullCloudChanges();
+      void reconcileWithCloud();
     }, POLL_INTERVAL_MS);
     return true;
   } catch (err: any) {

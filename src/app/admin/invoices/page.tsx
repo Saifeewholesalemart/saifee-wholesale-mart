@@ -217,10 +217,13 @@ function AdminInvoicesContent() {
       (selectedInvoice.order_ref_id && (o.id === selectedInvoice.order_ref_id || o.order_number === selectedInvoice.order_ref_id))
     );
 
-    const processItem = (it: any, idx: number) => {
+    const processItem = (it: any, idx: number, fromInvoice = false) => {
       const prod = products.find(p => p.id === it.product_id);
       const unitsPerPack = it.units_per_trading_unit || it.units_per_box_carton || prod?.units_per_box_carton || 1;
-      const baseQty = it.fulfilled_qty || it.confirmed_qty || it.packed_qty || it.ordered_qty || it.base_qty || it.quantity || 0;
+      // A bill line's quantity is what was billed; never the ordered quantity
+      const baseQty = fromInvoice
+        ? (Number(it.base_qty ?? it.quantity) || 0)
+        : (it.fulfilled_qty || it.confirmed_qty || it.packed_qty || it.ordered_qty || it.base_qty || it.quantity || 0);
       if (baseQty <= 0) return;
 
       const cartonRate = it.manual_billing_rate || it.carton_rate || it.rate || it.order_time_rate || it.base_price || prod?.selling_price || 0;
@@ -293,27 +296,19 @@ function AdminInvoicesContent() {
       }
     };
 
-    if (matchingOrders.length > 0) {
+    // The bill's own lines are the truth: only what was actually billed.
+    // (Order lines also hold items that went to backorder, so they must not be shown here.)
+    // Order lines are used only for very old bills that were saved without their own lines.
+    if (selectedInvoice.items && selectedInvoice.items.length > 0) {
+      selectedInvoice.items.forEach((it, idx) => {
+        processItem(it, idx, true);
+      });
+    } else if (matchingOrders.length > 0) {
       matchingOrders.forEach(ord => {
         (ord.items || []).forEach((it, idx) => {
           processItem(it, idx);
         });
       });
-    }
-
-    if (selectedInvoice.items && selectedInvoice.items.length > 0) {
-      if (matchingOrders.length === 0) {
-        selectedInvoice.items.forEach((it, idx) => {
-          processItem(it, idx);
-        });
-      } else {
-        selectedInvoice.items.forEach((it, idx) => {
-          const itemKey = `${it.product_id}_${it.carton_rate ?? it.rate ?? 0}`;
-          if (!aggregatedItemsMap.has(itemKey)) {
-            processItem(it, idx);
-          }
-        });
-      }
     }
 
     return Array.from(aggregatedItemsMap.values());
