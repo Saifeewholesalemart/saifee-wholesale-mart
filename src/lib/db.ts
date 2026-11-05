@@ -7130,7 +7130,20 @@ class FMCGDatabase {
     const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
     const all = this.getStore<Order>('fmcg_orders', SEED_ORDERS);
     const otherBiz = all.filter(o => (o.business_id || 'biz-saifee') !== activeBiz);
-    const tagged = orders.map(o => ({ ...o, business_id: o.business_id || activeBiz }));
+    // Keep the product name on every order line, so the order still shows the right
+    // name even if that product is later removed or re-imported with a new ID.
+    let prodMap: Map<string, Product> | null = null;
+    const tagged = orders.map(o => {
+      const items = o.items || [];
+      if (!items.some(it => it && !it.product_name)) return { ...o, business_id: o.business_id || activeBiz };
+      if (!prodMap) prodMap = new Map(this.getStore<Product>('fmcg_products', []).map(p => [p.id, p]));
+      const named = items.map(it => {
+        if (!it || it.product_name) return it;
+        const p = prodMap!.get(it.product_id);
+        return p?.name ? { ...it, product_name: p.name, mrp: it.mrp ?? p.mrp } : it;
+      });
+      return { ...o, items: named, business_id: o.business_id || activeBiz };
+    });
     this.saveStore('fmcg_orders', [...otherBiz, ...tagged]);
   }
 

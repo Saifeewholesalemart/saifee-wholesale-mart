@@ -71,7 +71,7 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
         const gst = (product?.gst_percent !== undefined && product?.gst_percent !== null) ? Number(product.gst_percent) : (Number(it.gst_percent) || 0);
         const amt = flowBillLineAmounts(qty, units, rate, gst, intra);
         const purchase = purchaseRateOf(product, batches);
-        return { id: it.id, productId: it.product_id, order: o, name: productLabel(product), qty, baseRate, rate, raw, amt, purchase, margin: marginPercent(rate, purchase) };
+        return { id: it.id, productId: it.product_id, order: o, name: productLabel(product, it.product_name || 'Item'), qty, baseRate, rate, raw, amt, purchase, margin: marginPercent(rate, purchase) };
       }));
   }, [current, products, batches, rates, intra]);
 
@@ -80,7 +80,7 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
     return current.orders.flatMap(o => (o.items || [])
       .map(it => ({ it, short: flowRemainingQty(it) - (Number(it.flow_packed_qty) || 0) }))
       .filter(x => x.short > 0)
-      .map(x => `${productLabel(products.find(p => p.id === x.it.product_id))} – ${x.short} pcs`));
+      .map(x => `${productLabel(products.find(p => p.id === x.it.product_id), x.it.product_name || 'Item')} – ${x.short} pcs`));
   }, [current, products]);
 
   const totals = lines.reduce(

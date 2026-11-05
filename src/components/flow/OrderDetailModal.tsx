@@ -199,7 +199,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
   const startEditOrder = () => {
     setLinesState((order.items || []).filter(it => flowRemainingQty(it) > 0).map(it => {
       const p = products.find(x => x.id === it.product_id);
-      return { key: it.id, refId: it.id, productId: it.product_id, name: productLabel(p), qty: String(flowRemainingQty(it)), rate: String(flowItemRate(it, p)) };
+      return { key: it.id, refId: it.id, productId: it.product_id, name: productLabel(p, it.product_name || 'Item'), qty: String(flowRemainingQty(it)), rate: String(flowItemRate(it, p)) };
     }));
     setError(''); setNotice(''); setMode('edit-order');
   };

@@ -381,7 +381,7 @@ export default function OrdersHub() {
                     </td>
                     <td className="px-5 py-3 text-slate-700">
                       {(o.items || []).filter(it => flowRemainingQty(it) > 0).map(it => (
-                        <div key={it.id}>{productLabel(products.find(p => p.id === it.product_id))}: <strong>{flowRemainingQty(it)} pcs</strong></div>
+                        <div key={it.id}>{productLabel(products.find(p => p.id === it.product_id), it.product_name || 'Item')}: <strong>{flowRemainingQty(it)} pcs</strong></div>
                       ))}
                     </td>
                     <td className="px-5 py-3 text-right">

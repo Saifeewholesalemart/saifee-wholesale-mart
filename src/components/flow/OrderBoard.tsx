@@ -157,7 +157,7 @@ export default function OrderBoard() {
                     <td className="px-5 py-3 text-slate-700">
                       {(o.items || []).filter(it => flowRemainingQty(it) > 0).map(it => (
                         <div key={it.id}>
-                          {productLabel(products.find(p => p.id === it.product_id))}: <strong>{flowRemainingQty(it)} pcs</strong>
+                          {productLabel(products.find(p => p.id === it.product_id), it.product_name || 'Item')}: <strong>{flowRemainingQty(it)} pcs</strong>
                         </div>
                       ))}
                     </td>
