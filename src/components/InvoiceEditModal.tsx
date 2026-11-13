@@ -54,9 +54,27 @@ export default function InvoiceEditModal({
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [lineItems, setLineItems] = useState<EditableLineItem[]>([]);
   const [reason, setReason] = useState('');
-  const [selectedAddProductId, setSelectedAddProductId] = useState('');
+  const [addQuery, setAddQuery] = useState('');
+  const [addListOpen, setAddListOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Fast lookups: the catalog has thousands of products
+  const productById = useMemo(() => new Map(products.map(p => [p.id, p])), [products]);
+  const activeProducts = useMemo(() => products.filter(p => p.active !== false), [products]);
+  const addMatches = useMemo(() => {
+    const words = addQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return [];
+    const out: Product[] = [];
+    for (const p of activeProducts) {
+      const hay = `${p.name || ''} ${p.sku || ''} ${p.barcode || ''} ${p.product_code || ''} ${p.brand || ''}`.toLowerCase();
+      if (words.every(w => hay.includes(w))) {
+        out.push(p);
+        if (out.length >= 30) break;
+      }
+    }
+    return out;
+  }, [addQuery, activeProducts]);
 
   // Find retailer
   const retailer = useMemo(() => {
@@ -75,7 +93,7 @@ export default function InvoiceEditModal({
 
       // Map invoice items to editable state
       const initialItems: EditableLineItem[] = (invoice.items || []).map((item, idx) => {
-        const prod = products.find(p => p.id === item.product_id);
+        const prod = productById.get(item.product_id);
         const unitsPerPack = item.units_per_trading_unit || item.units_per_box_carton || prod?.units_per_box_carton || 1;
         const cQty = item.carton_qty !== undefined ? item.carton_qty : Math.floor((item.base_qty ?? item.quantity) / unitsPerPack);
         const lQty = item.loose_qty !== undefined ? item.loose_qty : ((item.base_qty ?? item.quantity) % unitsPerPack);
@@ -111,8 +129,13 @@ export default function InvoiceEditModal({
       });
 
       setLineItems(initialItems);
+      setAddQuery('');
+      setAddListOpen(false);
     }
-  }, [invoice, isOpen, products, retailer]);
+    // Only when the editor opens (or another invoice is opened); a background
+    // product refresh must not wipe the edits being made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoice?.id, isOpen, retailer?.id]);
 
   // Close on ESC
   useEffect(() => {
@@ -213,19 +236,19 @@ export default function InvoiceEditModal({
   if (!isOpen || !invoice || !retailer) return null;
 
   // Add new product line item
-  const handleAddProduct = () => {
-    if (!selectedAddProductId) return;
-    const prod = products.find(p => p.id === selectedAddProductId);
+  const handleAddProduct = (productId: string) => {
+    const prod = productById.get(productId);
     if (!prod) return;
+    setAddQuery('');
+    setAddListOpen(false);
 
     // Check if already in list
     const existingIndex = lineItems.findIndex(i => i.product_id === prod.id);
     if (existingIndex !== -1) {
       // Increase carton qty of existing
       const updated = [...lineItems];
-      updated[existingIndex].carton_qty += 1;
+      updated[existingIndex] = { ...updated[existingIndex], carton_qty: updated[existingIndex].carton_qty + 1 };
       setLineItems(updated);
-      setSelectedAddProductId('');
       return;
     }
 
@@ -254,7 +277,6 @@ export default function InvoiceEditModal({
     };
 
     setLineItems([...lineItems, newItem]);
-    setSelectedAddProductId('');
   };
 
   const handleRemoveItem = (tempId: string) => {
@@ -475,27 +497,45 @@ export default function InvoiceEditModal({
 
               {/* Add Product Dropdown */}
               <div className="flex items-center gap-2">
-                <select
-                  value={selectedAddProductId}
-                  onChange={(e) => setSelectedAddProductId(e.target.value)}
-                  className="text-xs bg-white border border-slate-200 rounded-lg px-3 py-2 font-medium text-slate-700 max-w-xs focus:outline-hidden focus:ring-2 focus:ring-indigo-500/30"
-                >
-                  <option value="">-- Add Product to Invoice --</option>
-                  {products.filter(p => p.active !== false).map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} - ₹{p.selling_price}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={handleAddProduct}
-                  disabled={!selectedAddProductId}
-                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add</span>
-                </button>
+                <div className="relative w-full sm:w-80">
+                  <div className="flex items-center gap-2 bg-white border border-slate-300 rounded-lg px-3 focus-within:ring-2 focus-within:ring-indigo-500/30">
+                    <Plus className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <input
+                      type="text"
+                      value={addQuery}
+                      onChange={(e) => { setAddQuery(e.target.value); setAddListOpen(true); }}
+                      onFocus={() => setAddListOpen(true)}
+                      onBlur={() => setTimeout(() => setAddListOpen(false), 150)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && addMatches[0]) { e.preventDefault(); handleAddProduct(addMatches[0].id); }
+                        if (e.key === 'Escape') { e.stopPropagation(); setAddListOpen(false); }
+                      }}
+                      placeholder="Add product: type name, code or barcode"
+                      aria-label="Search product to add"
+                      className="w-full py-2 text-sm bg-transparent text-slate-800 placeholder:text-slate-500 focus:outline-hidden"
+                    />
+                  </div>
+                  {addListOpen && addQuery.trim() && (
+                    <div className="absolute right-0 left-0 mt-1 z-30 bg-white border border-slate-200 rounded-lg shadow-lg max-h-72 overflow-y-auto">
+                      {addMatches.length === 0 ? (
+                        <div className="px-3 py-3 text-sm text-slate-600">No product found.</div>
+                      ) : addMatches.map(p => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => handleAddProduct(p.id)}
+                          className="w-full text-left px-3 py-2 hover:bg-indigo-50 border-b border-slate-100 last:border-b-0"
+                        >
+                          <div className="text-sm font-semibold text-slate-900">{p.name}</div>
+                          <div className="text-xs text-slate-600">
+                            Rate ₹{Number(p.selling_price) || 0}{p.mrp ? ` · MRP ₹${p.mrp}` : ''}{p.units_per_box_carton && p.units_per_box_carton > 1 ? ` · ${p.units_per_box_carton} pcs/carton` : ''}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -518,7 +558,7 @@ export default function InvoiceEditModal({
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {computedSummary.calculatedItems.map((item) => {
-                      const prod = products.find(p => p.id === item.product_id);
+                      const prod = productById.get(item.product_id);
                       return (
                         <tr key={item.tempId} className="hover:bg-indigo-50/20 transition-colors">
                           {/* Product Info */}
