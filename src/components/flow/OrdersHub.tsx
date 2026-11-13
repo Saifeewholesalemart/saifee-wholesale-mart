@@ -10,7 +10,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useDb } from '@/context/DbContext';
 import type { Invoice, Order } from '@/lib/db';
-import { computeFreeStockByProduct, flowOrderStage, flowRemainingQty, flowShopKey, flowChannelLabel, isWalkInRetailerId, FlowStage } from '@/lib/db';
+import { computeFreeStockByProduct, flowOrderStage, flowRemainingQty, flowShortQty, flowShopKey, flowChannelLabel, isWalkInRetailerId, FlowStage } from '@/lib/db';
 import PackerPanel from './PackerPanel';
 import BillerPanel from './BillerPanel';
 import OrderDetailModal, { StageBadge } from './OrderDetailModal';
@@ -98,9 +98,12 @@ export default function OrdersHub() {
   const orderTime = (o: Order) => new Date(o.order_date || o.created_at || 0).getTime();
   const toPack = byStage('to_pack');
   const ready = byStage('ready_to_bill');
-  const backorder = sortByOrderSort(byStage('backorder'), sort, {
+  // Backorder = orders waiting for stock, and also the short pieces of an order whose
+  // packed part is still waiting for its bill.
+  const hasShort = (o: Order) => (o.items || []).some(it => flowShortQty(o, it) > 0);
+  const backorder = sortByOrderSort(filtered.filter(o => stageOf.get(o.id) === 'backorder' || (stageOf.get(o.id) === 'ready_to_bill' && hasShort(o))), sort, {
     time: orderTime,
-    lines: o => (o.items || []).filter(it => flowRemainingQty(it) > 0).length,
+    lines: o => (o.items || []).filter(it => flowShortQty(o, it) > 0).length,
     amount: o => Number(o.total_amount) || 0
   });
 
@@ -355,7 +358,7 @@ export default function OrdersHub() {
         <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
           <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap justify-between gap-2">
             <h2 className="text-base font-bold text-slate-900">Backorder</h2>
-            <span className="text-sm text-slate-600">When stock arrives through a purchase, these orders move back to To Pack automatically.</span>
+            <span className="text-sm text-slate-600">These pieces come back to To Pack when stock arrives, or together with the shop's next order.</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-sm border-collapse">
@@ -378,10 +381,11 @@ export default function OrdersHub() {
                     <td className="px-5 py-3">
                       <div className="font-semibold text-slate-900">{customerName(o, retailers)}</div>
                       <div className="text-xs text-slate-600">Since {formatWhen(o.flow_pack_attempted_at || o.dispatched_at || o.order_date)}</div>
+                      {o.flow_ready_to_bill && <div className="text-xs font-semibold text-indigo-800">Packed part is waiting for the bill</div>}
                     </td>
                     <td className="px-5 py-3 text-slate-700">
-                      {(o.items || []).filter(it => flowRemainingQty(it) > 0).map(it => (
-                        <div key={it.id}>{productLabel(products.find(p => p.id === it.product_id), it.product_name || 'Item')}: <strong>{flowRemainingQty(it)} pcs</strong></div>
+                      {(o.items || []).filter(it => flowShortQty(o, it) > 0).map(it => (
+                        <div key={it.id}>{productLabel(products.find(p => p.id === it.product_id), it.product_name || 'Item')}: <strong>{flowShortQty(o, it)} pcs</strong></div>
                       ))}
                     </td>
                     <td className="px-5 py-3 text-right">

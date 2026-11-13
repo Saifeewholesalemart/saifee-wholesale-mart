@@ -11,7 +11,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import type { Order } from '@/lib/db';
-import { flowOrderStage, flowRemainingQty, flowOrderedQty, flowShopKey, flowChannelLabel, splitBaseQuantity } from '@/lib/db';
+import { flowOrderStage, flowShortQty, flowOrderedQty, flowShopKey, flowChannelLabel, splitBaseQuantity } from '@/lib/db';
 import { productLabel, customerName, formatWhen, sortByOrderSort, OrderSort } from './flowUi';
 import { CheckCircle2, ChevronLeft, PackageOpen } from 'lucide-react';
 import { useUrlStep } from '@/lib/useUrlStep';
@@ -67,17 +67,27 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
         const k = flowShopKey(o);
         map.set(k, [...(map.get(k) || []), o]);
       });
+    // Short pieces left on the same shop's earlier order (packed part is waiting for the bill)
+    // are shown together with the new order, so they can be packed in the same go.
+    orders
+      .filter(o => o.status !== 'Cancelled' && o.flow_ready_to_bill && (o.items || []).some(it => flowShortQty(o, it) > 0))
+      .forEach(o => {
+        const k = flowShopKey(o);
+        const g = map.get(k);
+        if (g && !g.some(x => x.id === o.id)) map.set(k, [o, ...g]);
+      });
     const list = Array.from(map.entries()).map(([key, list]) => ({ key, orders: list }));
     return sortByOrderSort(list, sort, {
       time: g => new Date(g.orders[0].order_date || g.orders[0].created_at || 0).getTime(),
-      lines: g => g.orders.reduce((s, o) => s + (o.items || []).filter(it => flowRemainingQty(it) > 0).length, 0),
+      lines: g => g.orders.reduce((s, o) => s + (o.items || []).filter(it => flowShortQty(o, it) > 0).length, 0),
       amount: g => g.orders.reduce((s, o) => s + (Number(o.total_amount) || 0), 0)
     });
   }, [orders, freeAll, filter, sort]);
 
   const group = openKey ? groups.find(g => g.key === openKey) || null : null;
   const groupOrders = group?.orders || [];
-  const groupIds = useMemo(() => new Set(groupOrders.map(o => o.id)), [groupOrders]);
+  // Orders already waiting for the bill keep their packed pieces reserved
+  const groupIds = useMemo(() => new Set(groupOrders.filter(o => !o.flow_ready_to_bill).map(o => o.id)), [groupOrders]);
   const freeForGroup = useMemo(() => freeStockExcluding(batches, orders, groupIds), [batches, orders, groupIds]);
 
   // One section per order, item lines inside. Stock is shared across the whole shop.
@@ -86,10 +96,10 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
     return groupOrders.map(o => ({
       order: o,
       lines: (o.items || [])
-        .filter(it => flowRemainingQty(it) > 0)
+        .filter(it => flowShortQty(o, it) > 0)
         .map(it => {
           const product = products.find(p => p.id === it.product_id);
-          const remaining = flowRemainingQty(it);
+          const remaining = flowShortQty(o, it);
           const stock = Math.max(0, (freeForGroup[it.product_id] || 0) - (used[it.product_id] || 0));
           const raw = qty[it.id] ?? '';
           const n = raw === '' ? null : Number(raw);
@@ -201,8 +211,9 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
           </div>
         )}
         {groups.map(g => {
-          const items = g.orders.flatMap(o => (o.items || []).filter(it => flowRemainingQty(it) > 0));
-          const pcs = items.reduce((s, it) => s + flowRemainingQty(it), 0);
+          const items = g.orders.flatMap(o => (o.items || []).filter(it => flowShortQty(o, it) > 0).map(it => ({ o, it })));
+          const pcs = items.reduce((s, x) => s + flowShortQty(x.o, x.it), 0);
+          const carried = g.orders.some(o => o.flow_ready_to_bill);
           const backorderBack = g.orders.some(o => !!o.flow_pack_attempted_at || (o.items || []).some(it => (it.fulfilled_qty ?? 0) > 0));
           const channels = Array.from(new Set(g.orders.map(o => flowChannelLabel(o))));
           return (
@@ -217,8 +228,11 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
                 <span>{items.length} item{items.length === 1 ? '' : 's'} · {pcs} pcs</span>
                 <span>· {channels.join(', ')}</span>
                 <span>· since {formatWhen(g.orders[0].order_date || g.orders[0].created_at)}</span>
-                {backorderBack && (
+                {backorderBack && !carried && (
                   <span className="text-xs font-semibold text-amber-900 bg-amber-100 rounded px-2 py-0.5">Backorder — stock arrived</span>
+                )}
+                {carried && (
+                  <span className="text-xs font-semibold text-amber-900 bg-amber-100 rounded px-2 py-0.5">Includes backorder from earlier order</span>
                 )}
               </div>
               {expanded[g.key] && (
@@ -236,12 +250,13 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
                         )}
                         <span className="font-semibold text-indigo-800 bg-indigo-50 rounded px-1.5 py-0.5">{flowChannelLabel(o)}</span>
                         <span>{formatWhen(o.order_date || o.created_at)}</span>
+                        {o.flow_ready_to_bill && <span className="font-semibold text-amber-900 bg-amber-100 rounded px-1.5 py-0.5">Backorder</span>}
                       </div>
                       <ul className="text-sm text-slate-800 flex flex-col gap-0.5 pl-1">
-                        {(o.items || []).filter(it => flowRemainingQty(it) > 0).map(it => (
+                        {(o.items || []).filter(it => flowShortQty(o, it) > 0).map(it => (
                           <li key={it.id} className="flex justify-between gap-3">
                             <span className="min-w-0">{productLabel(products.find(p => p.id === it.product_id), (it as any).product_name || 'Item')}</span>
-                            <strong className="whitespace-nowrap">{flowRemainingQty(it)} pcs</strong>
+                            <strong className="whitespace-nowrap">{flowShortQty(o, it)} pcs</strong>
                           </li>
                         ))}
                       </ul>
@@ -299,6 +314,7 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
       <span className="font-semibold text-indigo-800 bg-indigo-50 rounded px-1.5 py-0.5">{flowChannelLabel(o)}</span>
       {o.created_by && <span>by {o.created_by}</span>}
       <span>· {formatWhen(o.order_date || o.created_at)}</span>
+      {o.flow_ready_to_bill && <span className="font-semibold text-amber-900 bg-amber-100 rounded px-1.5 py-0.5">Backorder from earlier packing</span>}
     </div>
   );
 

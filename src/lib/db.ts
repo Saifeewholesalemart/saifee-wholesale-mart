@@ -2741,7 +2741,9 @@ class FMCGDatabase {
     const order = orders.find(o => o.id === orderId);
     if (!order) throw new Error('Order not found.');
     if (order.status === 'Cancelled') throw new Error('This order is cancelled.');
-    if (order.flow_ready_to_bill) throw new Error('This order is already packed and waiting for billing.');
+    // An order already waiting for the bill can get more pieces added (short items packed later
+    // together with the shop's next order). The pieces packed earlier stay as they are.
+    const topUp = !!order.flow_ready_to_bill;
 
     const products = this.getProducts(activeBiz);
     const freeStock = computeFreeStockByProduct(this.getBatches(activeBiz), orders, order.id);
@@ -2755,28 +2757,38 @@ class FMCGDatabase {
         item.flow_packed_qty = 0;
         continue;
       }
+      const already = topUp ? Math.min(remaining, Number(item.flow_packed_qty) || 0) : 0;
       const raw = packedQty[item.id];
       const q = raw === undefined || raw === null || (raw as any) === '' ? 0 : Number(raw);
-      const name = products.find(p => p.id === item.product_id)?.name || 'Item';
+      const name = products.find(p => p.id === item.product_id)?.name || (item as any).product_name || 'Item';
       if (!Number.isInteger(q) || q < 0) throw new Error(`${name}: enter a whole number.`);
-      if (q > remaining) throw new Error(`${name}: only ${remaining} ordered.`);
-      const free = (freeStock[item.product_id] || 0) - (usedInThisOrder[item.product_id] || 0);
+      if (q > remaining - already) throw new Error(`${name}: only ${remaining - already} left to pack.`);
+      const free = (freeStock[item.product_id] || 0) - (usedInThisOrder[item.product_id] || 0) - already;
       if (q > free) throw new Error(`${name}: only ${Math.max(0, free)} in stock.`);
-      usedInThisOrder[item.product_id] = (usedInThisOrder[item.product_id] || 0) + q;
+      usedInThisOrder[item.product_id] = (usedInThisOrder[item.product_id] || 0) + already + q;
 
-      item.flow_packed_qty = q;
-      item.packed_qty = q;
-      item.confirmed_qty = q;
+      const total = already + q;
+      item.flow_packed_qty = total;
+      item.packed_qty = total;
+      item.confirmed_qty = total;
       item.batch_allocations = []; // billing picks batches FIFO
-      if (q < remaining) {
+      if (total < remaining) {
         item.backordered = true;
         item.pending_reason = 'Stock Unavailable';
       }
       packedPieces += q;
-      backorderPieces += remaining - q;
+      backorderPieces += remaining - total;
     }
 
     const now = new Date().toISOString();
+    if (topUp) {
+      // Nothing changes on the order except the extra packed pieces
+      if (packedPieces > 0) {
+        order.updated_at = now;
+        this.saveOrders(orders, activeBiz);
+      }
+      return { order, packedPieces, backorderPieces };
+    }
     order.flow_pack_attempted_at = now;
     order.flow_packed_by = user?.name || this.getCurrentUser()?.name || 'Packer';
     if (packedPieces > 0) {
@@ -2886,7 +2898,7 @@ class FMCGDatabase {
       if ((b.quantity || 0) > 0) free[b.product_id] = (free[b.product_id] || 0) + b.quantity;
     });
     orders.forEach(o => {
-      if (ids.has(o.id) || !o.flow_ready_to_bill) return;
+      if (!o.flow_ready_to_bill) return;
       (o.items || []).forEach(it => {
         const q = Number(it.flow_packed_qty) || 0;
         if (q > 0) free[it.product_id] = (free[it.product_id] || 0) - q;
@@ -2898,7 +2910,6 @@ class FMCGDatabase {
       const o = orders.find(x => x.id === e.orderId);
       if (!o) throw new Error('Order not found.');
       if (o.status === 'Cancelled') throw new Error(`${o.order_number} is cancelled.`);
-      if (o.flow_ready_to_bill) throw new Error(`${o.order_number} is already packed and waiting for billing.`);
       (o.items || []).forEach(it => {
         const q = Number(e.packedQty[it.id]) || 0;
         if (q > 0) want[it.product_id] = (want[it.product_id] || 0) + q;
@@ -15365,6 +15376,17 @@ export function flowRemainingQty(item: Partial<OrderItem>): number {
   const billed = Number(item.fulfilled_qty ?? item.dispatched_qty ?? 0) || 0;
   const cancelled = Number(item.cancelled_qty ?? 0) || 0;
   return Math.max(0, flowOrderedQty(item) - billed - cancelled);
+}
+
+/**
+ * Pieces of a line that are still short: ordered - billed - closed, and (while the order
+ * waits for its bill) minus what is already packed. These are the "backorder" pieces.
+ */
+export function flowShortQty(order: Partial<Order>, item: Partial<OrderItem>): number {
+  if (order.status === 'Cancelled') return 0;
+  const remaining = flowRemainingQty(item);
+  const packed = order.flow_ready_to_bill ? (Number(item.flow_packed_qty) || 0) : 0;
+  return Math.max(0, remaining - packed);
 }
 
 /**
