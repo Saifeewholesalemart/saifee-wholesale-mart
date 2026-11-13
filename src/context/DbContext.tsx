@@ -1,6 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { computeRetailerBalances } from '@/lib/retailerBalance';
 import { 
   db, Profile, Retailer, Product, Inventory, InventoryBatch, StockLedgerEntry, 
   Order, OrderItem, OrderChannel, Fulfilment, Invoice, InvoiceItem, Purchase, Payment, SalesReturn, Company, Supplier,
@@ -754,7 +755,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   const [profiles, setProfiles] = useState<Profile[]>(() => db.getInitialProfiles());
   const [companies, setCompanies] = useState<Company[]>(() => db.getInitialCompanies());
   const [suppliers, setSuppliers] = useState<Supplier[]>(() => db.getInitialSuppliers());
-  const [retailers, setRetailers] = useState<Retailer[]>(() => db.getInitialRetailers());
+  const [retailersRaw, setRetailers] = useState<Retailer[]>(() => db.getInitialRetailers());
   const [products, setProducts] = useState<Product[]>(() => db.getInitialProducts());
   const [categories, setCategories] = useState<Category[]>(() => db.getInitialCategories());
   const [productCategories, setProductCategoriesState] = useState<ProductCategory[]>(() => db.getInitialProductCategories());
@@ -774,6 +775,16 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   const [vyaparImports, setVyaparImports] = useState<VyaparImportBatch[]>(() => db.getInitialVyaparImports());
   const [cashFlowTransactions, setCashFlowTransactions] = useState<CashFlowTransaction[]>(() => db.getCashFlowTransactions());
   const [companyOpeningBalance, setCompanyOpeningBalance] = useState<CompanyOpeningBalance>(() => db.getCompanyOpeningBalance());
+
+  // Shop balance always comes from its bills, payments and credit notes,
+  // never from a stored number that another device may have overwritten.
+  const retailers = useMemo<Retailer[]>(() => {
+    const bal = computeRetailerBalances(retailersRaw, invoices, payments, salesReturns, products);
+    return retailersRaw.map(r => {
+      const b = bal.get(r.id) ?? 0;
+      return r.outstanding === b ? r : { ...r, outstanding: b, outstanding_balance: b, current_balance: b } as Retailer;
+    });
+  }, [retailersRaw, invoices, payments, salesReturns, products]);
 
   // persistent cart states
   const [retailerCart, setRetailerCart] = useState<{ [prodId: string]: number }>({});

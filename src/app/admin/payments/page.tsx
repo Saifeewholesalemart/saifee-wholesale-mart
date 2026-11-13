@@ -3,6 +3,7 @@
 import { getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect, useMemo, Suspense } from 'react';
 import { useDb } from '@/context/DbContext';
+import { invoiceCounts, paymentCounts, returnCounts, retailerOpeningBalance } from '@/lib/retailerBalance';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { 
   Printer, DollarSign, Plus, CheckCircle, CreditCard, ChevronRight,
@@ -172,7 +173,7 @@ function AdminPaymentsContent() {
     const allRows: Omit<LedgerRow, 'runningBal'>[] = [];
 
     // 1. Invoices (Debit)
-    const retInvoices = invoices.filter(i => i.retailer_id === selectedRetailerId);
+    const retInvoices = invoices.filter(i => i.retailer_id === selectedRetailerId && invoiceCounts(i));
     retInvoices.forEach(inv => {
       allRows.push({
         id: inv.id,
@@ -187,7 +188,7 @@ function AdminPaymentsContent() {
     });
 
     // 2. Payments (Credit)
-    const retPayments = payments.filter(p => p.retailer_id === selectedRetailerId);
+    const retPayments = payments.filter(p => p.retailer_id === selectedRetailerId && paymentCounts(p));
     retPayments.forEach(pay => {
       allRows.push({
         id: pay.id,
@@ -205,6 +206,7 @@ function AdminPaymentsContent() {
 
     // 3. Sales Returns / Credit Notes (Credit)
     const retSalesReturns = salesReturns.filter(sr => {
+      if (!returnCounts(sr)) return false;
       const rId = sr.retailer_id || invoices.find(i => i.id === sr.invoice_id)?.retailer_id;
       return rId === selectedRetailerId;
     });
@@ -243,13 +245,12 @@ function AdminPaymentsContent() {
     // Sort chronologically ascending
     const sortedAll = allRows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    // Compute Historical Seed Opening Balance
+    // Opening balance = the shop's own opening balance (0 for a new shop)
+    // + everything before the start date. Never guessed from a stored total.
     const allTimeDebits = sortedAll.reduce((s, r) => s + r.debit, 0);
     const allTimeCredits = sortedAll.reduce((s, r) => s + r.credit, 0);
-    const allTimeNetTx = allTimeDebits - allTimeCredits;
-    const currentOutstanding = ret ? (ret.outstanding ?? ret.outstanding_balance ?? ret.current_balance ?? 0) : 0;
-    const initialSeedOpening = currentOutstanding - allTimeNetTx;
-    const allTimeClosingBalance = currentOutstanding;
+    const initialSeedOpening = retailerOpeningBalance(ret);
+    const allTimeClosingBalance = initialSeedOpening + allTimeDebits - allTimeCredits;
 
     // Filter boundary dates
     const startBound = new Date(dateRange.startDate + 'T00:00:00').getTime();

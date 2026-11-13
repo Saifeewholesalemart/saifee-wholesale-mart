@@ -8035,88 +8035,113 @@ class FMCGDatabase {
     this.saveInvoiceAuditLog(auditLog);
 
     // =========================================================================
-    // BIDIRECTIONAL SYNC: Invoice -> Respective Order(s)
-    // Propagate all quantity, rate, discount, and grand total changes to linked orders
+    // Invoice -> linked order(s): only the billed quantity changes.
+    // Lines that were not billed (backorder) stay on the order untouched.
+    // Fewer pieces billed = closed on the order (not sent back to backorder);
+    // more pieces billed = added to the order as ordered and billed.
     // =========================================================================
     try {
       const orders = this.getOrders();
-      let ordersUpdated = false;
+      const linked = orders.filter(order =>
+        order.id === oldInvoice.order_ref_id ||
+        order.order_number === oldInvoice.order_ref_id ||
+        order.invoice_id === invoiceId ||
+        oldInvoice.source_order_ids?.includes(order.id) ||
+        oldInvoice.source_order_numbers?.includes(order.order_number)
+      ).sort((a, b) => new Date(b.order_date || 0).getTime() - new Date(a.order_date || 0).getTime());
 
-      orders.forEach(order => {
-        const isDirectMatch = order.id === oldInvoice.order_ref_id || 
-                              order.order_number === oldInvoice.order_ref_id || 
-                              order.invoice_id === invoiceId;
-        const isSourceMatch = oldInvoice.source_order_ids?.includes(order.id) || 
-                              oldInvoice.source_order_numbers?.includes(order.order_number);
+      if (linked.length > 0) {
+        const qtyOf = (list: any[]) => {
+          const m: Record<string, number> = {};
+          (list || []).forEach(i => { m[i.product_id] = (m[i.product_id] || 0) + (Number(i.base_qty ?? i.quantity) || 0); });
+          return m;
+        };
+        const oldQty = qtyOf(oldInvoice.items || []);
+        const newQty = qtyOf(processedItems as any[]);
+        const pids = Array.from(new Set([...Object.keys(oldQty), ...Object.keys(newQty)]));
+        const nowIso = new Date().toISOString();
 
-        if (isDirectMatch || isSourceMatch) {
-          const updatedOrderItems: OrderItem[] = processedItems.map(pi => {
-            const existingOrderItem = order.items?.find(it => it.product_id === pi.product_id);
-            const prod = products.find(p => p.id === pi.product_id);
-            const gstPercent = (pi.gst_percent !== undefined && pi.gst_percent !== null)
-              ? Number(pi.gst_percent)
-              : ((prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : 0);
-            const gstAmount = (pi.cgst || 0) + (pi.sgst || 0) + (pi.igst || 0);
+        for (const pid of pids) {
+          let delta = (newQty[pid] || 0) - (oldQty[pid] || 0);
+          const pi = (processedItems as any[]).find(x => x.product_id === pid);
+          // Rate follows the bill
+          if (pi) {
+            linked.forEach(o => (o.items || []).forEach(it => {
+              if (it.product_id !== pid) return;
+              const r = Number(pi.carton_rate ?? pi.rate);
+              if (!isNaN(r)) {
+                it.carton_rate = r;
+                it.rate = r;
+                it.manual_billing_rate = r;
+                it.manual_rate_applied = true;
+              }
+            }));
+          }
+          if (delta < 0) {
+            for (const o of linked) {
+              for (const it of o.items || []) {
+                if (delta >= 0) break;
+                if (it.product_id !== pid) continue;
+                const ful = Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0;
+                const take = Math.min(ful, -delta);
+                if (take <= 0) continue;
+                it.fulfilled_qty = ful - take;
+                it.dispatched_qty = it.fulfilled_qty;
+                it.cancelled_qty = (Number(it.cancelled_qty) || 0) + take;
+                delta += take;
+              }
+            }
+          } else if (delta > 0) {
+            const target = linked.find(o => (o.items || []).some(it => it.product_id === pid)) || linked[0];
+            let it = (target.items || []).find(x => x.product_id === pid);
+            if (!it) {
+              const prod = products.find(p => p.id === pid);
+              it = {
+                id: `oi-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                order_id: target.id,
+                product_id: pid,
+                product_name: prod?.name || pi?.product_name,
+                quantity: 0, base_qty: 0, ordered_qty: 0, fulfilled_qty: 0, cancelled_qty: 0,
+                carton_qty: 0, loose_qty: 0,
+                trading_unit: pi?.trading_unit || prod?.trading_unit || 'Piece',
+                base_unit: pi?.base_unit || prod?.base_unit || 'Piece',
+                units_per_trading_unit: pi?.units_per_trading_unit || prod?.units_per_box_carton || 1,
+                units_per_box_carton: pi?.units_per_box_carton || prod?.units_per_box_carton || 1,
+                carton_rate: pi?.carton_rate ?? pi?.rate ?? 0,
+                rate: pi?.carton_rate ?? pi?.rate ?? 0,
+                base_price: pi?.carton_rate ?? pi?.rate ?? 0,
+                order_time_rate: pi?.carton_rate ?? pi?.rate ?? 0,
+                gst_percent: pi?.gst_percent ?? prod?.gst_percent ?? 0,
+                mrp: pi?.mrp ?? prod?.mrp
+              } as any;
+              target.items = [...(target.items || []), it!];
+            }
+            const ordered = flowOrderedQty(it!) + delta;
+            it!.ordered_qty = ordered;
+            it!.base_qty = ordered;
+            it!.quantity = ordered;
+            it!.fulfilled_qty = (Number(it!.fulfilled_qty ?? it!.dispatched_qty ?? 0) || 0) + delta;
+            it!.dispatched_qty = it!.fulfilled_qty;
+          }
+        }
 
-            const baseQty = pi.base_qty ?? pi.quantity ?? 0;
-            const cartonQty = pi.carton_qty ?? 0;
-            const looseQty = pi.loose_qty ?? 0;
-
-            return {
-              id: existingOrderItem?.id || `ord-item-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-              order_id: order.id,
-              product_id: pi.product_id,
-              quantity: baseQty,
-              carton_qty: cartonQty,
-              loose_qty: looseQty,
-              base_qty: baseQty,
-              trading_unit: pi.trading_unit || 'Carton',
-              base_unit: pi.base_unit || 'Piece',
-              units_per_trading_unit: pi.units_per_trading_unit || 1,
-              units_per_box_carton: pi.units_per_box_carton || 1,
-              carton_rate: pi.carton_rate ?? pi.rate ?? 0,
-              loose_rate: pi.loose_rate ?? 0,
-              carton_discount: pi.carton_discount ?? 0,
-              loose_discount: pi.loose_discount ?? 0,
-              base_price: pi.carton_rate ?? pi.rate ?? 0,
-              discount: pi.discount ?? 0,
-              final_price: pi.taxable_value ?? 0,
-              gst_percent: gstPercent,
-              gst_amount: gstAmount,
-              total_amount: pi.total_amount ?? 0,
-              final_applied_rate: pi.carton_rate ?? pi.rate ?? (pi.taxable_value !== undefined && pi.carton_qty ? pi.taxable_value / pi.carton_qty : 0),
-              confirmed_qty: baseQty,
-              dispatched_qty: baseQty,
-              delivered_qty: order.status === 'Delivered' ? baseQty : (existingOrderItem?.delivered_qty || baseQty),
-              pending_qty: 0,
-              manual_rate_applied: pi.manual_rate_applied || pi.rate_override_applied,
-              manual_rate_reason: pi.manual_rate_reason || pi.override_reason,
-              manual_billing_rate: pi.manual_billing_rate,
-              catalogue_rate_at_order: existingOrderItem?.catalogue_rate_at_order ?? pi.catalogue_rate,
-              order_time_rate: existingOrderItem?.order_time_rate ?? pi.order_time_rate
-            };
-          });
-
-          order.items = updatedOrderItems;
-          order.total_amount = grandTotal;
-          order.invoice_id = invoiceId;
-          order.updated_at = new Date().toISOString();
-          ordersUpdated = true;
-
+        linked.forEach(o => {
+          o.updated_at = nowIso;
+          if (o.status !== 'Cancelled') {
+            const pending = (o.items || []).reduce((sum, it) => sum + flowRemainingQty(it), 0);
+            if (!o.flow_ready_to_bill) o.status = pending > 0 ? 'Partially Fulfilled' : 'Completed';
+          }
           this.addItemActivityLog({
-            product_id: processedItems[0]?.product_id || 'general',
-            action: 'Order Auto-Synced from Invoice Edit',
-            details: `Order ${order.order_number} automatically updated to mirror Invoice ${oldInvoice.invoice_number} edits (New Grand Total: ₹${grandTotal.toLocaleString('en-IN')})`,
+            product_id: (processedItems as any[])[0]?.product_id || 'general',
+            action: 'Order Updated from Invoice Edit',
+            details: `Order ${o.order_number}: billed quantities updated to match Invoice ${oldInvoice.invoice_number}. Items waiting for stock are kept.`,
             old_value: `Total: ₹${oldInvoice.grand_total}`,
             new_value: `Total: ₹${grandTotal}`,
-            reference_id: order.id,
+            reference_id: o.id,
             user_id: editorId,
             user_name: editorName
           });
-        }
-      });
-
-      if (ordersUpdated) {
+        });
         this.saveOrders(orders);
       }
     } catch (syncErr) {
