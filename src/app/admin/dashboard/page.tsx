@@ -98,7 +98,7 @@ export default function AdminDashboard() {
     return map;
   }, [eligiblePendingOrders, retailers]);
 
-  const totalOutstanding = retailers.reduce((sum, ret) => sum + ret.outstanding, 0);
+  const totalOutstanding = retailers.reduce((sum, ret) => sum + Math.max(0, Number(ret.outstanding) || 0), 0);
 
   // Low stock count (available_qty < 10) & Out of stock
   const lowStockCount = inventory.filter(inv => inv.available_qty > 0 && inv.available_qty < 10).length;

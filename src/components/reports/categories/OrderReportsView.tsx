@@ -1,5 +1,6 @@
 'use client';
 
+import { flowOrderedQty, flowRemainingQty } from '@/lib/db';
 import React, { useState } from 'react';
 import { 
   ShoppingCart, Clock, AlertTriangle, CheckCircle2, 
@@ -33,12 +34,13 @@ export default function OrderReportsView({
   const now = new Date();
 
   dbState.orders.forEach(o => {
+    if (o.status === 'Cancelled') return;
     const ret = dbState.retailers.find(r => r.id === o.retailer_id);
     const orderDate = new Date(o.order_date);
     const ageDays = Math.max(0, Math.floor((now.getTime() - orderDate.getTime()) / (1000 * 3600 * 24)));
 
     o.items?.forEach(i => {
-      const pending = i.pending_qty || 0;
+      const pending = flowRemainingQty(i);
       if (pending > 0) {
         const prod = dbState.products.find(p => p.id === i.product_id);
         pendingItems.push({
@@ -46,11 +48,11 @@ export default function OrderReportsView({
           orderDate: o.order_date.slice(0, 10),
           retailerName: ret?.shop_name || 'Retailer',
           city: ret?.city || '',
-          productName: prod?.name || 'Product',
+          productName: prod?.name || i.product_name || 'Item',
           variantPacking: prod?.pack_size || '',
           tradingUnit: formatTradingUnit(prod?.trading_unit || 'Box'),
-          orderedQty: i.quantity,
-          confirmedQty: i.confirmed_qty || 0,
+          orderedQty: flowOrderedQty(i),
+          confirmedQty: Number(i.fulfilled_qty ?? i.dispatched_qty ?? 0) || 0,
           pendingQty: pending,
           ageDays: `${ageDays}d`
         });

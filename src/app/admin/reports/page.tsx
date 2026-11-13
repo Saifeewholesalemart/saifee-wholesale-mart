@@ -9,7 +9,7 @@ import {
   Printer, ArrowLeft, X
 } from 'lucide-react';
 import { 
-  ReportFilterState, UserContext,
+  ReportFilterState, UserContext, prepareReportState,
   getInvoiceWiseSales, getSalesSummary, getProductWiseProfit,
   getRetailerSalesSummary, getCompanyWiseSales, getSalespersonSales,
   getPurchaseSummary, getCurrentStock, getRetailerOutstandingAging,
@@ -71,7 +71,7 @@ export default function AdminReports() {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
 
   // Database snapshot
-  const dbState = {
+  const dbState = prepareReportState({
     invoices,
     orders: db.orders,
     fulfilments: db.fulfilments,
@@ -87,7 +87,7 @@ export default function AdminReports() {
     ledger,
     suppliers,
     categories: db.categories || []
-  };
+  });
 
   const userContext: UserContext = {
     role: currentUser?.role || 'admin',

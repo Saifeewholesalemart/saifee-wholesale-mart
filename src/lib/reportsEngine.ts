@@ -8,6 +8,7 @@ import {
   Purchase, Payment, SalesReturn, InventoryBatch, Inventory, StockLedgerEntry, Supplier,
   BillingRateRecord
 } from './db';
+import { flowOrderedQty, flowRemainingQty } from './db';
 
 // ----------------------------------------------------
 // FILTER STATE INTERFACE
@@ -48,6 +49,52 @@ function byProductId<T extends { product_id: string }>(arr: T[] | undefined | nu
 /** Rows of this product, in the original order (a fresh copy, safe to change). */
 function rowsOfProduct<T extends { product_id: string }>(arr: T[] | undefined | null, productId: string): T[] {
   return (byProductId(arr).get(productId) || []).slice();
+}
+
+/**
+ * Bills, returns and orders can point to a product that is no longer in the item list
+ * (removed, or re-imported with a new ID). Such lines must still count in every report,
+ * so a stand-in product is made from what the line itself stored.
+ */
+const REMOVED_COMPANY_ID = '__removed_items__';
+export function prepareReportState<T extends DbState>(db: T): T {
+  const known = new Set(db.products.map(p => p.id));
+  const extra: Product[] = [];
+  const add = (line: any) => {
+    const id = line?.product_id;
+    if (!id || known.has(id)) return;
+    known.add(id);
+    const units = Number(line.units_per_trading_unit || line.units_per_box_carton) || 1;
+    extra.push({
+      id,
+      product_code: '',
+      name: line.product_name || line.description || line.packing || 'Removed item',
+      company_id: REMOVED_COMPANY_ID,
+      brand: 'Removed items',
+      category: 'Removed items',
+      pack_size: line.packing || '',
+      trading_unit: line.trading_unit || 'Piece',
+      base_unit: line.base_unit || 'Piece',
+      units_per_box_carton: units,
+      mrp: Number(line.mrp) || 0,
+      selling_price: Number(line.carton_rate ?? line.rate) || 0,
+      purchase_price: Number(line.purchase_rate) || 0,
+      gst_percent: Number(line.gst_percent) || 0,
+      hsn: line.hsn || '',
+      sku: '',
+      barcode: '',
+      active: false,
+      __removed: true
+    } as any);
+  };
+  db.invoices.forEach(i => (i.items || []).forEach(add));
+  db.salesReturns.forEach(r => (r.items || []).forEach(add));
+  db.orders.forEach(o => (o.items || []).forEach(add));
+  if (extra.length === 0) return db;
+  const companies = db.companies.some(c => c.id === REMOVED_COMPANY_ID)
+    ? db.companies
+    : [...db.companies, { id: REMOVED_COMPANY_ID, name: 'Removed items', code: '-', active: false } as any];
+  return { ...db, products: [...db.products, ...extra], companies };
 }
 
 export type DatePreset = 
@@ -250,115 +297,42 @@ export function applyRbacFilters(filters: ReportFilterState, user: UserContext):
 // SALESPERSON LINKAGE & RESOLUTION HELPERS
 // ----------------------------------------------------
 
+const isSalesRole = (p?: Profile | null) => !!p && (p.role === 'sales_dist' || p.role === 'sales_co');
+
+/**
+ * Salesperson of an order = the salesman who took it. Orders placed by the shop itself,
+ * at the counter or by admin/staff have no salesperson (they are never given to one by guess).
+ */
 export function getOrderSalespersonId(order: Order, db: DbState): string | undefined {
-  if (order.created_by) {
-    const p = db.profiles.find(prof => prof.id === order.created_by);
-    if (p && (p.role === 'sales_dist' || p.role === 'sales_co')) return p.id;
-    if (p) return p.id;
-  }
-
-  // Check if order items belong exclusively to a company that has a company salesperson
-  if (order.items && order.items.length > 0) {
-    const compIds = Array.from(new Set(order.items.map(i => {
-      const prod = byId(db.products).get(i.product_id);
-      return prod?.company_id;
-    }).filter(Boolean)));
-
-    if (compIds.length === 1) {
-      const coSalesperson = db.profiles.find(p => p.role === 'sales_co' && p.company_id === compIds[0]);
-      if (coSalesperson) return coSalesperson.id;
-    }
-  }
-
-  // Default deterministic territory allocation to distributor sales reps based on retailer/order
-  const distSalesReps = db.profiles.filter(p => p.role === 'sales_dist');
-  if (distSalesReps.length > 0) {
-    const key = order.retailer_id || order.id || order.order_number;
-    let hash = 0;
-    for (let i = 0; i < key.length; i++) {
-      hash = (hash << 5) - hash + key.charCodeAt(i);
-      hash |= 0;
-    }
-    const idx = Math.abs(hash) % distSalesReps.length;
-    return distSalesReps[idx].id;
-  }
-
+  const creator = order.created_by ? byId(db.profiles).get(order.created_by) : undefined;
+  if (isSalesRole(creator)) return creator!.id;
+  const sp = (order as any).salesperson_id ? byId(db.profiles).get((order as any).salesperson_id) : undefined;
+  if (isSalesRole(sp)) return sp!.id;
   return undefined;
 }
 
 export function getInvoiceSalespersonId(inv: Invoice, db: DbState): string | undefined {
-  if ((inv as any).created_by) {
-    const p = db.profiles.find(prof => prof.id === (inv as any).created_by);
-    if (p && (p.role === 'sales_dist' || p.role === 'sales_co')) return p.id;
-    if (p) return p.id;
-  }
-  if ((inv as any).salesperson_id) {
-    const p = db.profiles.find(prof => prof.id === (inv as any).salesperson_id);
-    if (p) return p.id;
+  const direct = [(inv as any).salesperson_id, (inv as any).created_by];
+  for (const id of direct) {
+    const p = id ? byId(db.profiles).get(id) : undefined;
+    if (isSalesRole(p)) return p!.id;
   }
 
-  // Look up order_ref_id
+  const refs = new Set<string>();
+  if (inv.order_ref_id) refs.add(inv.order_ref_id);
+  (inv.source_order_ids || []).forEach(x => refs.add(x));
+  ((inv as any).source_order_numbers || inv.order_numbers || []).forEach((x: string) => refs.add(x));
   if (inv.order_ref_id) {
-    const order = db.orders.find(o => o.id === inv.order_ref_id || o.order_number === inv.order_ref_id);
-    if (order) {
-      const spId = getOrderSalespersonId(order, db);
-      if (spId) return spId;
-    }
-
-    const ful = db.fulfilments.find(f => f.id === inv.order_ref_id || f.fulfilment_number === inv.order_ref_id);
-    if (ful?.source_order_ids && ful.source_order_ids.length > 0) {
-      const srcOrd = db.orders.find(o => (ful.source_order_ids?.includes(o.id) || ful.source_order_ids?.includes(o.order_number)));
-      if (srcOrd) {
-        const spId = getOrderSalespersonId(srcOrd, db);
-        if (spId) return spId;
-      }
-    }
+    const ful = db.fulfilments.find(fl => fl.id === inv.order_ref_id || fl.fulfilment_number === inv.order_ref_id);
+    (ful?.source_order_ids || []).forEach(x => refs.add(x));
   }
-
-  // Look up source_order_ids
-  if (inv.source_order_ids && inv.source_order_ids.length > 0) {
-    const srcOrd = db.orders.find(o => (inv.source_order_ids?.includes(o.id) || inv.source_order_ids?.includes(o.order_number)));
-    if (srcOrd) {
-      const spId = getOrderSalespersonId(srcOrd, db);
+  if (refs.size > 0) {
+    for (const o of db.orders) {
+      if (!refs.has(o.id) && !refs.has(o.order_number)) continue;
+      const spId = getOrderSalespersonId(o, db);
       if (spId) return spId;
     }
   }
-
-  const orderNums = inv.source_order_numbers || inv.order_numbers;
-  if (orderNums && orderNums.length > 0) {
-    const srcOrd = db.orders.find(o => (orderNums.includes(o.order_number) || orderNums.includes(o.id)));
-    if (srcOrd) {
-      const spId = getOrderSalespersonId(srcOrd, db);
-      if (spId) return spId;
-    }
-  }
-
-  // Check if invoice items belong exclusively to a company that has a company salesperson
-  if (inv.items && inv.items.length > 0) {
-    const compIds = Array.from(new Set(inv.items.map(i => {
-      const prod = byId(db.products).get(i.product_id);
-      return prod?.company_id;
-    }).filter(Boolean)));
-
-    if (compIds.length === 1) {
-      const coSalesperson = db.profiles.find(p => p.role === 'sales_co' && p.company_id === compIds[0]);
-      if (coSalesperson) return coSalesperson.id;
-    }
-  }
-
-  // Default deterministic territory allocation to distributor sales reps based on retailer/invoice:
-  const distSalesReps = db.profiles.filter(p => p.role === 'sales_dist');
-  if (distSalesReps.length > 0) {
-    const key = inv.retailer_id || inv.id;
-    let hash = 0;
-    for (let i = 0; i < key.length; i++) {
-      hash = (hash << 5) - hash + key.charCodeAt(i);
-      hash |= 0;
-    }
-    const idx = Math.abs(hash) % distSalesReps.length;
-    return distSalesReps[idx].id;
-  }
-
   return undefined;
 }
 
@@ -368,7 +342,7 @@ export function getInvoiceSalespersonName(inv: Invoice, db: DbState): string {
     const profile = byId(db.profiles).get(spId);
     if (profile) return profile.name;
   }
-  return 'Distributor Sales';
+  return 'Direct / Counter';
 }
 
 export function getOrderSalespersonName(order: Order, db: DbState): string {
@@ -377,7 +351,7 @@ export function getOrderSalespersonName(order: Order, db: DbState): string {
     const profile = byId(db.profiles).get(spId);
     if (profile) return profile.name;
   }
-  return 'Distributor Sales';
+  return 'Direct / Counter';
 }
 
 export function isInvoiceMatchingSalesperson(
@@ -1160,6 +1134,7 @@ export function getMonthlySales(filters: ReportFilterState, db: DbState, user: U
     if (f.salespersonId && (!inv || !isInvoiceMatchingSalesperson(inv, f.salespersonId, db))) return;
 
     let retVal = 0;
+    let retCost = 0;
     sr.items?.forEach(sri => {
       const prod = byId(db.products).get(sri.product_id);
       if (!prod) return;
@@ -1175,6 +1150,16 @@ export function getMonthlySales(filters: ReportFilterState, db: DbState, user: U
       const cRate = sri.rate;
       const lRate = sri.loose_rate || (cRate / unitsPerPack);
       retVal += (cQty * cRate) + (lQty * lRate);
+      // Sellable goods that came back are stock again, so their cost comes off COGS
+      if ((sri as any).condition !== 'Damaged') {
+        let costRate = Number(prod.purchase_price) || 0;
+        const soldLine = inv?.items?.find(l => l.product_id === sri.product_id);
+        if (soldLine?.batch_number) {
+          const b = db.batches.find(batch => batch.product_id === sri.product_id && batch.batch_number === soldLine.batch_number);
+          if (b) costRate = b.purchase_rate;
+        }
+        retCost += (cQty * costRate) + (lQty * (costRate / unitsPerPack));
+      }
     });
 
     if (retVal > 0) {
@@ -1190,6 +1175,7 @@ export function getMonthlySales(filters: ReportFilterState, db: DbState, user: U
         cogs: 0
       };
       curr.salesReturn += retVal;
+      curr.cogs -= retCost;
       monthMap.set(monthKey, curr);
     }
   });
@@ -1346,6 +1332,7 @@ export function getQuarterlySales(filters: ReportFilterState, db: DbState, user:
     if (f.salespersonId && (!inv || !isInvoiceMatchingSalesperson(inv, f.salespersonId, db))) return;
 
     let retVal = 0;
+    let retCost = 0;
     sr.items?.forEach(sri => {
       const prod = byId(db.products).get(sri.product_id);
       if (!prod) return;
@@ -1361,6 +1348,16 @@ export function getQuarterlySales(filters: ReportFilterState, db: DbState, user:
       const cRate = sri.rate;
       const lRate = sri.loose_rate || (cRate / unitsPerPack);
       retVal += (cQty * cRate) + (lQty * lRate);
+      // Sellable goods that came back are stock again, so their cost comes off COGS
+      if ((sri as any).condition !== 'Damaged') {
+        let costRate = Number(prod.purchase_price) || 0;
+        const soldLine = inv?.items?.find(l => l.product_id === sri.product_id);
+        if (soldLine?.batch_number) {
+          const b = db.batches.find(batch => batch.product_id === sri.product_id && batch.batch_number === soldLine.batch_number);
+          if (b) costRate = b.purchase_rate;
+        }
+        retCost += (cQty * costRate) + (lQty * (costRate / unitsPerPack));
+      }
     });
 
     if (retVal > 0) {
@@ -1384,6 +1381,7 @@ export function getQuarterlySales(filters: ReportFilterState, db: DbState, user:
         cogs: 0
       };
       curr.salesReturn += retVal;
+      curr.cogs -= retCost;
       qMap.set(qKey, curr);
     }
   });
@@ -1519,6 +1517,46 @@ export interface ProfitReportRow {
   outstanding?: number;
 }
 
+
+/**
+ * Sales returns of the period as adjustments for the profit reports:
+ * value (without GST) comes off sales; cost comes off COGS only when the goods came back sellable.
+ */
+function collectReturnAdjustments(f: ReportFilterState, db: DbState, dateRange: { start: Date; end: Date }) {
+  const out: { productId: string; companyId: string; brand: string; category: string; retailerId: string; qty: number; value: number; cost: number }[] = [];
+  db.salesReturns.forEach(sr => {
+    if (/cancel|void|reject/i.test(String((sr as any).status || ''))) return;
+    if (!isDateInRange(sr.return_date, dateRange)) return;
+    const inv = sr.invoice_id ? db.invoices.find(i => i.id === sr.invoice_id) : undefined;
+    const retailerId = sr.retailer_id || inv?.retailer_id || '';
+    if (f.retailerId && retailerId !== f.retailerId) return;
+    if (f.salespersonId && (!inv || !isInvoiceMatchingSalesperson(inv, f.salespersonId, db))) return;
+    (sr.items || []).forEach((sri: any) => {
+      const prod = byId(db.products).get(sri.product_id);
+      if (f.companyId && prod?.company_id !== f.companyId) return;
+      if (f.category && prod?.category !== f.category) return;
+      if (f.brand && prod?.brand !== f.brand) return;
+      if (f.productId && prod?.id !== f.productId) return;
+      const unitsPerPack = sri.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const qty = Number(sri.base_qty ?? sri.quantity) || 0;
+      const cQty = sri.carton_qty !== undefined ? sri.carton_qty : Math.floor(qty / unitsPerPack);
+      const lQty = sri.loose_qty !== undefined ? sri.loose_qty : (qty % unitsPerPack);
+      const cRate = Number(sri.rate) || 0;
+      const lRate = sri.loose_rate || (cRate / unitsPerPack);
+      const value = sri.taxable_value !== undefined ? Number(sri.taxable_value) || 0 : (cQty * cRate) + (lQty * lRate);
+      const soldLine = inv?.items?.find(l => l.product_id === sri.product_id);
+      let costRate = Number(prod?.purchase_price) || 0;
+      if (soldLine?.batch_number) {
+        const b = db.batches.find(batch => batch.product_id === sri.product_id && batch.batch_number === soldLine.batch_number);
+        if (b) costRate = b.purchase_rate;
+      }
+      const cost = sri.condition === 'Damaged' ? 0 : (cQty * costRate) + (lQty * (costRate / unitsPerPack));
+      out.push({ productId: sri.product_id, companyId: prod?.company_id || '', brand: prod?.brand || '', category: prod?.category || 'General', retailerId, qty, value, cost });
+    });
+  });
+  return out;
+}
+
 export function getProductWiseProfit(filters: ReportFilterState, db: DbState, user: UserContext): ProfitReportRow[] {
   if (user.role !== 'admin') return [];
   const f = applyRbacFilters(filters, user);
@@ -1563,6 +1601,15 @@ export function getProductWiseProfit(filters: ReportFilterState, db: DbState, us
 
       map.set(prod.id, curr);
     });
+  });
+
+  collectReturnAdjustments(f, db, dateRange).forEach(r => {
+    const curr = map.get(r.productId);
+    if (!curr) return;
+    curr.quantity -= r.qty;
+    curr.netSales -= r.value;
+    curr.cogs -= r.cost;
+    curr.returns += r.value;
   });
 
   const rows: ProfitReportRow[] = [];
@@ -1650,6 +1697,15 @@ export function getRetailerWiseProfit(filters: ReportFilterState, db: DbState, u
     map.set(inv.retailer_id, curr);
   });
 
+  collectReturnAdjustments(f, db, dateRange).forEach(r => {
+    const curr = map.get(r.retailerId);
+    if (!curr) return;
+    curr.quantity -= r.qty;
+    curr.netSales -= r.value;
+    curr.cogs -= r.cost;
+    curr.returns += r.value;
+  });
+
   const rows: ProfitReportRow[] = [];
   map.forEach((agg, retId) => {
     const ret = byId(db.retailers).get(retId);
@@ -1719,6 +1775,16 @@ export function getCompanyWiseProfit(filters: ReportFilterState, db: DbState, us
     });
   });
 
+  const companyReturns = new Map<string, number>();
+  collectReturnAdjustments(f, db, dateRange).forEach(r => {
+    const curr = map.get(r.companyId);
+    if (!curr) return;
+    curr.quantity -= r.qty;
+    curr.netSales -= r.value;
+    curr.cogs -= r.cost;
+    companyReturns.set(r.companyId, (companyReturns.get(r.companyId) || 0) + r.value);
+  });
+
   const rows: ProfitReportRow[] = [];
   map.forEach((agg, compId) => {
     const comp = db.companies.find(c => c.id === compId);
@@ -1737,7 +1803,7 @@ export function getCompanyWiseProfit(filters: ReportFilterState, db: DbState, us
       grossProfit: Math.round(grossProfit),
       grossMarginPercent: Number(grossMargin.toFixed(1)),
       totalDiscount: Math.round(agg.discount),
-      salesReturnAdj: 0
+      salesReturnAdj: Math.round(companyReturns.get(compId) || 0)
     });
   });
 
@@ -2202,6 +2268,15 @@ export function getCompanyWiseSales(filters: ReportFilterState, db: DbState, use
     });
   });
 
+  // Net sales, quantity and cost are after sales returns
+  collectReturnAdjustments(f, db, dateRange).forEach(r => {
+    const curr = compMap.get(r.companyId);
+    if (!curr) return;
+    curr.quantity -= r.qty;
+    curr.netSales -= r.value;
+    curr.cost -= r.cost;
+  });
+
   const rows: CompanySalesRow[] = [];
   compMap.forEach((agg, compId) => {
     const comp = db.companies.find(c => c.id === compId);
@@ -2285,6 +2360,14 @@ export function getBrandWiseSales(filters: ReportFilterState, db: DbState, user:
 
       brandMap.set(prod.brand, curr);
     });
+  });
+
+  collectReturnAdjustments(f, db, dateRange).forEach(r => {
+    const curr = brandMap.get(r.brand);
+    if (!curr) return;
+    curr.quantity -= r.qty;
+    curr.netSales -= r.value;
+    curr.cost -= r.cost;
   });
 
   const rows: BrandSalesRow[] = [];
@@ -2376,6 +2459,14 @@ export function getCategoryWiseSales(filters: ReportFilterState, db: DbState, us
 
       catMap.set(catName, curr);
     });
+  });
+
+  collectReturnAdjustments(f, db, dateRange).forEach(r => {
+    const curr = catMap.get(r.category);
+    if (!curr) return;
+    curr.quantity -= r.qty;
+    curr.netSales -= r.value;
+    curr.cost -= r.cost;
   });
 
   const rows: CategorySalesRow[] = [];
@@ -2582,7 +2673,7 @@ export function getSalespersonSales(filters: ReportFilterState, db: DbState, use
       return;
     }
 
-    const grossProfit = user.role === 'admin' ? agg.netSales - agg.cost : 0;
+    const grossProfit = user.role === 'admin' ? (agg.grossSales - agg.discount) - agg.cost : 0;
 
     rows.push({
       salespersonId: sp.id,
@@ -2857,6 +2948,7 @@ export function getCurrentStock(filters: ReportFilterState, db: DbState, user: U
   const rows: CurrentStockRow[] = [];
 
   db.products.forEach(prod => {
+    if ((prod as any).__removed) return;
     if (f.companyId && prod.company_id !== f.companyId) return;
     if (f.category && prod.category !== f.category) return;
     if (f.brand && prod.brand !== f.brand) return;
@@ -3074,12 +3166,18 @@ export function getStockMovement(filters: ReportFilterState, db: DbState, user: 
     .map(entry => {
       const prod = byId(db.products).get(entry.product_id);
       const userProf = byId(db.profiles).get(entry.user_id);
+      const refDoc = entry.reference_id
+        ? (byId(db.invoices).get(entry.reference_id)?.invoice_number
+          || byId(db.orders).get(entry.reference_id)?.order_number
+          || byId(db.purchases).get(entry.reference_id)?.invoice_number
+          || entry.reference_id)
+        : 'SYSTEM';
       const unitsPerPack = prod?.units_per_box_carton || prod?.units_per_trading_unit || 1;
 
       return {
         date: entry.created_at.slice(0, 10),
         movementType: entry.reason,
-        referenceNumber: entry.reference_id?.slice(0, 15) || 'SYSTEM',
+        referenceNumber: refDoc,
         productName: prod?.name || 'Product',
         category: prod?.category || 'General',
         variantPacking: prod?.pack_size || '',
@@ -3275,10 +3373,11 @@ export function getOrderSummary(filters: ReportFilterState, db: DbState, user: U
       let confirmed = 0;
       let pending = 0;
 
+      // Ordered / billed / still waiting, the same way the Orders page counts them
       o.items?.forEach(i => {
-        ordered += i.quantity;
-        confirmed += i.confirmed_qty || 0;
-        pending += i.pending_qty || 0;
+        ordered += flowOrderedQty(i);
+        confirmed += Number(i.fulfilled_qty ?? i.dispatched_qty ?? 0) || 0;
+        pending += o.status === 'Cancelled' ? 0 : flowRemainingQty(i);
       });
 
       return {
