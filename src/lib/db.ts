@@ -2315,6 +2315,21 @@ const SEED_ITEM_ACTIVITY_LOGS: ItemActivityLog[] = [];
 // LOCAL DB STORE INTERFACE
 // ----------------------------------------------------
 
+/**
+ * Next document number = highest number already used + 1 (never "count + 1":
+ * after a record is removed, count + 1 would repeat a number that is in use).
+ */
+export function nextDocNumber(prefix: string, existing: (string | undefined | null)[], pad = 5): string {
+  let max = 0;
+  for (const n of existing) {
+    const str = String(n || '');
+    if (!str.startsWith(prefix)) continue;
+    const m = str.slice(prefix.length).match(/^(\d+)/);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return prefix + String(max + 1).padStart(pad, '0');
+}
+
 class FMCGDatabase {
   private memoryStore: Record<string, any> = {};
 
@@ -7429,7 +7444,7 @@ class FMCGDatabase {
     const activeBiz = data.company_id || this.getActiveBusinessCompanyId();
     const transactions = this.getCashFlowTransactions(activeBiz);
     const year = data.date ? new Date(data.date).getFullYear() : new Date().getFullYear();
-    const nextNum = `CF-${year}-${String(transactions.length + 1).padStart(5, '0')}`;
+    const nextNum = nextDocNumber(`CF-${year}-`, transactions.map(d => d.transaction_number));
     const now = new Date();
     const timeStr = data.time || now.toTimeString().split(' ')[0];
 
@@ -8583,7 +8598,7 @@ class FMCGDatabase {
 
     const invoiceId = `inv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const invoicePrefix = 'INV';
-    const invoiceNumber = `INV/2026-27/${String(invoices.length + 1).padStart(5, '0')}`;
+    const invoiceNumber = nextDocNumber('INV/2026-27/', invoices.map(d => d.invoice_number));
     const placeOfSupply = payload.place_of_supply || ret.state_code || getHomeStateCode();
     const paidAmount = Math.max(0, payload.paid_amount || 0);
 
@@ -8959,7 +8974,7 @@ class FMCGDatabase {
   } | Omit<Order, 'id' | 'order_number' | 'status' | 'order_date'> | any): Order {
     const orders = this.getOrders();
     const products = this.getProducts();
-    const orderNum = `ORD-${new Date().getFullYear()}-${String(orders.length + 1).padStart(5, '0')}`;
+    const orderNum = nextDocNumber(`ORD-${new Date().getFullYear()}-`, orders.map(d => d.order_number));
     
     let totalOrderAmount = 0;
 
@@ -9698,7 +9713,7 @@ class FMCGDatabase {
 
     const fulfilments = this.getFulfilments();
     const fId = `ful-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const fNum = `FUL-${new Date().getFullYear()}-${String(fulfilments.length + 1).padStart(5, '0')}`;
+    const fNum = nextDocNumber(`FUL-${new Date().getFullYear()}-`, fulfilments.map(d => d.fulfilment_number));
 
     // Group order items strictly by exact product variant & commercial trading unit
     const variantMap: {
@@ -10166,7 +10181,7 @@ class FMCGDatabase {
     if (newItems.length === 0) return null;
 
     const newOrdId = `ord-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const newOrdNumber = `SO-${new Date().getFullYear()}-${String(orders.length + 1).padStart(5, '0')}`;
+    const newOrdNumber = nextDocNumber(`SO-${new Date().getFullYear()}-`, orders.map(d => d.order_number));
     newItems.forEach(ni => { ni.order_id = newOrdId; });
 
     const newOrder: Order = {
@@ -10742,8 +10757,8 @@ class FMCGDatabase {
 
     const invoiceId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const challanId = `dc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const invoiceNumber = `INV/2026-27/${String(invoices.length + 1).padStart(5, '0')}`;
-    const challanNumber = `DC/2026-27/${String(challans.length + 1).padStart(5, '0')}`;
+    const invoiceNumber = nextDocNumber('INV/2026-27/', invoices.map(d => d.invoice_number));
+    const challanNumber = nextDocNumber('DC/2026-27/', challans.map(d => d.challan_number));
 
     const invoiceItems: InvoiceItem[] = [];
     const challanItems: DeliveryChallanItem[] = [];
@@ -11140,7 +11155,7 @@ class FMCGDatabase {
 
     const fulfilments = this.getFulfilments();
     const fId = `ful-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const fNum = `FUL-${new Date().getFullYear()}-${String(fulfilments.length + 1).padStart(5, '0')}`;
+    const fNum = nextDocNumber(`FUL-${new Date().getFullYear()}-`, fulfilments.map(d => d.fulfilment_number));
 
     const delivered = oItem.delivered_qty || 0;
     const cancelled = oItem.cancelled_qty || 0;
@@ -11360,7 +11375,7 @@ class FMCGDatabase {
     const grandTotal = Math.round(taxableTotal + cgstTotal + sgstTotal + igstTotal);
     const roundOff = grandTotal - (taxableTotal + cgstTotal + sgstTotal + igstTotal);
 
-    const invNum = `INV/2026-27/${String(invoices.length + 1).padStart(5, '0')}`;
+    const invNum = nextDocNumber('INV/2026-27/', invoices.map(d => d.invoice_number));
     const paidAmount = paymentMethod === 'Credit' ? 0 : grandTotal;
     const outstandingAmount = grandTotal - paidAmount;
 
@@ -11386,7 +11401,7 @@ class FMCGDatabase {
     // Create matching Order record for on-counter sale so it appears in Order Register & history
     const orders = this.getOrders();
     const orderId = `ord-pos-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const orderNumber = `ORD-${String(orders.length + 1050).padStart(4, '0')}`;
+    const orderNumber = nextDocNumber(`ORD-${new Date().getFullYear()}-`, orders.map(d => d.order_number));
     const orderItems: OrderItem[] = invoiceItems.map(invItem => ({
       id: `oi-${invItem.id}`,
       order_id: orderId,
@@ -11447,7 +11462,7 @@ class FMCGDatabase {
     if (newInvoice.paid_amount > 0) {
       const payments = this.getPayments();
       const payId = `pay-pos-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const payNum = `PAY-${new Date().getFullYear()}-${String(payments.length + 1).padStart(5, '0')}`;
+      const payNum = nextDocNumber(`PAY-${new Date().getFullYear()}-`, payments.map(d => d.payment_number));
       
       const newPay: Payment = {
         id: payId,
@@ -11874,7 +11889,7 @@ class FMCGDatabase {
   recordPayment(retailerId: string, amount: number, method: Payment['method'], refNum?: string, notes?: string): Payment {
     const payments = this.getPayments();
     const payId = `pay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const payNum = `PAY-${new Date().getFullYear()}-${String(payments.length + 1).padStart(5, '0')}`;
+    const payNum = nextDocNumber(`PAY-${new Date().getFullYear()}-`, payments.map(d => d.payment_number));
 
     const newPayment: Payment = {
       id: payId,
@@ -11909,6 +11924,7 @@ class FMCGDatabase {
       inv.outstanding_amount -= allocationAmt;
       inv.paid_amount += allocationAmt;
       remainingPayment -= allocationAmt;
+      inv.payment_status = inv.outstanding_amount <= 0 ? 'Paid' : 'Partial';
 
       allocations.push({
         id: `alloc-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
@@ -11978,6 +11994,8 @@ class FMCGDatabase {
     const activeBiz = this.getActiveBusinessCompanyId();
     const sReturns = this.getSalesReturns(activeBiz);
     const inventory = this.getInventory(activeBiz);
+    const returnBatches = this.getBatches(activeBiz);
+    let returnBatchesChanged = false;
     const ledgers = this.getLedger(activeBiz);
     const retailers = this.getRetailers(activeBiz);
     const invoices = this.getInvoices(activeBiz);
@@ -11992,8 +12010,7 @@ class FMCGDatabase {
 
     // Generate sequential Credit Note number CN-YYYY-XXXXX
     const year = new Date().getFullYear();
-    const existingCNCount = sReturns.filter(sr => (sr.credit_note_number || '').includes(`CN-${year}`)).length;
-    const creditNoteNumber = `CN-${year}-${String(existingCNCount + 1).padStart(5, '0')}`;
+    const creditNoteNumber = nextDocNumber(`CN-${year}-`, sReturns.map(sr => sr.credit_note_number));
     const retId = `sr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
     let totalTaxable = 0;
@@ -12095,6 +12112,30 @@ class FMCGDatabase {
       if (item.condition === 'Sellable') {
         stock.physical_qty += totalBaseQty;
         stock.available_qty = stock.physical_qty - (stock.reserved_qty || 0);
+        // Good stock goes back into a batch too, so it can be packed and billed again
+        const soldLine = invRef?.items?.find(l => l.product_id === item.productId);
+        const ofProduct = returnBatches.filter(b => b.product_id === item.productId);
+        const backTo = ofProduct.find(b => b.id === soldLine?.batch_id)
+          || ofProduct.sort((x, y) => new Date(y.expiry_date || 0).getTime() - new Date(x.expiry_date || 0).getTime())[0];
+        if (backTo) {
+          backTo.quantity = (Number(backTo.quantity) || 0) + totalBaseQty;
+        } else {
+          returnBatches.push({
+            id: `bch-ret-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            product_id: item.productId,
+            godown_id: targetGodownId,
+            godown: targetGodownName,
+            batch_number: `RET-${creditNoteNumber}`,
+            expiry_date: new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
+            purchase_rate: Number(prod?.purchase_price) || 0,
+            mrp: Number(prod?.mrp) || 0,
+            quantity: totalBaseQty,
+            entry_date: new Date().toISOString().slice(0, 10),
+            cost_layer: creditNoteNumber,
+            business_id: activeBiz
+          } as InventoryBatch);
+        }
+        returnBatchesChanged = true;
       } else {
         stock.damaged_qty += totalBaseQty;
       }
@@ -12141,6 +12182,7 @@ class FMCGDatabase {
     sReturns.push(newReturn);
     this.saveSalesReturns(sReturns);
     this.saveInventory(inventory);
+    if (returnBatchesChanged) this.saveBatches(returnBatches, activeBiz);
     this.saveLedger(ledgers);
 
     // Update retailer outstanding
@@ -12152,6 +12194,7 @@ class FMCGDatabase {
     // If linked to an invoice, decrease invoice outstanding as well
     if (invRef) {
       invRef.outstanding_amount = Math.max(0, invRef.outstanding_amount - grandCreditRounded);
+      if (invRef.outstanding_amount <= 0) invRef.payment_status = 'Paid';
       this.saveInvoices(invoices);
     }
 
@@ -12972,8 +13015,8 @@ class FMCGDatabase {
 
     const invoiceId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const challanId = `dc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const invoiceNumber = `INV/2026-27/${String(invoices.length + 1).padStart(5, '0')}`;
-    const challanNumber = `DC/2026-27/${String(challans.length + 1).padStart(5, '0')}`;
+    const invoiceNumber = nextDocNumber('INV/2026-27/', invoices.map(d => d.invoice_number));
+    const challanNumber = nextDocNumber('DC/2026-27/', challans.map(d => d.challan_number));
 
     const invoiceItems: InvoiceItem[] = [];
     const challanItems: DeliveryChallanItem[] = [];
@@ -13667,8 +13710,8 @@ class FMCGDatabase {
 
     const invoiceId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const challanId = `dc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const invoiceNumber = `INV/2026-27/${String(invoices.length + 1).padStart(5, '0')}`;
-    const challanNumber = `DC/2026-27/${String(challans.length + 1).padStart(5, '0')}`;
+    const invoiceNumber = nextDocNumber('INV/2026-27/', invoices.map(d => d.invoice_number));
+    const challanNumber = nextDocNumber('DC/2026-27/', challans.map(d => d.challan_number));
 
     let subtotal = 0;
     let taxableTotal = 0;
@@ -14049,7 +14092,7 @@ class FMCGDatabase {
       const allocations = this.getPaymentAllocations(activeBiz);
 
       const payId = `pay-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
-      const payNum = `PAY-${new Date().getFullYear()}-${String(payments.length + 1).padStart(5, '0')}`;
+      const payNum = nextDocNumber(`PAY-${new Date().getFullYear()}-`, payments.map(d => d.payment_number));
 
       const newPayment: Payment = {
         id: payId,
@@ -14210,7 +14253,7 @@ class FMCGDatabase {
     const allocations = this.getPaymentAllocations();
 
     const payId = `pay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const payNum = `PAY-${new Date().getFullYear()}-${String(payments.length + 1).padStart(5, '0')}`;
+    const payNum = nextDocNumber(`PAY-${new Date().getFullYear()}-`, payments.map(d => d.payment_number));
 
     const allocAmt = Math.min(inv.outstanding_amount, amount);
     inv.outstanding_amount = Math.max(0, inv.outstanding_amount - allocAmt);
