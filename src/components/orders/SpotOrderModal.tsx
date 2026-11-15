@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import { ensureWalkInRetailer, describeStockShortfall } from '@/lib/db';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
@@ -114,14 +114,7 @@ export default function SpotOrderModal({
     if (!query) return retailers.slice(0, 50);
 
     return retailers.filter(r => {
-      const matchShop = hasWords(r.shop_name?.toLowerCase(), query);
-      const matchOwner = hasWords(r.owner_name?.toLowerCase(), query);
-      const matchCity = hasWords(r.city?.toLowerCase(), query);
-      const matchBeat = hasWords((r.beat_name || r.route)?.toLowerCase(), query);
-      const matchPhone = (r.mobile || r.phone || '').includes(query);
-      const matchGstin = hasWords((r.gstin || '').toLowerCase(), query);
-
-      return matchShop || matchOwner || matchCity || matchBeat || matchPhone || matchGstin;
+      return matchWords(query, r.shop_name, r.owner_name, r.city, r.beat_name || r.route, r.mobile, r.phone, r.gstin);
     }).slice(0, 50);
   }, [retailers, retailerSearchText]);
 
@@ -177,14 +170,7 @@ export default function SpotOrderModal({
     if (!rawQuery) return products.slice(0, 40);
 
     return products.filter(p => {
-      const matchName = hasWords(p.name.toLowerCase(), rawQuery);
-      const matchBrand = hasWords((p.brand || '').toLowerCase(), rawQuery);
-      const matchSku = hasWords(p.sku.toLowerCase(), rawQuery);
-      const matchBarcode = hasWords((p.barcode || '').toLowerCase(), rawQuery);
-      const matchMrp = String(p.mrp).includes(rawQuery);
-      const matchCategory = hasWords((p.category || '').toLowerCase(), rawQuery);
-
-      return matchName || matchBrand || matchSku || matchBarcode || matchMrp || matchCategory;
+      return matchWords(rawQuery, p.name, p.brand, p.sku, p.barcode, p.mrp, p.category);
     }).slice(0, 40);
   };
 
@@ -194,11 +180,7 @@ export default function SpotOrderModal({
     if (!query) return [];
 
     return products.filter(p => {
-      const matchBarcode = hasWords((p.barcode || '').toLowerCase(), query);
-      const matchSku = hasWords(p.sku.toLowerCase(), query);
-      const matchName = hasWords(p.name.toLowerCase(), query);
-      const matchBrand = hasWords((p.brand || '').toLowerCase(), query);
-      return matchBarcode || matchSku || matchName || matchBrand;
+      return matchWords(query, p.barcode, p.sku, p.name, p.brand);
     }).slice(0, 20);
   }, [products, topBarcodeQuery]);
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { 
   Package, Search, Filter, Download, Printer, ArrowUpDown, 
@@ -18,6 +18,7 @@ import {
   formatQuantity, formatCurrency
 } from '@/lib/reportsEngine';
 import { exportToCSV, exportToExcel, printReport, ExportColumn } from '@/lib/exportUtils';
+import ReportTable from '@/components/reports/ReportTable';
 
 interface ItemReportByPartyViewProps {
   filters: ReportFilterState;
@@ -182,9 +183,7 @@ export default function ItemReportByPartyView({
     ];
     if (!q) return all.slice(0, 40);
     return all.filter(p => 
-      hasWords(p.name.toLowerCase(), q) || 
-      (p.code && hasWords(p.code.toLowerCase(), q)) ||
-      (p.city && hasWords(p.city.toLowerCase(), q))
+      matchWords(q, p.name, p.code, p.city)
     ).slice(0, 40);
   }, [dbState.retailers, dbState.suppliers, partySearchText]);
 
@@ -194,9 +193,7 @@ export default function ItemReportByPartyView({
     const all = dbState.products || [];
     if (!q) return all.slice(0, 40);
     return all.filter(p => 
-      hasWords(p.name.toLowerCase(), q) || 
-      (p.brand && hasWords(p.brand.toLowerCase(), q)) ||
-      (p.product_code && hasWords(p.product_code.toLowerCase(), q))
+      matchWords(q, p.name, p.brand, p.product_code)
     ).slice(0, 40);
   }, [dbState.products, itemSearchText]);
 
@@ -714,296 +711,78 @@ export default function ItemReportByPartyView({
         </div>
       </div>
 
-      {/* 4. MAIN PRODUCT DATA TABLE */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        {/* Table Toolbar */}
-        <div className="px-4 sm:px-5 py-3.5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
-              Product-Wise Summary Table
-            </span>
-            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
-              {sortedRows.length} Items
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3 text-xs">
-            <span className="text-slate-500 font-medium hidden sm:inline">Rows per page:</span>
-            <select
-              value={pageSize}
-              onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-              className="text-xs font-bold bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700"
-            >
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={9999}>All</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Data Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-700 border-collapse">
-            <thead className="bg-slate-100/80 text-slate-700 font-extrabold text-[11px] uppercase tracking-wider border-b border-slate-200 select-none">
-              <tr>
-                <th className="p-3 text-center w-12">#</th>
-                
-                {/* Product Name */}
-                <th 
-                  onClick={() => handleSort('productName')}
-                  className="p-3 cursor-pointer hover:bg-slate-200/70 transition-colors"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <span>ITEM NAME / SKU</span>
-                    {sortField === 'productName' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-indigo-600" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
-                    ) : (
-                      <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />
-                    )}
-                  </div>
-                </th>
-
-                {/* Category & Brand */}
-                <th 
-                  onClick={() => handleSort('category')}
-                  className="p-3 cursor-pointer hover:bg-slate-200/70 transition-colors hidden md:table-cell"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <span>CATEGORY / BRAND</span>
-                    {sortField === 'category' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-indigo-600" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
-                    ) : (
-                      <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />
-                    )}
-                  </div>
-                </th>
-
-                {/* Sale Quantity */}
-                <th 
-                  onClick={() => handleSort('saleQty')}
-                  className="p-3 text-right cursor-pointer hover:bg-slate-200/70 transition-colors"
-                >
-                  <div className="flex items-center justify-end gap-1.5">
-                    <span>SALE QTY</span>
-                    {sortField === 'saleQty' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-indigo-600" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
-                    ) : (
-                      <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />
-                    )}
-                  </div>
-                </th>
-
-                {/* Sale Amount */}
-                <th 
-                  onClick={() => handleSort('saleAmount')}
-                  className="p-3 text-right cursor-pointer hover:bg-slate-200/70 transition-colors"
-                >
-                  <div className="flex items-center justify-end gap-1.5">
-                    <span>NET SALES</span>
-                    {sortField === 'saleAmount' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-indigo-600" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
-                    ) : (
-                      <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />
-                    )}
-                  </div>
-                </th>
-
-                {/* Purchase Quantity */}
-                <th 
-                  onClick={() => handleSort('purchaseQty')}
-                  className="p-3 text-right cursor-pointer hover:bg-slate-200/70 transition-colors hidden sm:table-cell"
-                >
-                  <div className="flex items-center justify-end gap-1.5">
-                    <span>PURCHASE QTY</span>
-                    {sortField === 'purchaseQty' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-indigo-600" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
-                    ) : (
-                      <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />
-                    )}
-                  </div>
-                </th>
-
-                {/* Purchase Amount */}
-                <th 
-                  onClick={() => handleSort('purchaseAmount')}
-                  className="p-3 text-right cursor-pointer hover:bg-slate-200/70 transition-colors hidden sm:table-cell"
-                >
-                  <div className="flex items-center justify-end gap-1.5">
-                    <span>PURCHASE AMT</span>
-                    {sortField === 'purchaseAmount' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-indigo-600" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
-                    ) : (
-                      <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />
-                    )}
-                  </div>
-                </th>
-
-                {/* Closing Stock */}
-                <th 
-                  onClick={() => handleSort('closingStock')}
-                  className="p-3 text-right cursor-pointer hover:bg-slate-200/70 transition-colors"
-                >
-                  <div className="flex items-center justify-end gap-1.5">
-                    <span>CLOSING STOCK</span>
-                    {sortField === 'closingStock' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-indigo-600" /> : <ArrowDown className="w-3.5 h-3.5 text-indigo-600" />
-                    ) : (
-                      <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60" />
-                    )}
-                  </div>
-                </th>
-
-                {/* Actions */}
-                <th className="p-3 text-center w-16 no-print">ACTION</th>
-              </tr>
-            </thead>
-
-            {/* Table Body */}
-            <tbody className="divide-y divide-slate-100 font-medium">
-              {paginatedRows.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="p-12 text-center text-slate-400 font-bold">
-                    <Package className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-1" />
-                    No products found matching the current filters.
-                  </td>
-                </tr>
-              ) : (
-                paginatedRows.map((row, idx) => {
-                  const isEven = idx % 2 === 0;
-                  const rowNumber = (currentPage - 1) * pageSize + idx + 1;
-                  return (
-                    <tr 
-                      key={row.id} 
-                      className={`transition-colors hover:bg-indigo-50/50 cursor-pointer ${isEven ? 'bg-white' : 'bg-slate-50/40'}`}
-                      onClick={() => { setDrilldownItem(row); setDrilldownTab('overview'); }}
-                    >
-                      {/* 1. Serial # */}
-                      <td className="p-3 text-center font-bold text-slate-400">
-                        {rowNumber}
-                      </td>
-
-                      {/* 2. Product Name & Specs */}
-                      <td className="p-3">
-                        <div className="flex flex-col">
-                          <span className="font-bold text-slate-900 leading-snug">
-                            {row.productName}
-                          </span>
-                          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
-                            {row.sku && <span className="font-mono bg-slate-100 px-1 rounded text-slate-600">SKU: {row.sku}</span>}
-                            <span>{row.packSize}</span>
-                            {row.mrp > 0 && <span className="font-bold text-emerald-700">MRP: ₹{row.mrp}</span>}
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* 3. Category & Brand */}
-                      <td className="p-3 hidden md:table-cell">
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-slate-800">{row.category || 'General'}</span>
-                          <span className="text-[11px] text-slate-400">{row.brand || 'Unbranded'}</span>
-                        </div>
-                      </td>
-
-                      {/* 4. Sale Quantity */}
-                      <td className="p-3 text-right font-mono font-bold text-slate-900">
-                        {row.saleQtyDisplay}
-                      </td>
-
-                      {/* 5. Net Sales Amount */}
-                      <td className="p-3 text-right font-bold text-emerald-700 font-mono">
-                        {row.saleAmount > 0 ? formatCurrency(row.saleAmount) : '₹ 0.00'}
-                      </td>
-
-                      {/* 6. Purchase Quantity */}
-                      <td className="p-3 text-right font-mono font-bold text-slate-700 hidden sm:table-cell">
-                        {row.purchaseQtyDisplay}
-                      </td>
-
-                      {/* 7. Purchase Amount */}
-                      <td className="p-3 text-right font-bold text-blue-700 font-mono hidden sm:table-cell">
-                        {row.purchaseAmount > 0 ? formatCurrency(row.purchaseAmount) : '₹ 0.00'}
-                      </td>
-
-                      {/* 8. Closing Physical Godown Stock */}
-                      <td className="p-3 text-right font-bold text-purple-900 font-mono">
-                        <span className="px-2 py-0.5 rounded-lg bg-purple-50 text-purple-800 border border-purple-200">
-                          {row.closingInventoryDisplay}
-                        </span>
-                      </td>
-
-                      {/* 9. Action Drilldown */}
-                      <td className="p-3 text-center no-print" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => { setDrilldownItem(row); setDrilldownTab('overview'); }}
-                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-indigo-100 hover:text-indigo-700 text-slate-600 transition-colors"
-                          title="View Product Breakdown & Movements"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-
-            {/* Sticky Table Footer */}
-            <tfoot className="sticky bottom-0 z-20 bg-slate-900 text-white font-black border-t-2 border-slate-700 shadow-xl text-[11px]">
-              <tr>
-                <td className="p-3 text-center text-indigo-300 font-black">Σ</td>
-                <td className="p-3 tracking-wide text-white" colSpan={2}>
-                  TOTAL ({summary.recordCount} Products)
-                </td>
-                <td className="p-3 text-right font-mono text-amber-300">
-                  {formatQuantity(summary.totalSaleQtyBase, summary.totalSaleQtyLoose)}
-                </td>
-                <td className="p-3 text-right font-mono text-emerald-300">
-                  {formatCurrency(summary.totalSaleAmount)}
-                </td>
-                <td className="p-3 text-right font-mono text-amber-300 hidden sm:table-cell">
-                  {formatQuantity(summary.totalPurchaseQtyBase, summary.totalPurchaseQtyLoose)}
-                </td>
-                <td className="p-3 text-right font-mono text-blue-300 hidden sm:table-cell">
-                  {formatCurrency(summary.totalPurchaseAmount)}
-                </td>
-                <td className="p-3 text-right font-mono text-purple-300 truncate">
-                  {summary.totalClosingDisplay}
-                </td>
-                <td className="p-3 no-print"></td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-
-        {/* Pagination Controls */}
-        {pageSize < 9999 && totalPages > 1 && (
-          <div className="px-4 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between text-xs no-print">
-            <span className="text-slate-500 font-medium">
-              Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, sortedRows.length)} of {sortedRows.length} items
-            </span>
-            <div className="flex items-center gap-1.5">
+      {/* 4. MAIN PRODUCT DATA GRID */}
+      <ReportTable<ItemReportByPartyRow>
+        title={<span>Item-wise summary</span>}
+        hideSearch
+        data={rows}
+        rowKey={(r) => r.id}
+        defaultSort={{ key: 'productName', direction: 'asc' }}
+        onRowClick={(row) => { setDrilldownItem(row); setDrilldownTab('overview'); }}
+        emptyMessage="No products found matching the current filters."
+        columns={[
+          {
+            header: 'Item Name', key: 'productName', minWidth: 260,
+            filterText: (r) => `${r.productName} ${r.sku || ''}`,
+            render: (r) => (
+              <div className="flex flex-col">
+                <span className="font-bold text-slate-900 leading-snug">{r.productName}</span>
+                <span className="flex items-center gap-2 text-[11px] text-slate-500">
+                  {r.sku && <span className="font-mono">SKU: {r.sku}</span>}
+                  {r.packSize && <span>{r.packSize}</span>}
+                  {r.mrp > 0 && <span className="font-semibold text-emerald-700">MRP: ₹{r.mrp}</span>}
+                </span>
+              </div>
+            )
+          },
+          { header: 'Category', key: 'category', accessor: (r) => r.category || 'General' },
+          { header: 'Brand', key: 'brand', accessor: (r) => r.brand || '' },
+          {
+            header: 'Sale Qty', key: 'saleQtyDisplay', align: 'right',
+            sortValue: (r) => r.totalSaleQtyPieces,
+            render: (r) => <span className="font-mono font-bold">{r.saleQtyDisplay}</span>
+          },
+          {
+            header: 'Net Sales', key: 'saleAmount', format: 'currency',
+            render: (r) => <span className="font-mono font-bold text-emerald-700">{formatCurrency(r.saleAmount || 0)}</span>
+          },
+          {
+            header: 'Purchase Qty', key: 'purchaseQtyDisplay', align: 'right',
+            sortValue: (r) => r.totalPurchaseQtyPieces,
+            render: (r) => <span className="font-mono">{r.purchaseQtyDisplay}</span>
+          },
+          {
+            header: 'Purchase Amount', key: 'purchaseAmount', format: 'currency',
+            render: (r) => <span className="font-mono text-blue-700">{formatCurrency(r.purchaseAmount || 0)}</span>
+          },
+          {
+            header: 'Closing Stock', key: 'closingInventoryDisplay', align: 'right',
+            sortValue: (r) => r.totalClosingPhysicalPieces,
+            render: (r) => <span className="font-mono font-bold text-purple-900">{r.closingInventoryDisplay}</span>
+          },
+          {
+            header: 'View', sortable: false, filterable: false, align: 'center',
+            render: (r) => (
               <button
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-100"
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setDrilldownItem(r); setDrilldownTab('overview'); }}
+                className="p-1 rounded hover:bg-indigo-100 hover:text-indigo-700 text-slate-500 no-print"
+                title="View item breakdown"
               >
-                <ChevronLeft className="w-4 h-4" />
+                <Eye className="w-4 h-4" />
               </button>
-              <span className="font-bold text-slate-800 px-2">
-                {currentPage} / {totalPages}
-              </span>
-              <button
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-100"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+            )
+          }
+        ]}
+        totals={{
+          productName: `${summary.recordCount} items`,
+          saleQtyDisplay: formatQuantity(summary.totalSaleQtyBase, summary.totalSaleQtyLoose),
+          saleAmount: summary.totalSaleAmount,
+          purchaseQtyDisplay: formatQuantity(summary.totalPurchaseQtyBase, summary.totalPurchaseQtyLoose),
+          purchaseAmount: summary.totalPurchaseAmount,
+          closingInventoryDisplay: summary.totalClosingDisplay
+        }}
+      />
 
       {/* 5. PRODUCT DRILL-DOWN MODAL */}
       {drilldownItem && (

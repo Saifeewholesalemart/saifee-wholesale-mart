@@ -3,7 +3,7 @@
  * Saifee General Stores FMCG Distribution Management System
  */
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import { 
   Invoice, Order, Fulfilment, Product, Retailer, Company, Profile, 
   Purchase, Payment, SalesReturn, InventoryBatch, Inventory, StockLedgerEntry, Supplier,
@@ -386,45 +386,25 @@ export function isInvoiceMatchingSearch(
 ): boolean {
   if (!query || !query.trim()) return true;
   const q = query.trim().toLowerCase();
-
-  // 1. Invoice Number or ID
-  if (hasWords(inv.invoice_number?.toLowerCase(), q)) return true;
-  if (hasWords(inv.id?.toLowerCase(), q)) return true;
-  if (hasWords(inv.order_ref_id?.toLowerCase(), q)) return true;
-
-  // 2. Retailer Info
   const ret = byId(db.retailers).get(inv.retailer_id);
-  if (ret) {
-    if (hasWords(ret.shop_name?.toLowerCase(), q)) return true;
-    if (hasWords(ret.owner_name?.toLowerCase(), q)) return true;
-    if (hasWords(ret.city?.toLowerCase(), q)) return true;
-    if (ret.phone?.includes(q)) return true;
-    if (hasWords(ret.gstin?.toLowerCase(), q)) return true;
-  }
-
-  // 3. Salesperson Info
-  const spName = getInvoiceSalespersonName(inv, db);
-  if (hasWords(spName?.toLowerCase(), q)) return true;
-
-  // 4. Line Items / Product Info
-  if (inv.items && inv.items.length > 0) {
-    const hasItemMatch = inv.items.some(item => {
-      if (hasWords((item as any).product_name?.toLowerCase(), q)) return true;
-      if (hasWords(item.packing?.toLowerCase(), q)) return true;
-      if (hasWords((item as any).hsn_code?.toLowerCase(), q)) return true;
-      const prod = byId(db.products).get(item.product_id);
-      if (prod) {
-        if (hasWords(prod.name?.toLowerCase(), q)) return true;
-        if (hasWords(prod.brand?.toLowerCase(), q)) return true;
-        if (hasWords(prod.category?.toLowerCase(), q)) return true;
-        if (hasWords(prod.hsn?.toLowerCase(), q)) return true;
-      }
-      return false;
-    });
-    if (hasItemMatch) return true;
-  }
-
-  return false;
+  const products = byId(db.products);
+  // Every typed word must be found somewhere in the bill: its number, the shop, the
+  // salesperson or any of its items ("jain ponds" = Jain's bills that have Ponds).
+  const itemWords: string[] = [];
+  (inv.items || []).forEach(item => {
+    const prod = products.get(item.product_id);
+    itemWords.push(
+      (item as any).product_name || '', item.packing || '', (item as any).hsn_code || '',
+      prod?.name || '', prod?.brand || '', prod?.category || '', prod?.hsn || ''
+    );
+  });
+  return matchWords(
+    q,
+    inv.invoice_number, inv.id, inv.order_ref_id,
+    ret?.shop_name, ret?.owner_name, ret?.city, ret?.phone, ret?.mobile, ret?.gstin, ret?.retailer_code,
+    getInvoiceSalespersonName(inv, db),
+    itemWords
+  );
 }
 
 export function isOrderMatchingSearch(
@@ -434,35 +414,21 @@ export function isOrderMatchingSearch(
 ): boolean {
   if (!query || !query.trim()) return true;
   const q = query.trim().toLowerCase();
-
-  if (hasWords(order.order_number?.toLowerCase(), q)) return true;
-  if (hasWords(order.id?.toLowerCase(), q)) return true;
-
   const ret = byId(db.retailers).get(order.retailer_id);
-  if (ret) {
-    if (hasWords(ret.shop_name?.toLowerCase(), q)) return true;
-    if (hasWords(ret.owner_name?.toLowerCase(), q)) return true;
-    if (hasWords(ret.city?.toLowerCase(), q)) return true;
-  }
-
   const sp = byId(db.profiles).get(order.created_by);
-  if (sp && hasWords(sp.name?.toLowerCase(), q)) return true;
-
-  if (order.items && order.items.length > 0) {
-    const hasItemMatch = order.items.some(item => {
-      if (hasWords(item.product_name?.toLowerCase(), q)) return true;
-      const prod = byId(db.products).get(item.product_id);
-      if (prod) {
-        if (hasWords(prod.name?.toLowerCase(), q)) return true;
-        if (hasWords(prod.brand?.toLowerCase(), q)) return true;
-        if (hasWords(prod.category?.toLowerCase(), q)) return true;
-      }
-      return false;
-    });
-    if (hasItemMatch) return true;
-  }
-
-  return false;
+  const products = byId(db.products);
+  const itemWords: string[] = [];
+  (order.items || []).forEach(item => {
+    const prod = products.get(item.product_id);
+    itemWords.push(item.product_name || '', prod?.name || '', prod?.brand || '', prod?.category || '');
+  });
+  return matchWords(
+    q,
+    order.order_number, order.id,
+    ret?.shop_name, ret?.owner_name, ret?.city, ret?.retailer_code,
+    sp?.name,
+    itemWords
+  );
 }
 
 // ----------------------------------------------------
@@ -4442,37 +4408,25 @@ export function getPartyItemReport(
   if (f.searchQuery && f.searchQuery.trim()) {
     const q = f.searchQuery.trim().toLowerCase();
     rows = rows.filter(r => {
-      // 1. Retailer Name & Info
-      if (hasWords(r.partyName.toLowerCase(), q)) return true;
-      if (r.ownerName && hasWords(r.ownerName.toLowerCase(), q)) return true;
-      if (r.retailerCode && hasWords(r.retailerCode.toLowerCase(), q)) return true;
-      if (r.mobile && hasWords(r.mobile, q)) return true;
-      if (r.phone && hasWords(r.phone, q)) return true;
-      if (r.city && hasWords(r.city.toLowerCase(), q)) return true;
-      if (r.gstin && hasWords(r.gstin.toLowerCase(), q)) return true;
+      // 1. Party details (words may be spread over name, owner, code, city...)
+      const party = [r.partyName, r.ownerName, r.retailerCode, r.mobile, r.phone, r.city, r.gstin];
+      if (matchWords(q, party)) return true;
 
-      // 2. Product Name, SKU, Order #, Invoice # in Sales Transactions
+      // 2. Party details together with one sale line ("jain ponds" = Ponds sold to Jain)
       const matchInSales = r.salesTransactions.some(t =>
-        (t.productName && hasWords(t.productName.toLowerCase(), q)) ||
-        (t.brand && hasWords(t.brand.toLowerCase(), q)) ||
-        (t.invoiceNumber && hasWords(t.invoiceNumber.toLowerCase(), q)) ||
-        (t.orderNumber && hasWords(t.orderNumber.toLowerCase(), q)) ||
-        (t.salesperson && hasWords(t.salesperson.toLowerCase(), q))
+        matchWords(q, party, t.productName, t.brand, t.invoiceNumber, t.orderNumber, t.salesperson)
       );
       if (matchInSales) return true;
 
-      // 3. Purchase Transactions
+      // 3. Purchase lines
       const matchInPurchase = r.purchaseTransactions.some(t =>
-        (t.productName && hasWords(t.productName.toLowerCase(), q)) ||
-        (t.purchaseNumber && hasWords(t.purchaseNumber.toLowerCase(), q)) ||
-        (t.supplierName && hasWords(t.supplierName.toLowerCase(), q))
+        matchWords(q, party, t.productName, t.purchaseNumber, t.supplierName)
       );
       if (matchInPurchase) return true;
 
-      // 4. Product Breakdown
+      // 4. Product breakdown
       const matchInBreakdown = r.productBreakdown.some(pb =>
-        hasWords(pb.productName.toLowerCase(), q) ||
-        (pb.brand && hasWords(pb.brand.toLowerCase(), q))
+        matchWords(q, party, pb.productName, pb.brand)
       );
       if (matchInBreakdown) return true;
 
@@ -5240,12 +5194,9 @@ export function getItemReportByParty(
   if (f.searchQuery && f.searchQuery.trim()) {
     const q = f.searchQuery.trim().toLowerCase();
     rows = rows.filter(r => 
-      hasWords(r.productName.toLowerCase(), q) ||
-      (r.sku && hasWords(r.sku.toLowerCase(), q)) ||
-      (r.brand && hasWords(r.brand.toLowerCase(), q)) ||
-      (r.category && hasWords(r.category.toLowerCase(), q)) ||
-      r.salesTransactions.some(t => hasWords(t.retailerName.toLowerCase(), q) || hasWords(t.invoiceNumber.toLowerCase(), q)) ||
-      r.purchaseTransactions.some(t => hasWords(t.supplierName.toLowerCase(), q) || hasWords(t.purchaseNumber.toLowerCase(), q))
+      matchWords(q, r.productName, r.sku, r.brand, r.category) ||
+      r.salesTransactions.some(t => matchWords(q, r.productName, r.sku, r.brand, r.category, t.retailerName, t.invoiceNumber)) ||
+      r.purchaseTransactions.some(t => matchWords(q, r.productName, r.sku, r.brand, r.category, t.supplierName, t.purchaseNumber))
     );
     rows = rows.map((r, i) => ({ ...r, srNo: i + 1 }));
   }

@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import { getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect, useMemo, Suspense } from 'react';
 import { useDb } from '@/context/DbContext';
@@ -324,12 +324,7 @@ function AdminPaymentsContent() {
         const q = paymentsSearchTerm.toLowerCase();
         const ret = retailers.find(r => r.id === p.retailer_id);
         const match = 
-          hasWords((p.payment_number || '').toLowerCase(), q) ||
-          hasWords((p.reference_number || '').toLowerCase(), q) ||
-          hasWords((p.notes || '').toLowerCase(), q) ||
-          hasWords((ret?.shop_name || '').toLowerCase(), q) ||
-          hasWords((ret?.retailer_code || '').toLowerCase(), q) ||
-          hasWords((ret?.city || '').toLowerCase(), q);
+          matchWords(q, (p.payment_number || ''), (p.reference_number || ''), (p.notes || ''), (ret?.shop_name || ''), (ret?.retailer_code || ''), (ret?.city || ''));
         if (!match) return false;
       }
 
@@ -388,11 +383,7 @@ function AdminPaymentsContent() {
     if (!retailerSearchTerm.trim()) return retailers;
     const q = retailerSearchTerm.toLowerCase();
     return retailers.filter(r => 
-      hasWords(r.shop_name.toLowerCase(), q) ||
-      hasWords((r.retailer_code || '').toLowerCase(), q) ||
-      hasWords((r.owner_name || '').toLowerCase(), q) ||
-      hasWords((r.city || '').toLowerCase(), q) ||
-      (r.mobile || '').includes(q)
+      matchWords(q, r.shop_name, r.retailer_code, r.owner_name, r.city, r.mobile)
     );
   }, [retailers, retailerSearchTerm]);
 

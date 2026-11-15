@@ -233,3 +233,49 @@ input[type=number] {
 }
 
 
+
+/* Report grid (spreadsheet look for every report table) */
+.report-grid-table .rg-th {
+  background-color: #eef2f7;
+  color: #1e293b;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 6px 8px;
+  border-right: 1px solid #cbd5e1;
+  border-bottom: 2px solid #94a3b8;
+  white-space: nowrap;
+  user-select: none;
+}
+.report-grid-table .rg-td {
+  padding: 5px 8px;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  color: #1e293b;
+  vertical-align: middle;
+}
+.report-grid-table .rg-row:nth-child(even) > .rg-td { background-color: #f8fafc; }
+.report-grid-table .rg-row:nth-child(odd) > .rg-td { background-color: #ffffff; }
+.report-grid-table .rg-row:hover > .rg-td { background-color: #eef2ff; }
+.report-grid-table .rg-rownum {
+  width: 44px;
+  min-width: 44px;
+  color: #64748b;
+  font-weight: 700;
+  background-color: #f1f5f9 !important;
+  border-right: 1px solid #cbd5e1;
+}
+.report-grid-table th.rg-rownum { background-color: #e2e8f0 !important; }
+.report-grid-table .rg-tf {
+  padding: 7px 8px;
+  background-color: #e2e8f0;
+  color: #0f172a;
+  font-weight: 800;
+  border-top: 2px solid #94a3b8;
+  border-right: 1px solid #cbd5e1;
+  white-space: nowrap;
+}
+@media print {
+  .report-grid-table .rg-th, .report-grid-table .rg-tf, .report-grid-table .rg-td { position: static !important; }
+}

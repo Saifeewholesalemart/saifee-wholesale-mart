@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useEffect, useMemo, useRef, useDeferredValue, useCallback } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
@@ -105,9 +105,7 @@ export default function RetailerDashboard() {
       if (!matchCat) return false;
 
       return q === '' ||
-        hasWords((p.name || '').toLowerCase(), q) ||
-        hasWords((p.brand || '').toLowerCase(), q) ||
-        hasWords((p.product_code || '').toLowerCase(), q);
+        matchWords(q, (p.name || ''), (p.brand || ''), (p.product_code || ''));
     });
   }, [retailerObj, products, visibleToRetailer, selectedCategory, productCats, deferredSearch]);
 

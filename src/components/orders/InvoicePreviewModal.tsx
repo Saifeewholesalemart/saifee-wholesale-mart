@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import { getSellerDetails } from '@/lib/db';
 import { isIntraStateSupply, formatPlaceOfSupply } from '@/lib/db';
 import React, { useState } from 'react';
@@ -353,7 +353,7 @@ export default function InvoicePreviewModal({
       const batchNo = (item.batch_number || batches?.find(b => b.product_id === item.product_id)?.batch_number || '').toLowerCase();
       const packing = (item.packing || prod?.pack_size || '').toLowerCase();
       const mrp = String(item.mrp || prod?.mrp || '');
-      return hasWords(prodName, q) || hasWords(hsn, q) || batchNo.includes(q) || packing.includes(q) || mrp.includes(q);
+      return matchWords(q, prodName, hsn, batchNo, packing, mrp);
     });
   }, [rawInvoiceItems, itemSearchQuery, products, batches]);
 

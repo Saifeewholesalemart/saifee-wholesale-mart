@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -92,9 +92,7 @@ export default function SmartSearchBar({
             });
           }
         } else if (item && typeof item === 'object') {
-          const matchTitle = hasWords((item.title || '').toLowerCase(), query);
-          const matchSub = hasWords((item.subtitle || '').toLowerCase(), query);
-          if ((matchTitle || matchSub) && !seenTitles.has(item.title.toLowerCase())) {
+          if (matchWords(query, item.title, item.subtitle) && !seenTitles.has(item.title.toLowerCase())) {
             seenTitles.add(item.title.toLowerCase());
             results.push({
               ...item,
@@ -145,13 +143,7 @@ export default function SmartSearchBar({
     if (shouldInclude('retailer') && retailers) {
       for (const ret of retailers) {
         if (results.length >= maxSuggestions * 2) break;
-        const matchShop = hasWords((ret.shop_name || '').toLowerCase(), query);
-        const matchOwner = hasWords((ret.owner_name || '').toLowerCase(), query);
-        const matchCity = hasWords((ret.city || '').toLowerCase(), query);
-        const matchCode = hasWords((ret.retailer_code || '').toLowerCase(), query);
-        const matchMobile = hasWords((ret.mobile || '').toLowerCase(), query);
-
-        if ((matchShop || matchOwner || matchCity || matchCode || matchMobile) && !seenTitles.has(ret.shop_name.toLowerCase())) {
+        if (matchWords(query, ret.shop_name, ret.owner_name, ret.city, ret.retailer_code, ret.mobile) && !seenTitles.has(ret.shop_name.toLowerCase())) {
           seenTitles.add(ret.shop_name.toLowerCase());
           results.push({
             id: `ret-${ret.id}`,

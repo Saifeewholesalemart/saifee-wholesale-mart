@@ -26,3 +26,23 @@ export function hasWords(text: unknown, query: unknown): boolean {
   for (const w of words) if (!hay.includes(w)) return false;
   return true;
 }
+
+/**
+ * Word search over a whole record: every typed word must be found in at least one of the
+ * fields, so "jain khachrod" finds the shop "Jain Kirana" in the city "Khachrod".
+ * Blank, missing and non-text fields are skipped.
+ */
+export function matchWords(query: unknown, ...fields: unknown[]): boolean {
+  const q = typeof query === 'string' ? query : String(query ?? '');
+  if (!q.trim()) return true;
+  const parts: string[] = [];
+  for (const f of fields) {
+    if (f === null || f === undefined || f === false) continue;
+    if (Array.isArray(f)) {
+      for (const x of f) if (typeof x === 'string' || typeof x === 'number') parts.push(String(x));
+    } else if (typeof f === 'string' || typeof f === 'number') {
+      parts.push(String(f));
+    }
+  }
+  return hasWords(parts.join(' \u0001 ').toLowerCase(), q.toLowerCase());
+}

@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useEffect, Suspense } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -223,8 +223,7 @@ function ConsolidationWorkspaceContent() {
     const shopName = ret ? ret.shop_name.toLowerCase() : '';
     const num = ord.order_number.toLowerCase();
     const matchSearch = searchTerm.trim() === '' || 
-      hasWords(shopName, searchTerm.toLowerCase()) || 
-      hasWords(num, searchTerm.toLowerCase());
+      matchWords(searchTerm, shopName, num);
 
     return matchCity && matchRetailer && matchSalesperson && matchDate && matchDays && matchProduct && matchCompany && matchStatus && matchSearch;
   });

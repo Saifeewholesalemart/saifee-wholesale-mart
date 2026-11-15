@@ -17,6 +17,7 @@ import {
   getItemReportByParty, getPartyItemReport, formatQuantity
 } from '@/lib/reportsEngine';
 import ReportFilterBar from '@/components/reports/ReportFilterBar';
+import { ReportSearchContext } from '@/components/reports/ReportTable';
 import FilterDiagnosticsBar from '@/components/reports/FilterDiagnosticsBar';
 
 // Category Views
@@ -417,6 +418,7 @@ export default function AdminReports() {
       )}
 
       {/* DYNAMIC REPORT CATEGORY VIEW */}
+      <ReportSearchContext.Provider value={filters.searchQuery || ''}>
       <div className="transition-all duration-150">
         {activeCategory === 'sales' && (
           <SalesReportsView
@@ -548,6 +550,7 @@ export default function AdminReports() {
           />
         )}
       </div>
+      </ReportSearchContext.Provider>
 
       {/* Invoice Detail Quick Inspection Modal */}
       {inspectedInvoice && (

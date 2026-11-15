@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useRef } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
@@ -971,10 +971,7 @@ export default function AIPurchaseImport() {
   const searchResults = searchQuery.trim() === '' ? [] : products.filter(p => {
     const q = searchQuery.toLowerCase();
     const compName = companies.find(c => c.id === p.company_id)?.name || '';
-    return hasWords(p.name.toLowerCase(), q) ||
-           hasWords(p.sku.toLowerCase(), q) ||
-           hasWords(p.barcode.toLowerCase(), q) ||
-           hasWords(compName.toLowerCase(), q);
+    return matchWords(q, p.name, p.sku, p.barcode, compName);
   });
 
   // Download Extracted Data Handler
@@ -1004,14 +1001,7 @@ export default function AIPurchaseImport() {
       const matchedProd = products.find(p => p.id === line.matched_product_id);
       const suggestedProd = products.find(p => p.id === line.suggested_product_id);
       
-      const inExtractedName = hasWords((line.custom_name || line.extracted_name).toLowerCase(), q);
-      const inMatchedName = hasWords(matchedProd?.name.toLowerCase(), q) || false;
-      const inSuggestedName = hasWords(suggestedProd?.name.toLowerCase(), q) || false;
-      const inHsn = hasWords(line.hsn.toLowerCase(), q) || hasWords(matchedProd?.hsn.toLowerCase(), q) || false;
-      const inBatch = hasWords(line.batch.toLowerCase(), q);
-      const inSku = hasWords(line.sku?.toLowerCase(), q) || hasWords(matchedProd?.sku.toLowerCase(), q) || hasWords(suggestedProd?.sku.toLowerCase(), q) || false;
-      
-      if (!inExtractedName && !inMatchedName && !inSuggestedName && !inHsn && !inBatch && !inSku) {
+      if (!matchWords(q, line.custom_name || line.extracted_name, matchedProd?.name, suggestedProd?.name, line.hsn, matchedProd?.hsn, line.batch, line.sku, matchedProd?.sku, suggestedProd?.sku)) {
         return false;
       }
     }

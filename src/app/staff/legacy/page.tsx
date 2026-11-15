@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import { getHomeStateCode } from '@/lib/db';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
@@ -635,10 +635,7 @@ export default function StaffDashboardPage() {
       if (selectedRoute !== 'ALL' && lot.route !== selectedRoute) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        return hasWords(lot.shopName.toLowerCase(), q) ||
-               hasWords(lot.ownerName.toLowerCase(), q) ||
-               hasWords(lot.mobile, q) ||
-               lot.orderNumbers.some(on => hasWords(on.toLowerCase(), q));
+        return matchWords(q, lot.shopName, lot.ownerName, lot.mobile, lot.orderNumbers);
       }
       return true;
     });
@@ -650,10 +647,7 @@ export default function StaffDashboardPage() {
       if (selectedRoute !== 'ALL' && lot.route !== selectedRoute) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        return hasWords(lot.shopName.toLowerCase(), q) ||
-               hasWords(lot.ownerName.toLowerCase(), q) ||
-               hasWords(lot.mobile, q) ||
-               lot.orderNumbers.some(on => hasWords(on.toLowerCase(), q));
+        return matchWords(q, lot.shopName, lot.ownerName, lot.mobile, lot.orderNumbers);
       }
       return true;
     });
@@ -664,10 +658,7 @@ export default function StaffDashboardPage() {
       if (selectedRoute !== 'ALL' && card.route !== selectedRoute) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        return hasWords(card.shopName.toLowerCase(), q) ||
-               hasWords(card.ownerName.toLowerCase(), q) ||
-               hasWords(card.phone, q) ||
-               card.sourceOrderNumbers.some(on => hasWords(on.toLowerCase(), q));
+        return matchWords(q, card.shopName, card.ownerName, card.phone, card.sourceOrderNumbers);
       }
       return true;
     });

@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Filter, Download, Printer, ArrowUpDown, 
@@ -17,6 +17,7 @@ import {
   formatQuantity, formatCurrency
 } from '@/lib/reportsEngine';
 import { exportToCSV, exportToExcel, printReport, ExportColumn } from '@/lib/exportUtils';
+import ReportTable from '@/components/reports/ReportTable';
 
 interface PartyItemReportsViewProps {
   filters: ReportFilterState;
@@ -188,10 +189,7 @@ export default function PartyItemReportsView({
     if (!itemSearchText.trim()) return availableProducts;
     const q = itemSearchText.toLowerCase();
     return availableProducts.filter(p => 
-      hasWords(p.name.toLowerCase(), q) ||
-      (p.brand && hasWords(p.brand.toLowerCase(), q)) ||
-      (p.sku && hasWords(p.sku.toLowerCase(), q)) ||
-      (p.pack_size && hasWords(p.pack_size.toLowerCase(), q))
+      matchWords(q, p.name, p.brand, p.sku, p.pack_size)
     );
   }, [availableProducts, itemSearchText]);
 
@@ -247,10 +245,7 @@ export default function PartyItemReportsView({
     if (!partySearchText.trim()) return availableParties;
     const q = partySearchText.toLowerCase();
     return availableParties.filter(p => 
-      hasWords(p.name.toLowerCase(), q) ||
-      (p.owner && hasWords(p.owner.toLowerCase(), q)) ||
-      (p.code && hasWords(p.code.toLowerCase(), q)) ||
-      (p.city && hasWords(p.city.toLowerCase(), q))
+      matchWords(q, p.name, p.owner, p.code, p.city)
     );
   }, [availableParties, partySearchText]);
 
@@ -915,350 +910,87 @@ export default function PartyItemReportsView({
         </div>
       )}
 
-      {/* 5. MAIN TABLE (DESKTOP) & MOBILE CARDS */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        {/* Table Top Status Bar */}
-        <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/50">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-black text-slate-900">
-              Retailer / Party Summary ({sortedRows.length} Parties)
-            </h3>
-            {searchQuery && (
-              <span className="text-xs text-slate-500 font-bold">
-                matching "{searchQuery}"
-              </span>
-            )}
-          </div>
-
-          {/* Page size picker */}
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
-            <span>Show:</span>
-            <select
-              value={pageSize}
-              onChange={(e) => setPageSize(Number(e.target.value))}
-              className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-800 outline-none cursor-pointer"
-            >
-              <option value={25}>25 per page</option>
-              <option value={50}>50 per page</option>
-              <option value={100}>100 per page</option>
-              <option value={-1}>All Parties</option>
-            </select>
-          </div>
+      {/* 5. MAIN PARTY DATA GRID */}
+      {sortedRows.length === 0 ? (
+        <div className="bg-white rounded-lg border border-slate-300 p-12 text-center space-y-3">
+          <h4 className="text-sm font-bold text-slate-800">No transactions found for the selected filters.</h4>
+          <p className="text-xs text-slate-500 max-w-md mx-auto">
+            Try changing the date range, company, category, item or salesperson filters.
+          </p>
+          <button
+            onClick={handleResetFilters}
+            className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 cursor-pointer"
+          >
+            Reset Filters
+          </button>
         </div>
-
-        {/* Empty State Check */}
-        {sortedRows.length === 0 ? (
-          <div className="p-12 text-center space-y-3">
-            <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mx-auto text-xl font-bold">
-              🔍
-            </div>
-            <h4 className="text-sm font-bold text-slate-800">
-              No transactions found for the selected filters.
-            </h4>
-            <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Try adjusting the date range, company, category, item, or salesperson filters to view historical commercial sales and purchase data.
-            </p>
-            <button
-              onClick={handleResetFilters}
-              className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 transition-all cursor-pointer"
-            >
-              Reset Filters
-            </button>
-          </div>
-        ) : (
-          <>
-            {/* Desktop Table */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-900 text-white text-[11px] font-black uppercase tracking-wider">
-                    <th className="py-3 px-4 w-12 text-center">#</th>
-                    <th 
-                      onClick={() => toggleSort('partyName')}
-                      className="py-3 px-4 cursor-pointer hover:bg-slate-800 transition-colors"
-                    >
-                      <div className="flex items-center gap-1.5">
-                        <span>RETAILER / PARTY</span>
-                        {sortField === 'partyName' ? (
-                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-indigo-400" /> : <ArrowDown className="w-3 h-3 text-indigo-400" />
-                        ) : <ArrowUpDown className="w-3 h-3 text-slate-500" />}
-                      </div>
-                    </th>
-                    <th 
-                      onClick={() => toggleSort('saleQty')}
-                      className="py-3 px-4 text-right cursor-pointer hover:bg-slate-800 transition-colors"
-                    >
-                      <div className="flex items-center justify-end gap-1.5">
-                        <span>SALE QUANTITY</span>
-                        {sortField === 'saleQty' ? (
-                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-indigo-400" /> : <ArrowDown className="w-3 h-3 text-indigo-400" />
-                        ) : <ArrowUpDown className="w-3 h-3 text-slate-500" />}
-                      </div>
-                    </th>
-                    {selectedProductObj && (
-                      <th className="py-3 px-4 text-right">
-                        AVG BILLING RATE
-                      </th>
-                    )}
-                    <th 
-                      onClick={() => toggleSort('saleAmount')}
-                      className="py-3 px-4 text-right cursor-pointer hover:bg-slate-800 transition-colors"
-                    >
-                      <div className="flex items-center justify-end gap-1.5">
-                        <span>SALE AMOUNT</span>
-                        {sortField === 'saleAmount' ? (
-                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-indigo-400" /> : <ArrowDown className="w-3 h-3 text-indigo-400" />
-                        ) : <ArrowUpDown className="w-3 h-3 text-slate-500" />}
-                      </div>
-                    </th>
-                    <th 
-                      onClick={() => toggleSort('purchaseQty')}
-                      className="py-3 px-4 text-right cursor-pointer hover:bg-slate-800 transition-colors"
-                    >
-                      <div className="flex items-center justify-end gap-1.5">
-                        <span>PURCHASE QUANTITY</span>
-                        {sortField === 'purchaseQty' ? (
-                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-indigo-400" /> : <ArrowDown className="w-3 h-3 text-indigo-400" />
-                        ) : <ArrowUpDown className="w-3 h-3 text-slate-500" />}
-                      </div>
-                    </th>
-                    {selectedProductObj && (
-                      <th className="py-3 px-4 text-right">
-                        AVG PURCHASE RATE
-                      </th>
-                    )}
-                    <th 
-                      onClick={() => toggleSort('purchaseAmount')}
-                      className="py-3 px-4 text-right cursor-pointer hover:bg-slate-800 transition-colors"
-                    >
-                      <div className="flex items-center justify-end gap-1.5">
-                        <span>PURCHASE AMOUNT</span>
-                        {sortField === 'purchaseAmount' ? (
-                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-indigo-400" /> : <ArrowDown className="w-3 h-3 text-indigo-400" />
-                        ) : <ArrowUpDown className="w-3 h-3 text-slate-500" />}
-                      </div>
-                    </th>
-                    <th className="py-3 px-3 text-center w-16">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-xs">
-                  {paginatedRows.map((row) => (
-                    <tr
-                      key={row.id}
-                      onClick={() => setDrilldownParty(row)}
-                      className="hover:bg-indigo-50/60 transition-colors cursor-pointer group"
-                    >
-                      <td className="py-3 px-4 text-center font-bold text-slate-400 group-hover:text-indigo-600">
-                        {row.srNo}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="font-extrabold text-slate-900 group-hover:text-indigo-900 transition-colors flex items-center gap-1.5">
-                          <span>{row.partyName}</span>
-                          {row.partyType === 'Supplier' && (
-                            <span className="text-[10px] px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded font-black uppercase">
-                              Supplier
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5">
-                          {row.ownerName && <span>Owner: {row.ownerName}</span>}
-                          {row.city && <span>• {row.city}</span>}
-                          {row.retailerCode && <span className="font-mono text-slate-400">({row.retailerCode})</span>}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-right font-black text-slate-800">
-                        {row.saleQty.toLocaleString('en-IN')}
-                      </td>
-                      {selectedProductObj && (
-                        <td className="py-3 px-4 text-right font-bold text-slate-600">
-                          {row.saleQty > 0 ? formatCurrency(row.avgBillingRate) : '—'}
-                        </td>
-                      )}
-                      <td className="py-3 px-4 text-right font-black text-indigo-700">
-                        {formatCurrency(row.saleAmount)}
-                      </td>
-                      <td className="py-3 px-4 text-right font-bold text-slate-600">
-                        {row.purchaseQty.toLocaleString('en-IN')}
-                      </td>
-                      {selectedProductObj && (
-                        <td className="py-3 px-4 text-right font-bold text-slate-600">
-                          {row.purchaseQty > 0 ? formatCurrency(row.avgPurchaseRate) : '—'}
-                        </td>
-                      )}
-                      <td className="py-3 px-4 text-right font-bold text-slate-700">
-                        {formatCurrency(row.purchaseAmount)}
-                      </td>
-                      <td className="py-3 px-3 text-center">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDrilldownParty(row);
-                          }}
-                          className="p-1.5 hover:bg-indigo-100 text-indigo-600 rounded-lg transition-colors cursor-pointer"
-                          title="View Retailer Drill-down"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                {/* 6. TOTAL ROW (Section 6 & 17) */}
-                <tfoot>
-                  <tr className="bg-slate-100/90 font-black text-slate-900 text-xs border-t-2 border-slate-300">
-                    <td className="py-3.5 px-4 text-center">TOTAL</td>
-                    <td className="py-3.5 px-4">
-                      <span>{summary.recordCount} Parties</span>
-                    </td>
-                    <td className="py-3.5 px-4 text-right font-black text-slate-900">
-                      {summary.totalSaleQty.toLocaleString('en-IN')}
-                    </td>
-                    {selectedProductObj && (
-                      <td className="py-3.5 px-4 text-right font-black text-slate-700">
-                        {summary.totalSaleQty > 0 ? formatCurrency(Math.round((summary.totalSaleAmount / summary.totalSaleQty) * 100) / 100) : '—'}
-                      </td>
-                    )}
-                    <td className="py-3.5 px-4 text-right font-black text-indigo-900 text-sm">
-                      {formatCurrency(summary.totalSaleAmount)}
-                    </td>
-                    <td className="py-3.5 px-4 text-right font-black text-slate-900">
-                      {summary.totalPurchaseQty.toLocaleString('en-IN')}
-                    </td>
-                    {selectedProductObj && (
-                      <td className="py-3.5 px-4 text-right font-black text-slate-700">
-                        {summary.totalPurchaseQty > 0 ? formatCurrency(Math.round((summary.totalPurchaseAmount / summary.totalPurchaseQty) * 100) / 100) : '—'}
-                      </td>
-                    )}
-                    <td className="py-3.5 px-4 text-right font-black text-slate-900 text-sm">
-                      {formatCurrency(summary.totalPurchaseAmount)}
-                    </td>
-                    <td className="py-3.5 px-3" />
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-
-            {/* Mobile Cards (Responsive Design, Section 37) */}
-            <div className="md:hidden divide-y divide-slate-200">
-              {paginatedRows.map((row) => (
-                <div 
-                  key={row.id} 
-                  className="p-4 space-y-3 hover:bg-slate-50 transition-colors"
-                  onClick={() => setDrilldownParty(row)}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-black text-indigo-600">#{row.srNo}</span>
-                        <h4 className="text-sm font-black text-slate-900">{row.partyName}</h4>
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">
-                        {row.ownerName && <span>{row.ownerName}</span>}
-                        {row.city && <span> • {row.city}</span>}
-                        {row.retailerCode && <span className="font-mono text-slate-400"> ({row.retailerCode})</span>}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDrilldownParty(row);
-                      }}
-                      className="px-2.5 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-bold rounded-lg shrink-0 cursor-pointer"
-                    >
-                      View Details
-                    </button>
-                  </div>
-
-                  {/* 4 Metrics Grid */}
-                  <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-xs">
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-400 block uppercase">Sale Qty</span>
-                      <span className="font-black text-slate-800">{row.saleQty.toLocaleString('en-IN')}</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-400 block uppercase">Sale Amount</span>
-                      <span className="font-black text-indigo-700">{formatCurrency(row.saleAmount)}</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-400 block uppercase">Purchase Qty</span>
-                      <span className="font-bold text-slate-700">{row.purchaseQty.toLocaleString('en-IN')}</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-400 block uppercase">Purchase Amount</span>
-                      <span className="font-bold text-slate-700">{formatCurrency(row.purchaseAmount)}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {/* Mobile Totals Footer */}
-              <div className="p-4 bg-slate-100 border-t border-slate-300 space-y-2">
-                <div className="flex items-center justify-between text-xs font-black text-slate-900">
-                  <span>TOTAL ({summary.recordCount} Parties)</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-500 block uppercase">Total Sale Qty</span>
-                    <span className="font-black text-slate-900">{summary.totalSaleQty.toLocaleString('en-IN')}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-500 block uppercase">Total Sale Amount</span>
-                    <span className="font-black text-indigo-900">{formatCurrency(summary.totalSaleAmount)}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-500 block uppercase">Total Purchase Qty</span>
-                    <span className="font-black text-slate-900">{summary.totalPurchaseQty.toLocaleString('en-IN')}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-500 block uppercase">Total Purchase Amount</span>
-                    <span className="font-black text-slate-900">{formatCurrency(summary.totalPurchaseAmount)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Pagination Bottom Bar (Section 34) */}
-            {totalPages > 1 && (
-              <div className="p-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white">
-                <div className="text-xs text-slate-500 font-bold">
-                  Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, sortedRows.length)} of {sortedRows.length} Parties
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    disabled={currentPage === 1}
-                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                    className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
-                      currentPage === 1 
-                        ? 'border-slate-200 text-slate-300 cursor-not-allowed' 
-                        : 'border-slate-300 hover:bg-slate-100 text-slate-700'
-                    }`}
-                  >
-                    Previous
-                  </button>
-                  <span className="text-xs font-extrabold text-slate-800 px-2">
-                    Page {currentPage} of {totalPages}
+      ) : (
+      <ReportTable<PartyReportPartyRow>
+        title={<span>Party-wise summary{searchQuery ? ` matching "${searchQuery}"` : ''}</span>}
+        hideSearch
+        data={rows}
+        rowKey={(r) => r.id}
+        defaultSort={{ key: 'partyName', direction: 'asc' }}
+        onRowClick={(row) => setDrilldownParty(row)}
+        columns={[
+          {
+            header: 'Party Name', key: 'partyName', minWidth: 240,
+            filterText: (r) => `${r.partyName} ${r.retailerCode || ''}`,
+            render: (r) => (
+              <div className="flex flex-col">
+                <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                  {r.partyName}
+                  {r.partyType === 'Supplier' && (
+                    <span className="text-[10px] px-1 bg-amber-100 text-amber-800 rounded font-black uppercase">Supplier</span>
+                  )}
+                </span>
+                {(r.ownerName || r.retailerCode) && (
+                  <span className="text-[11px] text-slate-500">
+                    {r.ownerName}{r.ownerName && r.retailerCode ? ' · ' : ''}{r.retailerCode && <span className="font-mono">{r.retailerCode}</span>}
                   </span>
-                  <button
-                    type="button"
-                    disabled={currentPage === totalPages}
-                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                    className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
-                      currentPage === totalPages 
-                        ? 'border-slate-200 text-slate-300 cursor-not-allowed' 
-                        : 'border-slate-300 hover:bg-slate-100 text-slate-700'
-                    }`}
-                  >
-                    Next
-                  </button>
-                </div>
+                )}
               </div>
-            )}
-          </>
-        )}
-      </div>
+            )
+          },
+          { header: 'City', key: 'city', accessor: (r) => r.city || '' },
+          { header: 'Sale Qty', key: 'saleQty', format: 'number' },
+          ...(selectedProductObj ? [{
+            header: 'Avg Sale Rate', key: 'avgBillingRate', format: 'currency' as const,
+            render: (r: PartyReportPartyRow) => (r.saleQty > 0 ? formatCurrency(r.avgBillingRate) : '—')
+          }] : []),
+          {
+            header: 'Sale Amount', key: 'saleAmount', format: 'currency',
+            render: (r) => <span className="font-bold text-indigo-700">{formatCurrency(r.saleAmount)}</span>
+          },
+          { header: 'Purchase Qty', key: 'purchaseQty', format: 'number' },
+          ...(selectedProductObj ? [{
+            header: 'Avg Purchase Rate', key: 'avgPurchaseRate', format: 'currency' as const,
+            render: (r: PartyReportPartyRow) => (r.purchaseQty > 0 ? formatCurrency(r.avgPurchaseRate) : '—')
+          }] : []),
+          { header: 'Purchase Amount', key: 'purchaseAmount', format: 'currency' },
+          {
+            header: 'View', sortable: false, filterable: false, align: 'center',
+            render: (r) => (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setDrilldownParty(r); }}
+                className="p-1 rounded hover:bg-indigo-100 text-indigo-600 no-print"
+                title="View party breakdown"
+              >
+                <Eye className="w-4 h-4" />
+              </button>
+            )
+          }
+        ]}
+        totals={{
+          partyName: `${summary.recordCount} parties`,
+          saleQty: summary.totalSaleQty,
+          saleAmount: summary.totalSaleAmount,
+          purchaseQty: summary.totalPurchaseQty,
+          purchaseAmount: summary.totalPurchaseAmount
+        }}
+      />
+      )}
 
       {/* 6. RETAILER DRILL-DOWN MODAL / DRAWER (Section 13 & 50) */}
       {drilldownParty && (

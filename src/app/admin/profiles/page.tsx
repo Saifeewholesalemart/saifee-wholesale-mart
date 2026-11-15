@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { Profile, Retailer, Company, Category } from '@/lib/db';
@@ -256,28 +256,15 @@ export default function ManageProfilesPage() {
         const q = searchTerm.toLowerCase();
         if (row.kind === 'retailer') {
           const r = row.data;
-          const matchShop = hasWords(r.shop_name?.toLowerCase(), q);
-          const matchOwner = hasWords(r.owner_name?.toLowerCase(), q);
-          const matchMobile = hasWords(r.mobile?.toLowerCase(), q);
-          const matchCode = hasWords(r.retailer_code?.toLowerCase(), q);
-          const matchCity = hasWords(r.city?.toLowerCase(), q);
-          const matchAddress = hasWords(r.address?.toLowerCase(), q);
-          if (!matchShop && !matchOwner && !matchMobile && !matchCode && !matchCity && !matchAddress) {
+          if (!matchWords(q, r.shop_name, r.owner_name, r.mobile, r.retailer_code, r.city, r.address)) {
             return false;
           }
         } else if (row.kind === 'staff') {
           const st = row.data;
-          const matchName = hasWords((st.full_name || st.name)?.toLowerCase(), q);
-          const matchMobile = (st.contact_no || st.mobile)?.includes(q);
-          const matchRole = hasWords(st.custom_role?.toLowerCase(), q);
-          const matchEmail = hasWords(st.email?.toLowerCase(), q);
-          if (!matchName && !matchMobile && !matchRole && !matchEmail) return false;
+          if (!matchWords(q, st.full_name || st.name, st.contact_no || st.mobile, st.custom_role, st.email)) return false;
         } else {
           const s = row.data;
-          const matchName = hasWords(s.name?.toLowerCase(), q);
-          const matchMobile = hasWords(s.mobile?.toLowerCase(), q);
-          const matchEmail = hasWords(s.email?.toLowerCase(), q);
-          if (!matchName && !matchMobile && !matchEmail) return false;
+          if (!matchWords(q, s.name, s.mobile, s.email)) return false;
         }
       }
 

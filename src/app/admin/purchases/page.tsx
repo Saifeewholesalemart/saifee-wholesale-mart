@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -1453,13 +1453,8 @@ export default function AdminPurchases() {
                   if (!purchaseSearchTerm.trim()) return true;
                   const q = purchaseSearchTerm.toLowerCase().trim();
                   const supplierObj = suppliers.find(s => s.id === pur.supplier_id);
-                  const matchSup = hasWords((supplierObj?.name || '').toLowerCase(), q);
-                  const matchInv = hasWords((pur.invoice_number || '').toLowerCase(), q);
-                  const matchItem = pur.items?.some(i => {
-                    const prod = products.find(p => p.id === i.product_id);
-                    return hasWords((prod?.name || '').toLowerCase(), q);
-                  });
-                  return matchSup || matchInv || matchItem;
+                  const itemNames = (pur.items || []).map(i => products.find(p => p.id === i.product_id)?.name || '');
+                  return matchWords(q, supplierObj?.name, pur.invoice_number, itemNames);
                 })
                 .map(pur => {
                 const supplierObj = suppliers.find(s => s.id === pur.supplier_id);

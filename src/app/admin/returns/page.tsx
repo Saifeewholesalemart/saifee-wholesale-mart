@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import {
@@ -74,10 +74,7 @@ export default function AdminReturns() {
     if (!retailerSearch.trim()) return retailers;
     const q = retailerSearch.toLowerCase();
     return retailers.filter(r =>
-      hasWords(r.shop_name.toLowerCase(), q) ||
-      hasWords((r.retailer_code || '').toLowerCase(), q) ||
-      hasWords((r.owner_name || '').toLowerCase(), q) ||
-      hasWords((r.city || '').toLowerCase(), q)
+      matchWords(q, r.shop_name, (r.retailer_code || ''), (r.owner_name || ''), (r.city || ''))
     );
   }, [retailers, retailerSearch]);
 
@@ -287,16 +284,11 @@ export default function AdminReturns() {
       const inv = sr.invoice_id ? invoices.find(i => i.id === sr.invoice_id) : undefined;
       const cnNo = (sr.credit_note_number || `CN-${sr.id.slice(-5)}`).toLowerCase();
 
-      const matchCN = cnNo.includes(q);
-      const matchRet = hasWords(ret?.shop_name.toLowerCase(), q) || hasWords((ret?.retailer_code || '').toLowerCase(), q);
-      const matchInv = hasWords(inv?.invoice_number.toLowerCase(), q) || false;
-      const matchReason = hasWords((sr.reason || '').toLowerCase(), q);
-      const matchItem = sr.items?.some(it => {
+      const itemWords = (sr.items || []).flatMap(it => {
         const p = products.find(prod => prod.id === it.product_id);
-        return hasWords(p?.name.toLowerCase(), q) || hasWords(p?.brand.toLowerCase(), q);
-      }) || false;
-
-      return matchCN || matchRet || matchInv || matchReason || matchItem;
+        return [p?.name || '', p?.brand || ''];
+      });
+      return matchWords(q, cnNo, ret?.shop_name, ret?.retailer_code, inv?.invoice_number, sr.reason, itemWords);
     });
   }, [salesReturns, retailers, invoices, products, returnSearchTerm]);
 

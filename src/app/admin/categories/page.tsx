@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -140,8 +140,7 @@ export default function CategoryManagementPage() {
   const filteredCategories = useMemo(() => {
     return categories.filter(cat => {
       const matchSearch = categorySearch.trim() === '' ||
-        hasWords(cat.name.toLowerCase(), categorySearch.toLowerCase()) ||
-        (cat.description && hasWords(cat.description.toLowerCase(), categorySearch.toLowerCase()));
+        matchWords(categorySearch, cat.name, cat.description);
       
       const matchStatus = 
         statusFilter === 'all' || 
@@ -156,12 +155,7 @@ export default function CategoryManagementPage() {
   const filteredProducts = useMemo(() => {
     return products.filter(prod => {
       const matchSearch = productSearch.trim() === '' ||
-        hasWords(prod.name.toLowerCase(), productSearch.toLowerCase()) ||
-        hasWords(prod.brand.toLowerCase(), productSearch.toLowerCase()) ||
-        hasWords(prod.product_code.toLowerCase(), productSearch.toLowerCase()) ||
-        hasWords(prod.hsn, productSearch) ||
-        (prod.sku && hasWords(prod.sku.toLowerCase(), productSearch.toLowerCase())) ||
-        (prod.barcode && hasWords(prod.barcode.toLowerCase(), productSearch.toLowerCase()));
+        matchWords(productSearch, prod.name, prod.brand, prod.product_code, prod.hsn, prod.sku, prod.barcode);
 
       const matchCompany = companyFilter === 'all' || prod.company_id === companyFilter;
 
@@ -191,10 +185,7 @@ export default function CategoryManagementPage() {
     if (!categoryProductSearch.trim()) return prods;
     const term = categoryProductSearch.toLowerCase();
     return prods.filter(p => 
-      hasWords(p.name.toLowerCase(), term) ||
-      hasWords(p.brand.toLowerCase(), term) ||
-      hasWords(p.product_code.toLowerCase(), term) ||
-      (p.sku && hasWords(p.sku.toLowerCase(), term))
+      matchWords(term, p.name, p.brand, p.product_code, p.sku)
     );
   }, [selectedCategory, productCategories, products, categoryProductSearch]);
 
@@ -210,10 +201,7 @@ export default function CategoryManagementPage() {
     if (!addProductsSearch.trim()) return available;
     const term = addProductsSearch.toLowerCase();
     return available.filter(p => 
-      hasWords(p.name.toLowerCase(), term) || 
-      hasWords(p.brand.toLowerCase(), term) ||
-      hasWords(p.product_code.toLowerCase(), term) ||
-      (p.sku && hasWords(p.sku.toLowerCase(), term))
+      matchWords(term, p.name, p.brand, p.product_code, p.sku)
     );
   }, [showAddProductsModal, products, productCategories, addProductsSearch]);
 
@@ -1350,7 +1338,7 @@ export default function CategoryManagementPage() {
 
                 <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
                   {retailers
-                    .filter(r => !assigneeSearch.trim() || hasWords(r.shop_name.toLowerCase(), assigneeSearch.toLowerCase()) || hasWords(r.retailer_code.toLowerCase(), assigneeSearch.toLowerCase()))
+                    .filter(r => !assigneeSearch.trim() || matchWords(assigneeSearch, r.shop_name, r.retailer_code))
                     .map(ret => {
                       const isSelected = (selectedAssigneeRetailerId || retailers[0]?.id) === ret.id;
                       const assignedCats = getAssignedCategoriesForRetailer(ret.id);
@@ -2281,8 +2269,7 @@ export default function CategoryManagementPage() {
                       {salespersonsList
                         .filter(sp => 
                           !accessSalespersonSearch || 
-                          hasWords(sp.name.toLowerCase(), accessSalespersonSearch.toLowerCase()) ||
-                          hasWords(sp.email.toLowerCase(), accessSalespersonSearch.toLowerCase())
+                          matchWords(accessSalespersonSearch, sp.name, sp.email)
                         )
                         .map(sp => {
                           const isChecked = accessSalespersonIds.includes(sp.id);
@@ -2402,10 +2389,7 @@ export default function CategoryManagementPage() {
                       {retailers
                         .filter(r => 
                           !accessRetailerSearch || 
-                          hasWords(r.shop_name.toLowerCase(), accessRetailerSearch.toLowerCase()) ||
-                          hasWords(r.owner_name.toLowerCase(), accessRetailerSearch.toLowerCase()) ||
-                          hasWords(r.retailer_code.toLowerCase(), accessRetailerSearch.toLowerCase()) ||
-                          (r.city && hasWords(r.city.toLowerCase(), accessRetailerSearch.toLowerCase()))
+                          matchWords(accessRetailerSearch, r.shop_name, r.owner_name, r.retailer_code, r.city)
                         )
                         .map(r => {
                           const isChecked = accessRetailerIds.includes(r.id);

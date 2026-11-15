@@ -738,7 +738,7 @@ export default function BillingTerminal() {
                   const cell = (col: Col, value: string, onChange: (v: string) => void) => (
                     <td className="p-0 border border-slate-200 relative">
                       <label htmlFor={`bt-cell-${row}-${col}`} className="sr-only">{col} for {l.name}</label>
-                      <input id={`bt-cell-${row}-${col}`} value={value} inputMode="decimal" autoComplete="off"
+                      <input id={`bt-cell-${row}-${col}`} data-no-list-nav value={value} inputMode="decimal" autoComplete="off"
                         onFocus={e => { setActive({ row, col }); setHistIdx(-1); e.currentTarget.select(); }}
                         onChange={e => onChange(e.target.value)}
                         onKeyDown={e => onCellKey(e, row, col)}
@@ -756,7 +756,7 @@ export default function BillingTerminal() {
                       <td className="px-1.5 border border-slate-200 text-slate-700">{l.unit}</td>
                       <td className="p-0 border border-slate-200 relative">
                         <label htmlFor={`bt-cell-${row}-rate`} className="sr-only">Rate for {l.name}</label>
-                        <input id={`bt-cell-${row}-rate`} value={l.rate} inputMode="decimal" autoComplete="off"
+                        <input id={`bt-cell-${row}-rate`} data-no-list-nav value={l.rate} inputMode="decimal" autoComplete="off"
                           onFocus={e => { setActive({ row, col: 'rate' }); setHistIdx(-1); e.currentTarget.select(); }}
                           onChange={e => setLine(row, { rate: e.target.value })}
                           onKeyDown={e => onCellKey(e, row, 'rate')}

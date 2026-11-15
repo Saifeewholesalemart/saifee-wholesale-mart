@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useDb } from '@/context/DbContext';
@@ -1662,8 +1662,7 @@ export default function CentralItemDetailHub({
                     .filter(p => {
                       const matchSupp = purchaseSupplierFilter === 'all' || p.supplierId === purchaseSupplierFilter;
                       const matchQuery = purchaseSearch.trim() === '' || 
-                        hasWords(p.invoiceNumber.toLowerCase(), purchaseSearch.toLowerCase()) ||
-                        hasWords(p.batchNumber.toLowerCase(), purchaseSearch.toLowerCase());
+                        matchWords(purchaseSearch, p.invoiceNumber, p.batchNumber);
                       return matchSupp && matchQuery;
                     })
                     .map((p, idx) => (

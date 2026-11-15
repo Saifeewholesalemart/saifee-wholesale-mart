@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useMemo, useDeferredValue, useEffect, useRef, useCallback } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
@@ -118,9 +118,7 @@ export default function RetailerEcommerce() {
 
       const matchBrand = selectedBrand === 'All' || p.brand === selectedBrand;
       const matchSearch = q === '' ||
-        hasWords((p.name || '').toLowerCase(), q) ||
-        hasWords((p.brand || '').toLowerCase(), q) ||
-        hasWords((p.product_code || '').toLowerCase(), q);
+        matchWords(q, (p.name || ''), (p.brand || ''), (p.product_code || ''));
       return matchCat && matchBrand && matchSearch;
     });
   }, [products, deferredSearch, selectedCategory, selectedBrand, categoryNamesByProduct]);

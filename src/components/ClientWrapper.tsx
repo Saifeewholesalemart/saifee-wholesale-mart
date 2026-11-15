@@ -5,8 +5,12 @@ import { DbProvider } from '@/context/DbContext';
 import RoleSwitcher from './RoleSwitcher';
 import ErrorBoundary from './ErrorBoundary';
 import CloudGate from './CloudGate';
+import { installDropdownKeys } from '@/lib/dropdownKeys';
 
 export default function ClientWrapper({ children }: { children: React.ReactNode }) {
+  // Arrow keys move through any search dropdown, app-wide
+  useEffect(() => installDropdownKeys(), []);
+
   useEffect(() => {
     // Unregister any stale service workers and clear old caches
     if ('serviceWorker' in navigator) {

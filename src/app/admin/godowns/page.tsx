@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -149,10 +149,7 @@ export default function GodownsPage() {
   };
 
   const filteredGodowns = godowns.filter(g => 
-    hasWords(g.name.toLowerCase(), searchQuery.toLowerCase()) ||
-    hasWords(g.code.toLowerCase(), searchQuery.toLowerCase()) ||
-    (g.city && hasWords(g.city.toLowerCase(), searchQuery.toLowerCase())) ||
-    (g.manager_name && hasWords(g.manager_name.toLowerCase(), searchQuery.toLowerCase()))
+    matchWords(searchQuery, g.name, g.code, g.city, g.manager_name)
   );
 
   const totalGodownStockValue = godowns.reduce((sum, g) => sum + getGodownStats(g.id).totalValue, 0);

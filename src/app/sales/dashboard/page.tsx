@@ -1,6 +1,6 @@
 'use client';
 
-import { hasWords } from '@/lib/searchWords';
+import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useEffect, useMemo, useRef, useDeferredValue, useCallback } from 'react';
 import { useDb, SalespersonCartItem } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
@@ -86,10 +86,7 @@ export default function SalesDashboard() {
   // The shop counter's walk-in record is not a real shop: salesmen never order for it
   const filteredRetailers = retailers.filter(r => !isWalkInRetailerId(r.id) && r.active !== false).filter(r =>
     retailerSearch.trim() === '' ||
-    hasWords((r.shop_name || '').toLowerCase(), retailerSearch.toLowerCase()) ||
-    hasWords((r.owner_name || '').toLowerCase(), retailerSearch.toLowerCase()) ||
-    hasWords((r.retailer_code || '').toLowerCase(), retailerSearch.toLowerCase()) ||
-    hasWords((r.city || '').toLowerCase(), retailerSearch.toLowerCase())
+    matchWords(retailerSearch, (r.shop_name || ''), (r.owner_name || ''), (r.retailer_code || ''), (r.city || ''))
   );
 
   // 3. Filter products & categories based on salesperson category assignment
@@ -197,9 +194,7 @@ export default function SalesDashboard() {
       if (!matchCat) return false;
 
       return q === '' ||
-        hasWords((p.name || '').toLowerCase(), q) ||
-        hasWords((p.brand || '').toLowerCase(), q) ||
-        hasWords((p.product_code || '').toLowerCase(), q);
+        matchWords(q, (p.name || ''), (p.brand || ''), (p.product_code || ''));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [products, salesVisible, retailerVisible, isCompanySalesperson, companyIdFilter, assignedCompanyIds.join(','), selectedCategory, productCats, deferredProductSearch]);
@@ -537,8 +532,7 @@ export default function SalesDashboard() {
   const salesHistory = scopedOrders
     .filter(o => {
       const matchSearch = !historySearch.trim() || 
-        hasWords(o.order_number.toLowerCase(), historySearch.toLowerCase()) ||
-        hasWords(retailers.find(r => r.id === o.retailer_id)?.shop_name?.toLowerCase(), historySearch.toLowerCase());
+        matchWords(historySearch, o.order_number, retailers.find(r => r.id === o.retailer_id)?.shop_name);
       const matchRet = historyFilterRetailer === 'ALL' || o.retailer_id === historyFilterRetailer;
       return matchSearch && matchRet;
     })
