@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useDb } from '@/context/DbContext';
@@ -1661,8 +1662,8 @@ export default function CentralItemDetailHub({
                     .filter(p => {
                       const matchSupp = purchaseSupplierFilter === 'all' || p.supplierId === purchaseSupplierFilter;
                       const matchQuery = purchaseSearch.trim() === '' || 
-                        p.invoiceNumber.toLowerCase().includes(purchaseSearch.toLowerCase()) ||
-                        p.batchNumber.toLowerCase().includes(purchaseSearch.toLowerCase());
+                        hasWords(p.invoiceNumber.toLowerCase(), purchaseSearch.toLowerCase()) ||
+                        hasWords(p.batchNumber.toLowerCase(), purchaseSearch.toLowerCase());
                       return matchSupp && matchQuery;
                     })
                     .map((p, idx) => (
@@ -1834,7 +1835,7 @@ export default function CentralItemDetailHub({
                         .filter(o => {
                           const matchRet = orderRetailerFilter === 'all' || o.retailerId === orderRetailerFilter;
                           const matchStatus = orderStatusFilter === 'all' || o.status === orderStatusFilter;
-                          const matchQuery = orderSearch.trim() === '' || o.orderNumber.toLowerCase().includes(orderSearch.toLowerCase());
+                          const matchQuery = orderSearch.trim() === '' || hasWords(o.orderNumber.toLowerCase(), orderSearch.toLowerCase());
                           return matchRet && matchStatus && matchQuery;
                         })
                         .map((o, idx) => (
@@ -1944,7 +1945,7 @@ export default function CentralItemDetailHub({
                       {itemInvoices
                         .filter(i => {
                           const matchCust = billingCustomerFilter === 'all' || i.retailerId === billingCustomerFilter;
-                          const matchQuery = billingSearch.trim() === '' || i.invoiceNumber.toLowerCase().includes(billingSearch.toLowerCase());
+                          const matchQuery = billingSearch.trim() === '' || hasWords(i.invoiceNumber.toLowerCase(), billingSearch.toLowerCase());
                           return matchCust && matchQuery;
                         })
                         .map((invRow, idx) => (

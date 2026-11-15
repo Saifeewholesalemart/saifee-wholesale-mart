@@ -1,8 +1,12 @@
 'use client';
 
-import React from 'react';
-import FastTradeTerminal from '@/components/terminal/FastTradeTerminal';
+import React, { Suspense } from 'react';
+import BillingTerminal from '@/components/terminal/BillingTerminal';
 
-export default function FastTradeTerminalPage() {
-  return <FastTradeTerminal />;
+export default function BillingTerminalPage() {
+  return (
+    <Suspense fallback={null}>
+      <BillingTerminal />
+    </Suspense>
+  );
 }

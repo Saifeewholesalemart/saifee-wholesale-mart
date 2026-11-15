@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, Suspense } from 'react';
 import { useDb } from '@/context/DbContext';
 import { Calendar, Filter, FileText, CheckCircle, AlertCircle, X, ShieldAlert, History } from 'lucide-react';
@@ -137,12 +138,12 @@ function PendingFulfilmentsContent() {
     let matchSearch = true;
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase().trim();
-      matchSearch = item.orderNumber.toLowerCase().includes(q) ||
-        item.retailerName.toLowerCase().includes(q) ||
-        item.productName.toLowerCase().includes(q) ||
-        item.brand.toLowerCase().includes(q) ||
-        item.city.toLowerCase().includes(q) ||
-        item.salespersonName.toLowerCase().includes(q);
+      matchSearch = hasWords(item.orderNumber.toLowerCase(), q) ||
+        hasWords(item.retailerName.toLowerCase(), q) ||
+        hasWords(item.productName.toLowerCase(), q) ||
+        hasWords(item.brand.toLowerCase(), q) ||
+        hasWords(item.city.toLowerCase(), q) ||
+        hasWords(item.salespersonName.toLowerCase(), q);
     }
 
     let matchDays = true;

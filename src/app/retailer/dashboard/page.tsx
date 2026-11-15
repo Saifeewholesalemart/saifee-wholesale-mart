@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useEffect, useMemo, useRef, useDeferredValue, useCallback } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
@@ -104,9 +105,9 @@ export default function RetailerDashboard() {
       if (!matchCat) return false;
 
       return q === '' ||
-        (p.name || '').toLowerCase().includes(q) ||
-        (p.brand || '').toLowerCase().includes(q) ||
-        (p.product_code || '').toLowerCase().includes(q);
+        hasWords((p.name || '').toLowerCase(), q) ||
+        hasWords((p.brand || '').toLowerCase(), q) ||
+        hasWords((p.product_code || '').toLowerCase(), q);
     });
   }, [retailerObj, products, visibleToRetailer, selectedCategory, productCats, deferredSearch]);
 
@@ -1355,8 +1356,8 @@ const DashProductCard = React.memo(function DashProductCard({
                             return (
                               <p role="status" className="mt-1.5 text-xs font-semibold text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
                                 {avail > 0
-                                  ? `Only ${formatQuantityDisplay(avail, unitsPerPack, p.trading_unit, p.base_unit)} in stock. The rest will be supplied when stock arrives.`
-                                  : 'Out of stock. It will be supplied when stock arrives.'}
+                                  ? `Only ${formatQuantityDisplay(avail, unitsPerPack, p.trading_unit, p.base_unit)} shown in stock. You can still order; the shop will confirm at packing.`
+                                  : 'Shown as out of stock. You can still order; the shop will confirm at packing.'}
                               </p>
                             );
                           })()}

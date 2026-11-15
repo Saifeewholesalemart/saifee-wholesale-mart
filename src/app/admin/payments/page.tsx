@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import { getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect, useMemo, Suspense } from 'react';
 import { useDb } from '@/context/DbContext';
@@ -323,12 +324,12 @@ function AdminPaymentsContent() {
         const q = paymentsSearchTerm.toLowerCase();
         const ret = retailers.find(r => r.id === p.retailer_id);
         const match = 
-          (p.payment_number || '').toLowerCase().includes(q) ||
-          (p.reference_number || '').toLowerCase().includes(q) ||
-          (p.notes || '').toLowerCase().includes(q) ||
-          (ret?.shop_name || '').toLowerCase().includes(q) ||
-          (ret?.retailer_code || '').toLowerCase().includes(q) ||
-          (ret?.city || '').toLowerCase().includes(q);
+          hasWords((p.payment_number || '').toLowerCase(), q) ||
+          hasWords((p.reference_number || '').toLowerCase(), q) ||
+          hasWords((p.notes || '').toLowerCase(), q) ||
+          hasWords((ret?.shop_name || '').toLowerCase(), q) ||
+          hasWords((ret?.retailer_code || '').toLowerCase(), q) ||
+          hasWords((ret?.city || '').toLowerCase(), q);
         if (!match) return false;
       }
 
@@ -387,10 +388,10 @@ function AdminPaymentsContent() {
     if (!retailerSearchTerm.trim()) return retailers;
     const q = retailerSearchTerm.toLowerCase();
     return retailers.filter(r => 
-      r.shop_name.toLowerCase().includes(q) ||
-      (r.retailer_code || '').toLowerCase().includes(q) ||
-      (r.owner_name || '').toLowerCase().includes(q) ||
-      (r.city || '').toLowerCase().includes(q) ||
+      hasWords(r.shop_name.toLowerCase(), q) ||
+      hasWords((r.retailer_code || '').toLowerCase(), q) ||
+      hasWords((r.owner_name || '').toLowerCase(), q) ||
+      hasWords((r.city || '').toLowerCase(), q) ||
       (r.mobile || '').includes(q)
     );
   }, [retailers, retailerSearchTerm]);
@@ -1437,7 +1438,7 @@ function AdminPaymentsContent() {
                   type="button"
                   onClick={() => {
                     setActiveInvoiceModal(null);
-                    router.push(`/admin/invoices?id=${activeInvoiceModal.id}`);
+                    router.push(`/admin/terminal?invoice=${activeInvoiceModal.id}`);
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer"
                   title="Open full edit & audit screen in Invoices Register"

@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import { isIntraStateSupply, formatPlaceOfSupply, describeStockShortfall } from '@/lib/db';
 import React, { useState, useEffect, Suspense, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
@@ -487,10 +488,10 @@ function AdminOrdersContent() {
         const invNo = (rec.invoice?.invoice_number || '').toLowerCase();
         const spName = (rec.salesperson?.name || '').toLowerCase();
         const hasProdMatch = (rec.order.items || []).some(it => 
-          (it.product_name || (it as any).name || '').toLowerCase().includes(term) || 
-          (it.product_id || '').toLowerCase().includes(term)
+          hasWords((it.product_name || (it as any).name || '').toLowerCase(), term) || 
+          hasWords((it.product_id || '').toLowerCase(), term)
         );
-        if (!retName.includes(term) && !retOwner.includes(term) && !retPhone.includes(term) && !ordNo.includes(term) && !invNo.includes(term) && !spName.includes(term) && !hasProdMatch) {
+        if (!hasWords(retName, term) && !retOwner.includes(term) && !hasWords(retPhone, term) && !ordNo.includes(term) && !invNo.includes(term) && !hasWords(spName, term) && !hasProdMatch) {
           return false;
         }
       }

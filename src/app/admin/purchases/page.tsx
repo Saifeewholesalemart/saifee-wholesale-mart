@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -1452,11 +1453,11 @@ export default function AdminPurchases() {
                   if (!purchaseSearchTerm.trim()) return true;
                   const q = purchaseSearchTerm.toLowerCase().trim();
                   const supplierObj = suppliers.find(s => s.id === pur.supplier_id);
-                  const matchSup = (supplierObj?.name || '').toLowerCase().includes(q);
-                  const matchInv = (pur.invoice_number || '').toLowerCase().includes(q);
+                  const matchSup = hasWords((supplierObj?.name || '').toLowerCase(), q);
+                  const matchInv = hasWords((pur.invoice_number || '').toLowerCase(), q);
                   const matchItem = pur.items?.some(i => {
                     const prod = products.find(p => p.id === i.product_id);
-                    return (prod?.name || '').toLowerCase().includes(q);
+                    return hasWords((prod?.name || '').toLowerCase(), q);
                   });
                   return matchSup || matchInv || matchItem;
                 })

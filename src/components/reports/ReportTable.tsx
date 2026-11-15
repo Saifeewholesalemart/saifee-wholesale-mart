@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { 
   ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, 
@@ -93,7 +94,7 @@ export default function ReportTable<T extends Record<string, any>>({
       result = result.filter(row => {
         return Object.values(row).some(val => {
           if (val === null || val === undefined) return false;
-          return String(val).toLowerCase().includes(q);
+          return hasWords(String(val).toLowerCase(), q);
         });
       });
     }

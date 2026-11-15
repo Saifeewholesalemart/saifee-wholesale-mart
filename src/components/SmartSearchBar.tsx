@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -80,7 +81,7 @@ export default function SmartSearchBar({
     if (customSuggestions && customSuggestions.length > 0) {
       customSuggestions.forEach((item, idx) => {
         if (typeof item === 'string') {
-          if (item.toLowerCase().includes(query) && !seenTitles.has(item.toLowerCase())) {
+          if (hasWords(item.toLowerCase(), query) && !seenTitles.has(item.toLowerCase())) {
             seenTitles.add(item.toLowerCase());
             results.push({
               id: `custom-${idx}-${item}`,
@@ -91,8 +92,8 @@ export default function SmartSearchBar({
             });
           }
         } else if (item && typeof item === 'object') {
-          const matchTitle = (item.title || '').toLowerCase().includes(query);
-          const matchSub = (item.subtitle || '').toLowerCase().includes(query);
+          const matchTitle = hasWords((item.title || '').toLowerCase(), query);
+          const matchSub = hasWords((item.subtitle || '').toLowerCase(), query);
           if ((matchTitle || matchSub) && !seenTitles.has(item.title.toLowerCase())) {
             seenTitles.add(item.title.toLowerCase());
             results.push({
@@ -144,11 +145,11 @@ export default function SmartSearchBar({
     if (shouldInclude('retailer') && retailers) {
       for (const ret of retailers) {
         if (results.length >= maxSuggestions * 2) break;
-        const matchShop = (ret.shop_name || '').toLowerCase().includes(query);
-        const matchOwner = (ret.owner_name || '').toLowerCase().includes(query);
-        const matchCity = (ret.city || '').toLowerCase().includes(query);
-        const matchCode = (ret.retailer_code || '').toLowerCase().includes(query);
-        const matchMobile = (ret.mobile || '').toLowerCase().includes(query);
+        const matchShop = hasWords((ret.shop_name || '').toLowerCase(), query);
+        const matchOwner = hasWords((ret.owner_name || '').toLowerCase(), query);
+        const matchCity = hasWords((ret.city || '').toLowerCase(), query);
+        const matchCode = hasWords((ret.retailer_code || '').toLowerCase(), query);
+        const matchMobile = hasWords((ret.mobile || '').toLowerCase(), query);
 
         if ((matchShop || matchOwner || matchCity || matchCode || matchMobile) && !seenTitles.has(ret.shop_name.toLowerCase())) {
           seenTitles.add(ret.shop_name.toLowerCase());
@@ -169,7 +170,7 @@ export default function SmartSearchBar({
     if (shouldInclude('invoice') && invoices) {
       for (const inv of invoices) {
         if (results.length >= maxSuggestions * 2) break;
-        const matchNum = (inv.invoice_number || '').toLowerCase().includes(query);
+        const matchNum = hasWords((inv.invoice_number || '').toLowerCase(), query);
         if (matchNum && !seenTitles.has(inv.invoice_number.toLowerCase())) {
           seenTitles.add(inv.invoice_number.toLowerCase());
           const ret = retailers?.find(r => r.id === inv.retailer_id);
@@ -190,7 +191,7 @@ export default function SmartSearchBar({
     if (shouldInclude('order') && orders) {
       for (const ord of orders) {
         if (results.length >= maxSuggestions * 2) break;
-        const matchNum = (ord.order_number || '').toLowerCase().includes(query);
+        const matchNum = hasWords((ord.order_number || '').toLowerCase(), query);
         if (matchNum && !seenTitles.has(ord.order_number.toLowerCase())) {
           seenTitles.add(ord.order_number.toLowerCase());
           const ret = retailers?.find(r => r.id === ord.retailer_id);
@@ -211,7 +212,7 @@ export default function SmartSearchBar({
     if (shouldInclude('category') && categories) {
       for (const cat of categories) {
         if (results.length >= maxSuggestions * 2) break;
-        const matchCat = (cat.name || '').toLowerCase().includes(query);
+        const matchCat = hasWords((cat.name || '').toLowerCase(), query);
         if (matchCat && !seenTitles.has(`cat-${cat.name.toLowerCase()}`)) {
           seenTitles.add(`cat-${cat.name.toLowerCase()}`);
           results.push({
@@ -231,7 +232,7 @@ export default function SmartSearchBar({
     if (shouldInclude('supplier') && suppliers) {
       for (const sup of suppliers) {
         if (results.length >= maxSuggestions * 2) break;
-        const matchSup = (sup.name || '').toLowerCase().includes(query);
+        const matchSup = hasWords((sup.name || '').toLowerCase(), query);
         if (matchSup && !seenTitles.has(sup.name.toLowerCase())) {
           seenTitles.add(sup.name.toLowerCase());
           results.push({

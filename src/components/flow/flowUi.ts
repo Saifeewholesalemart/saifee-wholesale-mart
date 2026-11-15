@@ -1,3 +1,4 @@
+import { hasWords } from '@/lib/searchWords';
 import type { Invoice, Order, Product, Retailer } from '@/lib/db';
 import { isWalkInRetailerId } from '@/lib/db';
 
@@ -101,7 +102,7 @@ export function orderMatchesFilter(
     ...(ctx.invoiceNumbers || []),
     ...(o.items || []).map(it => ctx.products.find(p => p.id === it.product_id)?.name)
   ].filter(Boolean).join(' ').toLowerCase();
-  return hay.includes(q);
+  return hasWords(hay, q);
 }
 
 // ---------------------------------------------------------------------------

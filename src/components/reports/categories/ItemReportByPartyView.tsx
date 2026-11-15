@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { 
   Package, Search, Filter, Download, Printer, ArrowUpDown, 
@@ -181,9 +182,9 @@ export default function ItemReportByPartyView({
     ];
     if (!q) return all.slice(0, 40);
     return all.filter(p => 
-      p.name.toLowerCase().includes(q) || 
-      (p.code && p.code.toLowerCase().includes(q)) ||
-      (p.city && p.city.toLowerCase().includes(q))
+      hasWords(p.name.toLowerCase(), q) || 
+      (p.code && hasWords(p.code.toLowerCase(), q)) ||
+      (p.city && hasWords(p.city.toLowerCase(), q))
     ).slice(0, 40);
   }, [dbState.retailers, dbState.suppliers, partySearchText]);
 
@@ -193,9 +194,9 @@ export default function ItemReportByPartyView({
     const all = dbState.products || [];
     if (!q) return all.slice(0, 40);
     return all.filter(p => 
-      p.name.toLowerCase().includes(q) || 
-      (p.brand && p.brand.toLowerCase().includes(q)) ||
-      (p.product_code && p.product_code.toLowerCase().includes(q))
+      hasWords(p.name.toLowerCase(), q) || 
+      (p.brand && hasWords(p.brand.toLowerCase(), q)) ||
+      (p.product_code && hasWords(p.product_code.toLowerCase(), q))
     ).slice(0, 40);
   }, [dbState.products, itemSearchText]);
 

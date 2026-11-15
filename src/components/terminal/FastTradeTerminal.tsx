@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import { isIntraStateSupply, getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useDb } from '@/context/DbContext';
@@ -114,10 +115,10 @@ export default function FastTradeTerminal() {
     const q = customerSearchQuery.trim().toLowerCase();
     if (!q) return retailers.slice(0, 8);
     return retailers.filter(r => 
-      r.shop_name.toLowerCase().includes(q) || 
-      r.owner_name.toLowerCase().includes(q) || 
-      r.retailer_code.toLowerCase().includes(q) || 
-      r.mobile.includes(q)
+      hasWords(r.shop_name.toLowerCase(), q) || 
+      hasWords(r.owner_name.toLowerCase(), q) || 
+      hasWords(r.retailer_code.toLowerCase(), q) || 
+      hasWords(r.mobile, q)
     ).slice(0, 8);
   }, [retailers, customerSearchQuery]);
 
@@ -126,11 +127,11 @@ export default function FastTradeTerminal() {
     const q = productSearchQuery.trim().toLowerCase();
     if (!q) return products.slice(0, 10);
     return products.filter(p => 
-      p.name.toLowerCase().includes(q) || 
-      p.product_code.toLowerCase().includes(q) || 
-      p.brand.toLowerCase().includes(q) || 
-      (p.barcode && p.barcode.toLowerCase().includes(q)) || 
-      (p.sku && p.sku.toLowerCase().includes(q))
+      hasWords(p.name.toLowerCase(), q) || 
+      hasWords(p.product_code.toLowerCase(), q) || 
+      hasWords(p.brand.toLowerCase(), q) || 
+      (p.barcode && hasWords(p.barcode.toLowerCase(), q)) || 
+      (p.sku && hasWords(p.sku.toLowerCase(), q))
     ).slice(0, 10);
   }, [products, productSearchQuery]);
 

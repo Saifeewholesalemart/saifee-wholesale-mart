@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import { getSellerDetails } from '@/lib/db';
 import { isIntraStateSupply, formatPlaceOfSupply } from '@/lib/db';
 import React, { useState } from 'react';
@@ -352,7 +353,7 @@ export default function InvoicePreviewModal({
       const batchNo = (item.batch_number || batches?.find(b => b.product_id === item.product_id)?.batch_number || '').toLowerCase();
       const packing = (item.packing || prod?.pack_size || '').toLowerCase();
       const mrp = String(item.mrp || prod?.mrp || '');
-      return prodName.includes(q) || hsn.includes(q) || batchNo.includes(q) || packing.includes(q) || mrp.includes(q);
+      return hasWords(prodName, q) || hasWords(hsn, q) || batchNo.includes(q) || packing.includes(q) || mrp.includes(q);
     });
   }, [rawInvoiceItems, itemSearchQuery, products, batches]);
 
@@ -643,7 +644,7 @@ export default function InvoicePreviewModal({
                 </div>
                 <div className="space-y-0.5 pl-2">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">DESPATCH &amp; TERMS</span>
-                  <p className="text-slate-700 flex justify-between"><span className="text-slate-500">Dispatch Mode:</span> <span className="font-semibold text-slate-800">{challan?.transport_mode || 'Delivery Van'}</span></p>
+                  <p className="text-slate-700 flex justify-between"><span className="text-slate-500">Dispatch Mode:</span> <span className="font-semibold text-slate-800">{challan?.transport_mode || 'Counter / Direct'}</span></p>
                   <p className="text-slate-700 flex justify-between"><span className="text-slate-500">Payment Mode:</span> <span className="font-bold text-slate-900">{invoice.payment_mode || 'Credit'}</span></p>
                   {invoice.fulfilment_number && (
                     <p className="text-slate-700 flex justify-between"><span className="text-slate-500">Fulfilment Ref:</span> <span className="font-mono font-bold text-indigo-700">{invoice.fulfilment_number}</span></p>

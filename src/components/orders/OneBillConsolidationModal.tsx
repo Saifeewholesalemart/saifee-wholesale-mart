@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import { getSellerDetails } from '@/lib/db';
 import React, { useState, useEffect, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
@@ -917,7 +918,7 @@ export default function OneBillConsolidationModal({
                         const batchNo = (item.batch_number || '').toLowerCase();
                         const packing = (item.packing || prod?.pack_size || '').toLowerCase();
                         const mrp = String(item.mrp || prod?.mrp || '');
-                        return prodName.includes(q) || hsn.includes(q) || batchNo.includes(q) || packing.includes(q) || mrp.includes(q);
+                        return hasWords(prodName, q) || hasWords(hsn, q) || batchNo.includes(q) || packing.includes(q) || mrp.includes(q);
                       }).length} of {generatedInvoice.items?.length || 0} items
                     </span>
                   ) : (
@@ -957,7 +958,7 @@ export default function OneBillConsolidationModal({
                             const batchNo = (item.batch_number || '').toLowerCase();
                             const packing = (item.packing || prod?.pack_size || '').toLowerCase();
                             const mrp = String(item.mrp || prod?.mrp || '');
-                            return prodName.includes(q) || hsn.includes(q) || batchNo.includes(q) || packing.includes(q) || mrp.includes(q);
+                            return hasWords(prodName, q) || hasWords(hsn, q) || batchNo.includes(q) || packing.includes(q) || mrp.includes(q);
                           })
                         : allItems;
 

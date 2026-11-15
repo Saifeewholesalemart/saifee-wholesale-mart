@@ -504,6 +504,7 @@ export interface Order {
   // Simple flow (Order Board / Packer / Biller)
   flow_ready_to_bill?: boolean;      // packed, waiting for the biller
   flow_pack_attempted_at?: string;   // last time a packer finished packing this order
+  flow_repack?: boolean;             // admin sent a backorder to packing again (stock is there physically)
   flow_packed_by?: string;
 
   // Role-Scoped Metadata (for Salesperson Scoped Views)
@@ -2330,6 +2331,25 @@ export function nextDocNumber(prefix: string, existing: (string | undefined | nu
   return prefix + String(max + 1).padStart(pad, '0');
 }
 
+export function oversoldBatchId(productId: string): string { return `bch-oversold-${productId}`; }
+export function isOversoldBatch(b: Partial<InventoryBatch>): boolean { return String(b.id || '').startsWith('bch-oversold-'); }
+
+/** Negative "oversold" pieces are set off against real stock of the same product, oldest batch first. */
+export function settleOversoldBatches(batches: InventoryBatch[]): void {
+  for (const ob of batches) {
+    if (!isOversoldBatch(ob) || !(ob.quantity < 0)) continue;
+    const real = batches
+      .filter(b => b.product_id === ob.product_id && !isOversoldBatch(b) && b.quantity > 0 && (b.business_id || '') === (ob.business_id || ''))
+      .sort((a, b) => new Date(a.expiry_date || 0).getTime() - new Date(b.expiry_date || 0).getTime());
+    for (const b of real) {
+      if (ob.quantity >= 0) break;
+      const move = Math.min(b.quantity, -ob.quantity);
+      b.quantity -= move;
+      ob.quantity += move;
+    }
+  }
+}
+
 class FMCGDatabase {
   private memoryStore: Record<string, any> = {};
 
@@ -2746,8 +2766,6 @@ class FMCGDatabase {
     const topUp = !!order.flow_ready_to_bill;
 
     const products = this.getProducts(activeBiz);
-    const freeStock = computeFreeStockByProduct(this.getBatches(activeBiz), orders, order.id);
-    const usedInThisOrder: Record<string, number> = {};
     let packedPieces = 0;
     let backorderPieces = 0;
 
@@ -2763,9 +2781,7 @@ class FMCGDatabase {
       const name = products.find(p => p.id === item.product_id)?.name || (item as any).product_name || 'Item';
       if (!Number.isInteger(q) || q < 0) throw new Error(`${name}: enter a whole number.`);
       if (q > remaining - already) throw new Error(`${name}: only ${remaining - already} left to pack.`);
-      const free = (freeStock[item.product_id] || 0) - (usedInThisOrder[item.product_id] || 0) - already;
-      if (q > free) throw new Error(`${name}: only ${Math.max(0, free)} in stock.`);
-      usedInThisOrder[item.product_id] = (usedInThisOrder[item.product_id] || 0) + already + q;
+      // No stock limit: the packer packs what is physically there, system stock may go negative
 
       const total = already + q;
       item.flow_packed_qty = total;
@@ -2790,6 +2806,7 @@ class FMCGDatabase {
       return { order, packedPieces, backorderPieces };
     }
     order.flow_pack_attempted_at = now;
+    order.flow_repack = false;
     order.flow_packed_by = user?.name || this.getCurrentUser()?.name || 'Packer';
     if (packedPieces > 0) {
       order.flow_ready_to_bill = true;
@@ -2893,34 +2910,10 @@ class FMCGDatabase {
     const products = this.getProducts(activeBiz);
     const ids = new Set(entries.map(e => e.orderId));
 
-    const free: Record<string, number> = {};
-    this.getBatches(activeBiz).forEach(b => {
-      if ((b.quantity || 0) > 0) free[b.product_id] = (free[b.product_id] || 0) + b.quantity;
-    });
-    orders.forEach(o => {
-      if (!o.flow_ready_to_bill) return;
-      (o.items || []).forEach(it => {
-        const q = Number(it.flow_packed_qty) || 0;
-        if (q > 0) free[it.product_id] = (free[it.product_id] || 0) - q;
-      });
-    });
-
-    const want: Record<string, number> = {};
     for (const e of entries) {
       const o = orders.find(x => x.id === e.orderId);
       if (!o) throw new Error('Order not found.');
       if (o.status === 'Cancelled') throw new Error(`${o.order_number} is cancelled.`);
-      (o.items || []).forEach(it => {
-        const q = Number(e.packedQty[it.id]) || 0;
-        if (q > 0) want[it.product_id] = (want[it.product_id] || 0) + q;
-      });
-    }
-    for (const pid of Object.keys(want)) {
-      const f = Math.max(0, free[pid] || 0);
-      if (want[pid] > f) {
-        const name = products.find(p => p.id === pid)?.name || 'Item';
-        throw new Error(`${name}: only ${f} in stock for all these orders together.`);
-      }
     }
 
     let packedPieces = 0;
@@ -3206,18 +3199,6 @@ class FMCGDatabase {
     keepLines.forEach(l => { newQty[l.productId] = (newQty[l.productId] || 0) + Number(l.qty); });
     const pids = Array.from(new Set([...Object.keys(oldQty), ...Object.keys(newQty)]));
 
-    // Stock rule: more pieces on the bill only if they are in stock
-    for (const pid of pids) {
-      const delta = (newQty[pid] || 0) - (oldQty[pid] || 0);
-      if (delta > 0) {
-        const available = batches.filter(b => b.product_id === pid && b.quantity > 0).reduce((s, b) => s + b.quantity, 0);
-        if (delta > available) {
-          const name = products.find(p => p.id === pid)?.name || 'Item';
-          throw new Error(`${name}: only ${available} more in stock.`);
-        }
-      }
-    }
-
     const newItems: InvoiceItem[] = keepLines.map(l => {
       const old = l.lineId ? (inv.items || []).find(i => i.id === l.lineId) : undefined;
       const prod = products.find(p => p.id === l.productId);
@@ -3275,27 +3256,9 @@ class FMCGDatabase {
       if (delta === 0) continue;
       const name = products.find(p => p.id === pid)?.name || 'Item';
       changes.push(`${name}: qty ${oldQty[pid] || 0} → ${newQty[pid] || 0}`);
-      if (delta > 0) {
-        let rem = delta;
-        const fifo = batches.filter(b => b.product_id === pid && b.quantity > 0)
-          .sort((a, b) => new Date(a.expiry_date).getTime() - new Date(b.expiry_date).getTime());
-        for (const b of fifo) {
-          if (rem <= 0) break;
-          const take = Math.min(b.quantity, rem);
-          b.quantity -= take;
-          rem -= take;
-        }
-      } else {
-        const oldLine = (inv.items || []).find(i => i.product_id === pid);
-        const back = batches.find(b => b.id === oldLine?.batch_id) || batches.find(b => b.product_id === pid);
-        if (back) back.quantity += Math.abs(delta);
-      }
-      const invRow = inventory.find(i => i.product_id === pid);
-      if (invRow) {
-        invRow.physical_qty = Math.max(0, (invRow.physical_qty || 0) - delta);
-        invRow.available_qty = Math.max(0, invRow.physical_qty - (invRow.reserved_qty || 0));
-        invRow.updated_at = now;
-      }
+      // Stock may go negative when more pieces are billed than the system has
+      const oldLine = (inv.items || []).find(i => i.product_id === pid);
+      this.moveStockAllowNegative(batches, inventory, pid, delta, activeBiz, oldLine?.batch_id);
       ledgers.push({
         id: `led-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         product_id: pid,
@@ -6634,7 +6597,160 @@ class FMCGDatabase {
     const all = this.getStore<InventoryBatch>('fmcg_batches', SEED_BATCHES);
     const otherBiz = all.filter(b => (b.business_id || 'biz-saifee') !== activeBiz);
     const tagged = batches.map(b => ({ ...b, business_id: b.business_id || activeBiz }));
+    settleOversoldBatches(tagged);
     this.saveStore('fmcg_batches', [...otherBiz, ...tagged]);
+  }
+
+  // ----------------------------------------------------
+  // NEGATIVE STOCK (billing is allowed even when the system shows no stock)
+  // The pieces sold without stock sit on one "oversold" batch per product with a negative
+  // quantity. As soon as stock is entered (purchase, return...), it is set off against it.
+  // ----------------------------------------------------
+
+  private getOrCreateOversoldBatch(batches: InventoryBatch[], productId: string, activeBiz: string): InventoryBatch {
+    const id = oversoldBatchId(productId);
+    let b = batches.find(x => x.id === id);
+    if (!b) {
+      const prod = this.getProducts(activeBiz).find(p => p.id === productId);
+      const godowns = this.getGodowns(activeBiz);
+      const g = godowns.find(x => x.is_default && x.status === 'Active') || godowns[0];
+      b = {
+        id,
+        product_id: productId,
+        godown_id: g?.id,
+        godown: g?.name || 'Main Godown',
+        batch_number: 'STOCK-NOT-ENTERED',
+        expiry_date: '2099-12-31',
+        purchase_rate: Number(prod?.purchase_price) || 0,
+        mrp: Number(prod?.mrp) || 0,
+        quantity: 0,
+        entry_date: new Date().toISOString().slice(0, 10),
+        cost_layer: 'Sold before stock entry',
+        business_id: activeBiz
+      } as InventoryBatch;
+      batches.push(b);
+    }
+    return b;
+  }
+
+  private inventoryRowFor(inventory: Inventory[], productId: string, activeBiz: string, godownId?: string): Inventory {
+    let row = inventory.find(i => i.product_id === productId);
+    if (!row) {
+      row = {
+        id: `inv-${productId}-${godownId || 'main'}`,
+        product_id: productId,
+        godown_id: godownId,
+        physical_qty: 0, reserved_qty: 0, available_qty: 0, damaged_qty: 0, expired_qty: 0,
+        business_id: activeBiz,
+        updated_at: new Date().toISOString()
+      } as Inventory;
+      inventory.push(row);
+    }
+    return row;
+  }
+
+  /**
+   * Stock movement that may go below zero. delta > 0 takes pieces out (oldest batch first,
+   * the rest goes negative on the oversold batch); delta < 0 puts pieces back.
+   * Only changes the arrays given; the caller saves them.
+   */
+  private moveStockAllowNegative(batches: InventoryBatch[], inventory: Inventory[], productId: string, delta: number, activeBiz: string, preferBatchId?: string): void {
+    if (!delta) return;
+    if (delta > 0) {
+      let rem = delta;
+      const fifo = batches.filter(b => b.product_id === productId && b.quantity > 0)
+        .sort((a, b) => new Date(a.expiry_date || 0).getTime() - new Date(b.expiry_date || 0).getTime());
+      for (const b of fifo) {
+        if (rem <= 0) break;
+        const take = Math.min(b.quantity, rem);
+        b.quantity -= take;
+        rem -= take;
+      }
+      if (rem > 0) this.getOrCreateOversoldBatch(batches, productId, activeBiz).quantity -= rem;
+    } else {
+      const back = (preferBatchId ? batches.find(b => b.id === preferBatchId && b.product_id === productId) : undefined)
+        || batches.filter(b => b.product_id === productId && !isOversoldBatch(b))
+          .sort((a, b) => new Date(b.expiry_date || 0).getTime() - new Date(a.expiry_date || 0).getTime())[0]
+        || this.getOrCreateOversoldBatch(batches, productId, activeBiz);
+      back.quantity = (Number(back.quantity) || 0) + Math.abs(delta);
+    }
+    const row = this.inventoryRowFor(inventory, productId, activeBiz);
+    row.physical_qty = (Number(row.physical_qty) || 0) - delta;
+    row.available_qty = row.physical_qty - (Number(row.reserved_qty) || 0);
+    row.updated_at = new Date().toISOString();
+  }
+
+  /**
+   * Before a bill is made: if the system has fewer pieces than the bill needs, the missing
+   * pieces are lent to the oversold batch so the bill can be made. endOversell() takes them
+   * back afterwards, which leaves the stock negative by exactly the pieces sold without stock.
+   */
+  private beginOversell(needs: Record<string, number>): Record<string, number> {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const batches = this.getBatches(activeBiz);
+    const inventory = this.getInventory(activeBiz);
+    const lent: Record<string, number> = {};
+    Object.keys(needs).forEach(pid => {
+      const need = Math.floor(Number(needs[pid]) || 0);
+      if (need <= 0) return;
+      const realBatches = batches.filter(b => b.product_id === pid && b.quantity > 0 && !isOversoldBatch(b))
+        .sort((x, y) => new Date(x.expiry_date || 0).getTime() - new Date(y.expiry_date || 0).getTime());
+      const real = realBatches.reduce((sum, b) => sum + b.quantity, 0);
+      const deficit = need - real;
+      if (deficit <= 0) return;
+      let add = deficit;
+      if (realBatches.length > 0) {
+        // Lend on the batch that is used last, so the item stays one line on the bill
+        realBatches[realBatches.length - 1].quantity += deficit;
+      } else {
+        const ob = this.getOrCreateOversoldBatch(batches, pid, activeBiz);
+        add = deficit - (Number(ob.quantity) || 0);
+        if (add <= 0) return;
+        ob.quantity = deficit;
+      }
+      const row = this.inventoryRowFor(inventory, pid, activeBiz);
+      row.physical_qty = (Number(row.physical_qty) || 0) + add;
+      row.available_qty = row.physical_qty - (Number(row.reserved_qty) || 0);
+      lent[pid] = add;
+    });
+    if (Object.keys(lent).length > 0) {
+      this.saveBatches(batches, activeBiz);
+      this.saveInventory(inventory, activeBiz);
+    }
+    return lent;
+  }
+
+  private endOversell(lent: Record<string, number>): void {
+    const pids = Object.keys(lent);
+    if (pids.length === 0) return;
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const batches = this.getBatches(activeBiz);
+    const inventory = this.getInventory(activeBiz);
+    pids.forEach(pid => {
+      const ob = this.getOrCreateOversoldBatch(batches, pid, activeBiz);
+      ob.quantity = (Number(ob.quantity) || 0) - lent[pid];
+      const row = this.inventoryRowFor(inventory, pid, activeBiz);
+      row.physical_qty = (Number(row.physical_qty) || 0) - lent[pid];
+      row.available_qty = row.physical_qty - (Number(row.reserved_qty) || 0);
+      row.updated_at = new Date().toISOString();
+    });
+    this.saveBatches(batches, activeBiz);
+    this.saveInventory(inventory, activeBiz);
+  }
+
+  /** Admin: send a backorder to the packer now (the goods are there, only the stock entry is missing). */
+  flowSendToPacking(orderId: string): Order {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const orders = this.getOrders(activeBiz);
+    const order = orders.find(o => o.id === orderId);
+    if (!order) throw new Error('Order not found.');
+    if (order.status === 'Cancelled') throw new Error('This order is cancelled.');
+    if (order.flow_ready_to_bill) throw new Error('Make the bill for the packed pieces first.');
+    if (!(order.items || []).some(it => flowRemainingQty(it) > 0)) throw new Error('Nothing is left to pack on this order.');
+    order.flow_repack = true;
+    order.updated_at = new Date().toISOString();
+    this.saveOrders(orders, activeBiz);
+    return order;
   }
 
   // ----------------------------------------------------
@@ -7828,25 +7944,9 @@ class FMCGDatabase {
           deltaBaseQty: delta
         });
 
-        const inv = inventory.find(i => i.product_id === prodId);
-        if (inv) {
-          if (delta > 0) {
-            inv.physical_qty = Math.max(0, inv.physical_qty - delta);
-          } else {
-            inv.physical_qty += Math.abs(delta);
-          }
-          inv.available_qty = Math.max(0, inv.physical_qty - inv.reserved_qty);
-          inv.updated_at = new Date().toISOString();
-        }
-
-        const prodBatch = batches.find(b => b.product_id === prodId);
-        if (prodBatch) {
-          if (delta > 0) {
-            prodBatch.quantity = Math.max(0, prodBatch.quantity - delta);
-          } else {
-            prodBatch.quantity += Math.abs(delta);
-          }
-        }
+        // More pieces on the bill come out of stock (stock may go negative); fewer go back in
+        const soldLine = oldInvoice.items?.find(l => l.product_id === prodId);
+        this.moveStockAllowNegative(batches, inventory, prodId, delta, this.getActiveBusinessCompanyId(), soldLine?.batch_id);
 
         ledgers.push({
           id: `led-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
@@ -8598,8 +8698,9 @@ class FMCGDatabase {
   } {
     const activeBiz = payload.business_id || payload.business_company_id || this.getActiveBusinessCompanyId();
     const retailers = this.getRetailers(activeBiz);
-    const ret = retailers.find(r => r.id === payload.retailer_id);
-    if (!ret) throw new Error(`Customer with ID ${payload.retailer_id} not found`);
+    const ret = retailers.find(r => r.id === payload.retailer_id)
+      || (isWalkInRetailerId(payload.retailer_id) ? addWalkInToList(retailers, ensureWalkInRetailer(payload.retailer_id, activeBiz)) : undefined);
+    if (!ret) throw new Error('Customer not found.');
 
     const products = this.getProducts(activeBiz);
     const inventory = this.getInventory(activeBiz);
@@ -8611,7 +8712,7 @@ class FMCGDatabase {
     const invoicePrefix = 'INV';
     const invoiceNumber = nextDocNumber('INV/2026-27/', invoices.map(d => d.invoice_number));
     const placeOfSupply = payload.place_of_supply || ret.state_code || getHomeStateCode();
-    const paidAmount = Math.max(0, payload.paid_amount || 0);
+    let paidAmount = Math.max(0, payload.paid_amount || 0);
 
     let subtotal = 0;
     let discountTotal = 0;
@@ -8635,10 +8736,7 @@ class FMCGDatabase {
       if (baseQty <= 0) throw new Error(`Item "${prod.name}" has 0 quantity`);
 
       // Inventory check in base units
-      const inv = inventory.find(i => i.product_id === prod.id);
-      if (!inv || inv.physical_qty < baseQty) {
-        throw new Error(`Insufficient stock for "${prod.name}". Available: ${inv?.physical_qty || 0} ${prod.base_unit || 'pieces'}, Requested: ${baseQty}`);
-      }
+      // No stock check: billing is allowed without system stock (stock goes negative)
 
       // Rates & discounts
       const cartonRate = item.carton_rate ?? prod.selling_price;
@@ -8673,30 +8771,12 @@ class FMCGDatabase {
       sgstTotal += lineSgst;
       igstTotal += lineIgst;
 
-      // Deduct stock from batch or FIFO
-      let assignedBatchNumber = item.batch_number || 'BCH-2026-A1';
-      if (item.batch_id) {
-        const b = batches.find(batch => batch.id === item.batch_id);
-        if (b) {
-          b.quantity = Math.max(0, b.quantity - baseQty);
-          assignedBatchNumber = b.batch_number;
-        }
-      } else {
-        let rem = baseQty;
-        const prodBatches = batches.filter(b => b.product_id === prod.id && b.quantity > 0);
-        for (const b of prodBatches) {
-          if (rem <= 0) break;
-          const take = Math.min(b.quantity, rem);
-          b.quantity -= take;
-          rem -= take;
-          assignedBatchNumber = b.batch_number;
-        }
-      }
-
-      // Deduct inventory master
-      inv.physical_qty = Math.max(0, inv.physical_qty - baseQty);
-      inv.available_qty = Math.max(0, inv.physical_qty - (inv.reserved_qty || 0));
-      inv.updated_at = new Date().toISOString();
+      // Take the pieces out of stock (oldest batch first; anything missing goes negative)
+      const firstBatch = (item.batch_id ? batches.find(batch => batch.id === item.batch_id) : undefined)
+        || batches.filter(b => b.product_id === prod.id && b.quantity > 0)
+          .sort((x, y) => new Date(x.expiry_date || 0).getTime() - new Date(y.expiry_date || 0).getTime())[0];
+      const assignedBatchNumber = firstBatch?.batch_number || item.batch_number || '-';
+      this.moveStockAllowNegative(batches, inventory, prod.id, baseQty, activeBiz);
 
       // Record in Stock Ledger (in Base Units)
       ledgers.push({
@@ -8715,6 +8795,8 @@ class FMCGDatabase {
         id: `inv-item-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
         invoice_id: invoiceId,
         product_id: prod.id,
+        product_name: prod.name,
+        gst_percent: gstPercent,
         hsn: item.hsn || prod.hsn,
         packing: item.packing || prod.pack_size,
         quantity: baseQty,
@@ -8745,6 +8827,8 @@ class FMCGDatabase {
 
     const grandTotalBeforeRound = taxableTotal + cgstTotal + sgstTotal + igstTotal;
     const grandTotal = Math.round(grandTotalBeforeRound);
+    // Money received above the bill total is change returned, not a payment
+    paidAmount = Math.min(paidAmount, grandTotal);
     const roundOff = Math.round((grandTotal - grandTotalBeforeRound) * 100) / 100;
     const outstandingAmount = Math.max(0, grandTotal - paidAmount);
 
@@ -8765,6 +8849,8 @@ class FMCGDatabase {
       grand_total: grandTotal,
       paid_amount: paidAmount,
       outstanding_amount: outstandingAmount,
+      payment_status: paidAmount >= grandTotal ? 'Paid' : paidAmount > 0 ? 'Partial' : 'Unpaid',
+      payment_mode: payload.payment_mode,
       items: invoiceItems,
       notes: payload.notes,
       business_id: activeBiz
@@ -8785,7 +8871,7 @@ class FMCGDatabase {
       const payments = this.getPayments(activeBiz);
       const paymentAllocations = this.getPaymentAllocations(activeBiz);
       const payId = `pay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const payNum = `PAY-${Date.now().toString().slice(-6)}`;
+      const payNum = nextDocNumber(`PAY-${new Date().getFullYear()}-`, payments.map(p => p.payment_number));
 
       payments.push({
         id: payId,
@@ -8809,6 +8895,28 @@ class FMCGDatabase {
 
       this.savePayments(payments, activeBiz);
       this.savePaymentAllocations(paymentAllocations, activeBiz);
+      try {
+        this.createCashFlowTransaction({
+          company_id: activeBiz,
+          date: new Date().toISOString().split('T')[0],
+          time: new Date().toTimeString().split(' ')[0],
+          type: 'CASH_IN',
+          amount: paidAmount,
+          payment_mode: (payload.payment_mode === 'UPI' ? 'UPI' : payload.payment_mode === 'Bank Transfer' ? 'Bank Transfer' : 'Cash') as CashFlowPaymentMode,
+          category: 'Retailer Payment',
+          party_type: 'retailer',
+          party_id: ret.id,
+          party_name: ret.shop_name || 'Retailer',
+          reference_number: payNum,
+          source_type: 'Retailer Payment',
+          source_id: payId,
+          linked_retailer_id: ret.id,
+          remarks: `Received at billing for ${invoiceNumber}`,
+          created_by: payload.admin_user?.name || 'Billing terminal'
+        } as any);
+      } catch (e) {
+        console.warn('Cash flow entry skipped:', e);
+      }
     }
 
     const updatedProfile = this.getCustomerCreditProfile(ret.id, activeBiz);
@@ -10960,7 +11068,7 @@ class FMCGDatabase {
       // Deduct from Physical and Reserved stock (in base units)
       const inv = inventory.find(i => i.product_id === fItem.product_id);
       if (inv) {
-        inv.physical_qty = Math.max(0, inv.physical_qty - qtyToDispatch);
+        inv.physical_qty = (Number(inv.physical_qty) || 0) - qtyToDispatch;
         inv.reserved_qty = Math.max(0, inv.reserved_qty - qtyToDispatch);
         inv.available_qty = inv.physical_qty - inv.reserved_qty;
       }
@@ -12957,7 +13065,24 @@ class FMCGDatabase {
    * Option A: generateChallan = true -> Generates Delivery Challan & Tax Invoice.
    * Option B: generateChallan = false -> Proceeds without Delivery Challan (records 'Dispatched Without Delivery Challan').
    */
-  dispatchOrder(
+  dispatchOrder(orderId: string, dispatchInfo: any = {}, adminUser?: { id: string; name: string }): { order: Order; invoice: Invoice; challan?: DeliveryChallan } | null {
+    // Billing is allowed without system stock: lend the missing pieces, bill, take them back (stock goes negative)
+    const needs: Record<string, number> = {};
+    const o = this.getOrders().find(x => x.id === orderId);
+    (o?.items || []).forEach(it => {
+      const remaining = flowRemainingQty(it);
+      const q = dispatchInfo?.billQtyByItem ? Math.min(remaining, Math.floor(Number(dispatchInfo.billQtyByItem[it.id]) || 0)) : remaining;
+      if (q > 0) needs[it.product_id] = (needs[it.product_id] || 0) + q;
+    });
+    const lent = this.beginOversell(needs);
+    try {
+      return this.dispatchOrderCore(orderId, dispatchInfo, adminUser);
+    } finally {
+      this.endOversell(lent);
+    }
+  }
+
+  private dispatchOrderCore(
     orderId: string,
     dispatchInfo: {
       transportMode?: string;
@@ -13281,7 +13406,7 @@ class FMCGDatabase {
       // Deduct inventory physical & reserved quantities in base units
       const inv = inventory.find(i => i.product_id === item.product_id);
       if (inv) {
-        inv.physical_qty = Math.max(0, inv.physical_qty - qtyToDispatch);
+        inv.physical_qty = (Number(inv.physical_qty) || 0) - qtyToDispatch;
         inv.reserved_qty = Math.max(0, inv.reserved_qty - (item.confirmed_qty || qtyToDispatch));
         inv.available_qty = inv.physical_qty - inv.reserved_qty;
       }
@@ -13668,7 +13793,23 @@ class FMCGDatabase {
    * 4. Deducts stock atomically from batches/inventory and records ledger entries.
    * 5. Atomically handles Payment Ledger & Cash Flow integration based on selected payment mode.
    */
-  dispatchRetailerPackingLot(
+  dispatchRetailerPackingLot(lotData: any, dispatchInfo: any = {}, adminUser?: { id: string; name: string }): { invoice: Invoice; challan?: DeliveryChallan; updatedOrders: Order[] } | null {
+    // Billing is allowed without system stock (see beginOversell)
+    const needs: Record<string, number> = {};
+    (lotData?.items || []).forEach((li: any) => {
+      const units = li.unitsPerPack || 1;
+      const q = (Math.max(0, li.packedCartons || 0) * units) + Math.max(0, li.packedLoose || 0);
+      if (q > 0) needs[li.productId] = (needs[li.productId] || 0) + q;
+    });
+    const lent = this.beginOversell(needs);
+    try {
+      return this.dispatchRetailerPackingLotCore(lotData, dispatchInfo, adminUser);
+    } finally {
+      this.endOversell(lent);
+    }
+  }
+
+  private dispatchRetailerPackingLotCore(
     lotData: {
       retailerId: string;
       sourceOrderIds: string[];
@@ -13928,8 +14069,8 @@ class FMCGDatabase {
       // Deduct inventory physical & reserved quantities
       const inv = inventory.find(i => i.product_id === lotItem.productId);
       if (inv) {
-        inv.physical_qty = Math.max(0, inv.physical_qty - packedBaseUnits);
-        inv.available_qty = Math.max(0, inv.physical_qty - (inv.reserved_qty || 0));
+        inv.physical_qty = (Number(inv.physical_qty) || 0) - packedBaseUnits;
+        inv.available_qty = inv.physical_qty - (inv.reserved_qty || 0);
       }
 
       // Update the originating order item's fulfilled and remaining quantities
@@ -15420,7 +15561,7 @@ export function flowOrderStage(order: Order, freeStock: Record<string, number>):
   }
   const anyBilled = items.some(it => (Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0) > 0);
   const triedBefore = !!order.flow_pack_attempted_at || anyBilled;
-  if (!triedBefore) return 'to_pack';
+  if (!triedBefore || order.flow_repack) return 'to_pack';
   // Backorder: stock aate hi wapas packer ke paas
   const stockArrived = remainingItems.some(it => (freeStock[it.product_id] || 0) > 0);
   return stockArrived ? 'to_pack' : 'backorder';

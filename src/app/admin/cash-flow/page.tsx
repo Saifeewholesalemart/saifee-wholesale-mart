@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useMemo, useEffect, Suspense } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
@@ -226,13 +227,13 @@ function AdminCashFlowContent() {
       // Search Query
       if (searchTerm.trim()) {
         const q = searchTerm.toLowerCase();
-        const matchParty = t.party_name?.toLowerCase().includes(q);
-        const matchTxNum = t.transaction_number?.toLowerCase().includes(q);
-        const matchRef = t.reference_number?.toLowerCase().includes(q);
-        const matchInv = t.linked_invoice_number?.toLowerCase().includes(q);
-        const matchCat = t.category?.toLowerCase().includes(q);
+        const matchParty = hasWords(t.party_name?.toLowerCase(), q);
+        const matchTxNum = hasWords(t.transaction_number?.toLowerCase(), q);
+        const matchRef = hasWords(t.reference_number?.toLowerCase(), q);
+        const matchInv = hasWords(t.linked_invoice_number?.toLowerCase(), q);
+        const matchCat = hasWords(t.category?.toLowerCase(), q);
         const matchAmt = String(t.amount).includes(q);
-        const matchRemarks = t.remarks?.toLowerCase().includes(q);
+        const matchRemarks = hasWords(t.remarks?.toLowerCase(), q);
         if (!matchParty && !matchTxNum && !matchRef && !matchInv && !matchCat && !matchAmt && !matchRemarks) {
           return false;
         }

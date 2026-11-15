@@ -22,7 +22,7 @@ interface MenuItem {
 
 const MENU_ITEMS: MenuItem[] = [
   { name: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
-  { name: '⚡ Fast Trade Terminal', path: '/admin/terminal', icon: Zap },
+  { name: 'Billing Terminal', path: '/admin/terminal', icon: Zap },
   { name: 'Item Master (Products)', path: '/admin/products', icon: Package },
   { name: 'Import from Vyapar', path: '/admin/products/import-vyapar', icon: FileSpreadsheet },
   { name: 'Godowns / Warehouses', path: '/admin/godowns', icon: Warehouse },
@@ -31,7 +31,6 @@ const MENU_ITEMS: MenuItem[] = [
   { name: 'Purchases', path: '/admin/purchases', icon: PackageCheck },
   { name: 'AI Purchase Import', path: '/admin/purchase/import', icon: Cpu },
   { name: 'Inventory & Batch', path: '/admin/inventory', icon: Boxes },
-  { name: 'Invoices (GST)', path: '/admin/invoices', icon: FileSpreadsheet },
   { name: 'Manage Profiles', path: '/admin/profiles', icon: UserCog },
   { name: 'Shop Approvals', path: '/admin/approvals', icon: BadgeCheck },
   { name: 'Salesman Tracking', path: '/admin/tracking', icon: MapPin },

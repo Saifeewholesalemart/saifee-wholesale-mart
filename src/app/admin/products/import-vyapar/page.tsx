@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useRef, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
@@ -278,7 +279,7 @@ export default function VyaparProductImportPage() {
         const barcode = (row.normalizedData.barcode || '').toLowerCase();
         const brand = (row.normalizedData.brand || '').toLowerCase();
         const comp = (row.normalizedData.company_name || '').toLowerCase();
-        return name.includes(q) || sku.includes(q) || barcode.includes(q) || brand.includes(q) || comp.includes(q);
+        return hasWords(name, q) || hasWords(sku, q) || hasWords(barcode, q) || hasWords(brand, q) || comp.includes(q);
       }
 
       return true;

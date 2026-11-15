@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { Retailer } from '@/lib/db';
@@ -61,13 +62,13 @@ export default function AdminRetailers() {
       // Search
       const q = searchTerm.toLowerCase().trim();
       const matchSearch = !q || (
-        (r.shop_name || '').toLowerCase().includes(q) ||
-        (r.owner_name || '').toLowerCase().includes(q) ||
-        (r.retailer_code || '').toLowerCase().includes(q) ||
-        (r.gstin && r.gstin.toLowerCase().includes(q)) ||
-        (r.city && r.city.toLowerCase().includes(q)) ||
-        (r.mobile && r.mobile.includes(q)) ||
-        (r.address && r.address.toLowerCase().includes(q))
+        hasWords((r.shop_name || '').toLowerCase(), q) ||
+        hasWords((r.owner_name || '').toLowerCase(), q) ||
+        hasWords((r.retailer_code || '').toLowerCase(), q) ||
+        (r.gstin && hasWords(r.gstin.toLowerCase(), q)) ||
+        (r.city && hasWords(r.city.toLowerCase(), q)) ||
+        (r.mobile && hasWords(r.mobile, q)) ||
+        (r.address && hasWords(r.address.toLowerCase(), q))
       );
 
       // City filter

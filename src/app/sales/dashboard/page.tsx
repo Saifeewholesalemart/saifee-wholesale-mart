@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useEffect, useMemo, useRef, useDeferredValue, useCallback } from 'react';
 import { useDb, SalespersonCartItem } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
@@ -85,10 +86,10 @@ export default function SalesDashboard() {
   // The shop counter's walk-in record is not a real shop: salesmen never order for it
   const filteredRetailers = retailers.filter(r => !isWalkInRetailerId(r.id) && r.active !== false).filter(r =>
     retailerSearch.trim() === '' ||
-    (r.shop_name || '').toLowerCase().includes(retailerSearch.toLowerCase()) ||
-    (r.owner_name || '').toLowerCase().includes(retailerSearch.toLowerCase()) ||
-    (r.retailer_code || '').toLowerCase().includes(retailerSearch.toLowerCase()) ||
-    (r.city || '').toLowerCase().includes(retailerSearch.toLowerCase())
+    hasWords((r.shop_name || '').toLowerCase(), retailerSearch.toLowerCase()) ||
+    hasWords((r.owner_name || '').toLowerCase(), retailerSearch.toLowerCase()) ||
+    hasWords((r.retailer_code || '').toLowerCase(), retailerSearch.toLowerCase()) ||
+    hasWords((r.city || '').toLowerCase(), retailerSearch.toLowerCase())
   );
 
   // 3. Filter products & categories based on salesperson category assignment
@@ -196,9 +197,9 @@ export default function SalesDashboard() {
       if (!matchCat) return false;
 
       return q === '' ||
-        (p.name || '').toLowerCase().includes(q) ||
-        (p.brand || '').toLowerCase().includes(q) ||
-        (p.product_code || '').toLowerCase().includes(q);
+        hasWords((p.name || '').toLowerCase(), q) ||
+        hasWords((p.brand || '').toLowerCase(), q) ||
+        hasWords((p.product_code || '').toLowerCase(), q);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [products, salesVisible, retailerVisible, isCompanySalesperson, companyIdFilter, assignedCompanyIds.join(','), selectedCategory, productCats, deferredProductSearch]);
@@ -536,8 +537,8 @@ export default function SalesDashboard() {
   const salesHistory = scopedOrders
     .filter(o => {
       const matchSearch = !historySearch.trim() || 
-        o.order_number.toLowerCase().includes(historySearch.toLowerCase()) ||
-        retailers.find(r => r.id === o.retailer_id)?.shop_name?.toLowerCase().includes(historySearch.toLowerCase());
+        hasWords(o.order_number.toLowerCase(), historySearch.toLowerCase()) ||
+        hasWords(retailers.find(r => r.id === o.retailer_id)?.shop_name?.toLowerCase(), historySearch.toLowerCase());
       const matchRet = historyFilterRetailer === 'ALL' || o.retailer_id === historyFilterRetailer;
       return matchSearch && matchRet;
     })

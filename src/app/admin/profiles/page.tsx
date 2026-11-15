@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { Profile, Retailer, Company, Category } from '@/lib/db';
@@ -255,27 +256,27 @@ export default function ManageProfilesPage() {
         const q = searchTerm.toLowerCase();
         if (row.kind === 'retailer') {
           const r = row.data;
-          const matchShop = r.shop_name?.toLowerCase().includes(q);
-          const matchOwner = r.owner_name?.toLowerCase().includes(q);
-          const matchMobile = r.mobile?.toLowerCase().includes(q);
-          const matchCode = r.retailer_code?.toLowerCase().includes(q);
-          const matchCity = r.city?.toLowerCase().includes(q);
-          const matchAddress = r.address?.toLowerCase().includes(q);
+          const matchShop = hasWords(r.shop_name?.toLowerCase(), q);
+          const matchOwner = hasWords(r.owner_name?.toLowerCase(), q);
+          const matchMobile = hasWords(r.mobile?.toLowerCase(), q);
+          const matchCode = hasWords(r.retailer_code?.toLowerCase(), q);
+          const matchCity = hasWords(r.city?.toLowerCase(), q);
+          const matchAddress = hasWords(r.address?.toLowerCase(), q);
           if (!matchShop && !matchOwner && !matchMobile && !matchCode && !matchCity && !matchAddress) {
             return false;
           }
         } else if (row.kind === 'staff') {
           const st = row.data;
-          const matchName = (st.full_name || st.name)?.toLowerCase().includes(q);
+          const matchName = hasWords((st.full_name || st.name)?.toLowerCase(), q);
           const matchMobile = (st.contact_no || st.mobile)?.includes(q);
-          const matchRole = st.custom_role?.toLowerCase().includes(q);
-          const matchEmail = st.email?.toLowerCase().includes(q);
+          const matchRole = hasWords(st.custom_role?.toLowerCase(), q);
+          const matchEmail = hasWords(st.email?.toLowerCase(), q);
           if (!matchName && !matchMobile && !matchRole && !matchEmail) return false;
         } else {
           const s = row.data;
-          const matchName = s.name?.toLowerCase().includes(q);
-          const matchMobile = s.mobile?.toLowerCase().includes(q);
-          const matchEmail = s.email?.toLowerCase().includes(q);
+          const matchName = hasWords(s.name?.toLowerCase(), q);
+          const matchMobile = hasWords(s.mobile?.toLowerCase(), q);
+          const matchEmail = hasWords(s.email?.toLowerCase(), q);
           if (!matchName && !matchMobile && !matchEmail) return false;
         }
       }
@@ -1157,7 +1158,7 @@ export default function ManageProfilesPage() {
 
                         <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
                           {activeCompaniesList
-                            .filter(c => !companySearch || c.name.toLowerCase().includes(companySearch.toLowerCase()))
+                            .filter(c => !companySearch || hasWords(c.name.toLowerCase(), companySearch.toLowerCase()))
                             .map(c => {
                               const isSelected = selectedCompanyIds.includes(c.id);
                               return (
@@ -1225,7 +1226,7 @@ export default function ManageProfilesPage() {
 
                         <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
                           {activeCategoriesList
-                            .filter(cat => !categorySearch || cat.name.toLowerCase().includes(categorySearch.toLowerCase()))
+                            .filter(cat => !categorySearch || hasWords(cat.name.toLowerCase(), categorySearch.toLowerCase()))
                             .map(cat => {
                               const isSelected = selectedCategoryIds.includes(cat.id);
                               return (
@@ -1409,7 +1410,7 @@ export default function ManageProfilesPage() {
                           Suggested / Existing Roles
                         </div>
                         {allKnownJobRoles
-                          .filter(r => !staffRoleSearch || r.toLowerCase().includes(staffRoleSearch.toLowerCase()))
+                          .filter(r => !staffRoleSearch || hasWords(r.toLowerCase(), staffRoleSearch.toLowerCase()))
                           .map((roleName) => (
                             <button
                               key={roleName}
@@ -2278,7 +2279,7 @@ export default function ManageProfilesPage() {
                 {showEditStaffRoleDropdown && (
                   <div className="absolute top-full left-0 right-0 z-30 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-40 overflow-y-auto p-1.5 space-y-1">
                     {allKnownJobRoles
-                      .filter(r => !editStaffRoleSearch || r.toLowerCase().includes(editStaffRoleSearch.toLowerCase()))
+                      .filter(r => !editStaffRoleSearch || hasWords(r.toLowerCase(), editStaffRoleSearch.toLowerCase()))
                       .map((roleName) => (
                         <button
                           key={roleName}

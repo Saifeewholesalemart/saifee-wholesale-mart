@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import { ensureWalkInRetailer, describeStockShortfall } from '@/lib/db';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
@@ -113,12 +114,12 @@ export default function SpotOrderModal({
     if (!query) return retailers.slice(0, 50);
 
     return retailers.filter(r => {
-      const matchShop = r.shop_name?.toLowerCase().includes(query);
-      const matchOwner = r.owner_name?.toLowerCase().includes(query);
-      const matchCity = r.city?.toLowerCase().includes(query);
-      const matchBeat = (r.beat_name || r.route)?.toLowerCase().includes(query);
+      const matchShop = hasWords(r.shop_name?.toLowerCase(), query);
+      const matchOwner = hasWords(r.owner_name?.toLowerCase(), query);
+      const matchCity = hasWords(r.city?.toLowerCase(), query);
+      const matchBeat = hasWords((r.beat_name || r.route)?.toLowerCase(), query);
       const matchPhone = (r.mobile || r.phone || '').includes(query);
-      const matchGstin = (r.gstin || '').toLowerCase().includes(query);
+      const matchGstin = hasWords((r.gstin || '').toLowerCase(), query);
 
       return matchShop || matchOwner || matchCity || matchBeat || matchPhone || matchGstin;
     }).slice(0, 50);
@@ -176,12 +177,12 @@ export default function SpotOrderModal({
     if (!rawQuery) return products.slice(0, 40);
 
     return products.filter(p => {
-      const matchName = p.name.toLowerCase().includes(rawQuery);
-      const matchBrand = (p.brand || '').toLowerCase().includes(rawQuery);
-      const matchSku = p.sku.toLowerCase().includes(rawQuery);
-      const matchBarcode = (p.barcode || '').toLowerCase().includes(rawQuery);
+      const matchName = hasWords(p.name.toLowerCase(), rawQuery);
+      const matchBrand = hasWords((p.brand || '').toLowerCase(), rawQuery);
+      const matchSku = hasWords(p.sku.toLowerCase(), rawQuery);
+      const matchBarcode = hasWords((p.barcode || '').toLowerCase(), rawQuery);
       const matchMrp = String(p.mrp).includes(rawQuery);
-      const matchCategory = (p.category || '').toLowerCase().includes(rawQuery);
+      const matchCategory = hasWords((p.category || '').toLowerCase(), rawQuery);
 
       return matchName || matchBrand || matchSku || matchBarcode || matchMrp || matchCategory;
     }).slice(0, 40);
@@ -193,10 +194,10 @@ export default function SpotOrderModal({
     if (!query) return [];
 
     return products.filter(p => {
-      const matchBarcode = (p.barcode || '').toLowerCase().includes(query);
-      const matchSku = p.sku.toLowerCase().includes(query);
-      const matchName = p.name.toLowerCase().includes(query);
-      const matchBrand = (p.brand || '').toLowerCase().includes(query);
+      const matchBarcode = hasWords((p.barcode || '').toLowerCase(), query);
+      const matchSku = hasWords(p.sku.toLowerCase(), query);
+      const matchName = hasWords(p.name.toLowerCase(), query);
+      const matchBrand = hasWords((p.brand || '').toLowerCase(), query);
       return matchBarcode || matchSku || matchName || matchBrand;
     }).slice(0, 20);
   }, [products, topBarcodeQuery]);

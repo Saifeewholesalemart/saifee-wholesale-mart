@@ -3,6 +3,7 @@
  * Saifee General Stores FMCG Distribution Management System
  */
 
+import { hasWords } from '@/lib/searchWords';
 import { 
   Invoice, Order, Fulfilment, Product, Retailer, Company, Profile, 
   Purchase, Payment, SalesReturn, InventoryBatch, Inventory, StockLedgerEntry, Supplier,
@@ -387,36 +388,36 @@ export function isInvoiceMatchingSearch(
   const q = query.trim().toLowerCase();
 
   // 1. Invoice Number or ID
-  if (inv.invoice_number?.toLowerCase().includes(q)) return true;
-  if (inv.id?.toLowerCase().includes(q)) return true;
-  if (inv.order_ref_id?.toLowerCase().includes(q)) return true;
+  if (hasWords(inv.invoice_number?.toLowerCase(), q)) return true;
+  if (hasWords(inv.id?.toLowerCase(), q)) return true;
+  if (hasWords(inv.order_ref_id?.toLowerCase(), q)) return true;
 
   // 2. Retailer Info
   const ret = byId(db.retailers).get(inv.retailer_id);
   if (ret) {
-    if (ret.shop_name?.toLowerCase().includes(q)) return true;
-    if (ret.owner_name?.toLowerCase().includes(q)) return true;
-    if (ret.city?.toLowerCase().includes(q)) return true;
+    if (hasWords(ret.shop_name?.toLowerCase(), q)) return true;
+    if (hasWords(ret.owner_name?.toLowerCase(), q)) return true;
+    if (hasWords(ret.city?.toLowerCase(), q)) return true;
     if (ret.phone?.includes(q)) return true;
-    if (ret.gstin?.toLowerCase().includes(q)) return true;
+    if (hasWords(ret.gstin?.toLowerCase(), q)) return true;
   }
 
   // 3. Salesperson Info
   const spName = getInvoiceSalespersonName(inv, db);
-  if (spName?.toLowerCase().includes(q)) return true;
+  if (hasWords(spName?.toLowerCase(), q)) return true;
 
   // 4. Line Items / Product Info
   if (inv.items && inv.items.length > 0) {
     const hasItemMatch = inv.items.some(item => {
-      if ((item as any).product_name?.toLowerCase().includes(q)) return true;
-      if (item.packing?.toLowerCase().includes(q)) return true;
-      if ((item as any).hsn_code?.toLowerCase().includes(q)) return true;
+      if (hasWords((item as any).product_name?.toLowerCase(), q)) return true;
+      if (hasWords(item.packing?.toLowerCase(), q)) return true;
+      if (hasWords((item as any).hsn_code?.toLowerCase(), q)) return true;
       const prod = byId(db.products).get(item.product_id);
       if (prod) {
-        if (prod.name?.toLowerCase().includes(q)) return true;
-        if (prod.brand?.toLowerCase().includes(q)) return true;
-        if (prod.category?.toLowerCase().includes(q)) return true;
-        if (prod.hsn?.toLowerCase().includes(q)) return true;
+        if (hasWords(prod.name?.toLowerCase(), q)) return true;
+        if (hasWords(prod.brand?.toLowerCase(), q)) return true;
+        if (hasWords(prod.category?.toLowerCase(), q)) return true;
+        if (hasWords(prod.hsn?.toLowerCase(), q)) return true;
       }
       return false;
     });
@@ -434,27 +435,27 @@ export function isOrderMatchingSearch(
   if (!query || !query.trim()) return true;
   const q = query.trim().toLowerCase();
 
-  if (order.order_number?.toLowerCase().includes(q)) return true;
-  if (order.id?.toLowerCase().includes(q)) return true;
+  if (hasWords(order.order_number?.toLowerCase(), q)) return true;
+  if (hasWords(order.id?.toLowerCase(), q)) return true;
 
   const ret = byId(db.retailers).get(order.retailer_id);
   if (ret) {
-    if (ret.shop_name?.toLowerCase().includes(q)) return true;
-    if (ret.owner_name?.toLowerCase().includes(q)) return true;
-    if (ret.city?.toLowerCase().includes(q)) return true;
+    if (hasWords(ret.shop_name?.toLowerCase(), q)) return true;
+    if (hasWords(ret.owner_name?.toLowerCase(), q)) return true;
+    if (hasWords(ret.city?.toLowerCase(), q)) return true;
   }
 
   const sp = byId(db.profiles).get(order.created_by);
-  if (sp && sp.name?.toLowerCase().includes(q)) return true;
+  if (sp && hasWords(sp.name?.toLowerCase(), q)) return true;
 
   if (order.items && order.items.length > 0) {
     const hasItemMatch = order.items.some(item => {
-      if (item.product_name?.toLowerCase().includes(q)) return true;
+      if (hasWords(item.product_name?.toLowerCase(), q)) return true;
       const prod = byId(db.products).get(item.product_id);
       if (prod) {
-        if (prod.name?.toLowerCase().includes(q)) return true;
-        if (prod.brand?.toLowerCase().includes(q)) return true;
-        if (prod.category?.toLowerCase().includes(q)) return true;
+        if (hasWords(prod.name?.toLowerCase(), q)) return true;
+        if (hasWords(prod.brand?.toLowerCase(), q)) return true;
+        if (hasWords(prod.category?.toLowerCase(), q)) return true;
       }
       return false;
     });
@@ -4442,36 +4443,36 @@ export function getPartyItemReport(
     const q = f.searchQuery.trim().toLowerCase();
     rows = rows.filter(r => {
       // 1. Retailer Name & Info
-      if (r.partyName.toLowerCase().includes(q)) return true;
-      if (r.ownerName && r.ownerName.toLowerCase().includes(q)) return true;
-      if (r.retailerCode && r.retailerCode.toLowerCase().includes(q)) return true;
-      if (r.mobile && r.mobile.includes(q)) return true;
-      if (r.phone && r.phone.includes(q)) return true;
-      if (r.city && r.city.toLowerCase().includes(q)) return true;
-      if (r.gstin && r.gstin.toLowerCase().includes(q)) return true;
+      if (hasWords(r.partyName.toLowerCase(), q)) return true;
+      if (r.ownerName && hasWords(r.ownerName.toLowerCase(), q)) return true;
+      if (r.retailerCode && hasWords(r.retailerCode.toLowerCase(), q)) return true;
+      if (r.mobile && hasWords(r.mobile, q)) return true;
+      if (r.phone && hasWords(r.phone, q)) return true;
+      if (r.city && hasWords(r.city.toLowerCase(), q)) return true;
+      if (r.gstin && hasWords(r.gstin.toLowerCase(), q)) return true;
 
       // 2. Product Name, SKU, Order #, Invoice # in Sales Transactions
       const matchInSales = r.salesTransactions.some(t =>
-        (t.productName && t.productName.toLowerCase().includes(q)) ||
-        (t.brand && t.brand.toLowerCase().includes(q)) ||
-        (t.invoiceNumber && t.invoiceNumber.toLowerCase().includes(q)) ||
-        (t.orderNumber && t.orderNumber.toLowerCase().includes(q)) ||
-        (t.salesperson && t.salesperson.toLowerCase().includes(q))
+        (t.productName && hasWords(t.productName.toLowerCase(), q)) ||
+        (t.brand && hasWords(t.brand.toLowerCase(), q)) ||
+        (t.invoiceNumber && hasWords(t.invoiceNumber.toLowerCase(), q)) ||
+        (t.orderNumber && hasWords(t.orderNumber.toLowerCase(), q)) ||
+        (t.salesperson && hasWords(t.salesperson.toLowerCase(), q))
       );
       if (matchInSales) return true;
 
       // 3. Purchase Transactions
       const matchInPurchase = r.purchaseTransactions.some(t =>
-        (t.productName && t.productName.toLowerCase().includes(q)) ||
-        (t.purchaseNumber && t.purchaseNumber.toLowerCase().includes(q)) ||
-        (t.supplierName && t.supplierName.toLowerCase().includes(q))
+        (t.productName && hasWords(t.productName.toLowerCase(), q)) ||
+        (t.purchaseNumber && hasWords(t.purchaseNumber.toLowerCase(), q)) ||
+        (t.supplierName && hasWords(t.supplierName.toLowerCase(), q))
       );
       if (matchInPurchase) return true;
 
       // 4. Product Breakdown
       const matchInBreakdown = r.productBreakdown.some(pb =>
-        pb.productName.toLowerCase().includes(q) ||
-        (pb.brand && pb.brand.toLowerCase().includes(q))
+        hasWords(pb.productName.toLowerCase(), q) ||
+        (pb.brand && hasWords(pb.brand.toLowerCase(), q))
       );
       if (matchInBreakdown) return true;
 
@@ -5239,12 +5240,12 @@ export function getItemReportByParty(
   if (f.searchQuery && f.searchQuery.trim()) {
     const q = f.searchQuery.trim().toLowerCase();
     rows = rows.filter(r => 
-      r.productName.toLowerCase().includes(q) ||
-      (r.sku && r.sku.toLowerCase().includes(q)) ||
-      (r.brand && r.brand.toLowerCase().includes(q)) ||
-      (r.category && r.category.toLowerCase().includes(q)) ||
-      r.salesTransactions.some(t => t.retailerName.toLowerCase().includes(q) || t.invoiceNumber.toLowerCase().includes(q)) ||
-      r.purchaseTransactions.some(t => t.supplierName.toLowerCase().includes(q) || t.purchaseNumber.toLowerCase().includes(q))
+      hasWords(r.productName.toLowerCase(), q) ||
+      (r.sku && hasWords(r.sku.toLowerCase(), q)) ||
+      (r.brand && hasWords(r.brand.toLowerCase(), q)) ||
+      (r.category && hasWords(r.category.toLowerCase(), q)) ||
+      r.salesTransactions.some(t => hasWords(t.retailerName.toLowerCase(), q) || hasWords(t.invoiceNumber.toLowerCase(), q)) ||
+      r.purchaseTransactions.some(t => hasWords(t.supplierName.toLowerCase(), q) || hasWords(t.purchaseNumber.toLowerCase(), q))
     );
     rows = rows.map((r, i) => ({ ...r, srNo: i + 1 }));
   }

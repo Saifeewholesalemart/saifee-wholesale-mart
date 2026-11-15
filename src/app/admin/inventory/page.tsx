@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useEffect, useMemo, useDeferredValue, useRef } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -133,11 +134,11 @@ export default function AdminInventory() {
       : catIds.includes(filterCategory);
 
     const matchSearch = searchTerm.trim() === '' ||
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.brand.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.product_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.hsn.includes(searchTerm) ||
-      (p.barcode && p.barcode.includes(searchTerm));
+      hasWords(p.name.toLowerCase(), searchTerm.toLowerCase()) ||
+      hasWords(p.brand.toLowerCase(), searchTerm.toLowerCase()) ||
+      hasWords(p.product_code.toLowerCase(), searchTerm.toLowerCase()) ||
+      hasWords(p.hsn, searchTerm) ||
+      (p.barcode && hasWords(p.barcode, searchTerm));
 
     return matchComp && matchCat && matchSearch;
   // eslint-disable-next-line react-hooks/exhaustive-deps

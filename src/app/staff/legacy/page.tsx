@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import { getHomeStateCode } from '@/lib/db';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
@@ -634,10 +635,10 @@ export default function StaffDashboardPage() {
       if (selectedRoute !== 'ALL' && lot.route !== selectedRoute) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        return lot.shopName.toLowerCase().includes(q) ||
-               lot.ownerName.toLowerCase().includes(q) ||
-               lot.mobile.includes(q) ||
-               lot.orderNumbers.some(on => on.toLowerCase().includes(q));
+        return hasWords(lot.shopName.toLowerCase(), q) ||
+               hasWords(lot.ownerName.toLowerCase(), q) ||
+               hasWords(lot.mobile, q) ||
+               lot.orderNumbers.some(on => hasWords(on.toLowerCase(), q));
       }
       return true;
     });
@@ -649,10 +650,10 @@ export default function StaffDashboardPage() {
       if (selectedRoute !== 'ALL' && lot.route !== selectedRoute) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        return lot.shopName.toLowerCase().includes(q) ||
-               lot.ownerName.toLowerCase().includes(q) ||
-               lot.mobile.includes(q) ||
-               lot.orderNumbers.some(on => on.toLowerCase().includes(q));
+        return hasWords(lot.shopName.toLowerCase(), q) ||
+               hasWords(lot.ownerName.toLowerCase(), q) ||
+               hasWords(lot.mobile, q) ||
+               lot.orderNumbers.some(on => hasWords(on.toLowerCase(), q));
       }
       return true;
     });
@@ -663,10 +664,10 @@ export default function StaffDashboardPage() {
       if (selectedRoute !== 'ALL' && card.route !== selectedRoute) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        return card.shopName.toLowerCase().includes(q) ||
-               card.ownerName.toLowerCase().includes(q) ||
-               card.phone.includes(q) ||
-               card.sourceOrderNumbers.some(on => on.toLowerCase().includes(q));
+        return hasWords(card.shopName.toLowerCase(), q) ||
+               hasWords(card.ownerName.toLowerCase(), q) ||
+               hasWords(card.phone, q) ||
+               card.sourceOrderNumbers.some(on => hasWords(on.toLowerCase(), q));
       }
       return true;
     });

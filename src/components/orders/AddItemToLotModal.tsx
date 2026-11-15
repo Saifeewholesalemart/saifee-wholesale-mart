@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { Product, Inventory } from '@/lib/db';
@@ -39,10 +40,10 @@ export default function AddItemToLotModal({
     if (!searchTerm.trim()) return products.slice(0, 10);
     const term = searchTerm.toLowerCase();
     return products.filter(p => 
-      p.name.toLowerCase().includes(term) ||
-      p.sku.toLowerCase().includes(term) ||
-      (p.brand && p.brand.toLowerCase().includes(term)) ||
-      (p.hsn && p.hsn.toLowerCase().includes(term))
+      hasWords(p.name.toLowerCase(), term) ||
+      hasWords(p.sku.toLowerCase(), term) ||
+      (p.brand && hasWords(p.brand.toLowerCase(), term)) ||
+      (p.hsn && hasWords(p.hsn.toLowerCase(), term))
     ).slice(0, 15);
   }, [products, searchTerm]);
 

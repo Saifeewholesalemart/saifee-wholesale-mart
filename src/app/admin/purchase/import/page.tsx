@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useRef } from 'react';
 import { useDb } from '@/context/DbContext';
 import { useRouter } from 'next/navigation';
@@ -970,10 +971,10 @@ export default function AIPurchaseImport() {
   const searchResults = searchQuery.trim() === '' ? [] : products.filter(p => {
     const q = searchQuery.toLowerCase();
     const compName = companies.find(c => c.id === p.company_id)?.name || '';
-    return p.name.toLowerCase().includes(q) ||
-           p.sku.toLowerCase().includes(q) ||
-           p.barcode.toLowerCase().includes(q) ||
-           compName.toLowerCase().includes(q);
+    return hasWords(p.name.toLowerCase(), q) ||
+           hasWords(p.sku.toLowerCase(), q) ||
+           hasWords(p.barcode.toLowerCase(), q) ||
+           hasWords(compName.toLowerCase(), q);
   });
 
   // Download Extracted Data Handler
@@ -1003,12 +1004,12 @@ export default function AIPurchaseImport() {
       const matchedProd = products.find(p => p.id === line.matched_product_id);
       const suggestedProd = products.find(p => p.id === line.suggested_product_id);
       
-      const inExtractedName = (line.custom_name || line.extracted_name).toLowerCase().includes(q);
-      const inMatchedName = matchedProd?.name.toLowerCase().includes(q) || false;
-      const inSuggestedName = suggestedProd?.name.toLowerCase().includes(q) || false;
-      const inHsn = line.hsn.toLowerCase().includes(q) || matchedProd?.hsn.toLowerCase().includes(q) || false;
-      const inBatch = line.batch.toLowerCase().includes(q);
-      const inSku = line.sku?.toLowerCase().includes(q) || matchedProd?.sku.toLowerCase().includes(q) || suggestedProd?.sku.toLowerCase().includes(q) || false;
+      const inExtractedName = hasWords((line.custom_name || line.extracted_name).toLowerCase(), q);
+      const inMatchedName = hasWords(matchedProd?.name.toLowerCase(), q) || false;
+      const inSuggestedName = hasWords(suggestedProd?.name.toLowerCase(), q) || false;
+      const inHsn = hasWords(line.hsn.toLowerCase(), q) || hasWords(matchedProd?.hsn.toLowerCase(), q) || false;
+      const inBatch = hasWords(line.batch.toLowerCase(), q);
+      const inSku = hasWords(line.sku?.toLowerCase(), q) || hasWords(matchedProd?.sku.toLowerCase(), q) || hasWords(suggestedProd?.sku.toLowerCase(), q) || false;
       
       if (!inExtractedName && !inMatchedName && !inSuggestedName && !inHsn && !inBatch && !inSku) {
         return false;

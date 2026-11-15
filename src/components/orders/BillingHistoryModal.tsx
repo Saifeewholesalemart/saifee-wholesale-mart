@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useEffect, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
 import { BillingRateRecord } from '@/lib/db';
@@ -148,10 +149,10 @@ export default function BillingHistoryModal({
     if (!filterSearch.trim()) return records;
     const q = filterSearch.toLowerCase();
     return records.filter(r => 
-      (r.invoice_number || '').toLowerCase().includes(q) ||
-      (r.order_number || '').toLowerCase().includes(q) ||
-      (r.retailer_name || '').toLowerCase().includes(q) ||
-      (r.salesperson || '').toLowerCase().includes(q)
+      hasWords((r.invoice_number || '').toLowerCase(), q) ||
+      hasWords((r.order_number || '').toLowerCase(), q) ||
+      hasWords((r.retailer_name || '').toLowerCase(), q) ||
+      hasWords((r.salesperson || '').toLowerCase(), q)
     );
   };
 

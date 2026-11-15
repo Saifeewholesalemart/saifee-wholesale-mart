@@ -181,7 +181,7 @@ export default function AdminDashboard() {
         </div>
 
         {/* Total Outstanding */}
-        <Link href="/admin/invoices">
+        <Link href="/admin/terminal?view=bills">
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between hover:border-red-300 transition-all h-full">
             <div className="space-y-1">
               <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Total Outstanding</span>
@@ -514,7 +514,7 @@ export default function AdminDashboard() {
         <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">Recent Invoices</h3>
-            <Link href="/admin/invoices" className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-0.5">
+            <Link href="/admin/terminal?view=bills" className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-0.5">
               <span>View All</span>
               <ArrowUpRight className="w-3.5 h-3.5" />
             </Link>

@@ -1,4 +1,5 @@
 'use client';
+import { hasWords } from '@/lib/searchWords';
 
 /**
  * Order detail for admin: items (ordered / billed / pending), its bills, history.
@@ -52,7 +53,7 @@ function LineEditor({
     const q = search.trim().toLowerCase();
     if (q.length < 2) return [];
     return products
-      .filter(p => p.active !== false && `${p.name} ${p.mrp ?? ''} ${p.sku ?? ''}`.toLowerCase().includes(q))
+      .filter(p => p.active !== false && hasWords(`${p.name} ${p.mrp ?? ''} ${p.sku ?? ''}`, q))
       .slice(0, 8);
   }, [search, products]);
 

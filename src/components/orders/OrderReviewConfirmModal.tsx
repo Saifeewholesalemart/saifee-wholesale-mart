@@ -651,7 +651,7 @@ export default function OrderReviewConfirmModal({
                 </span>
                 {order.invoice_id && (
                   <a
-                    href={`/admin/invoices?search=${encodeURIComponent(order.order_number)}`}
+                    href={`/admin/terminal?view=bills&search=${encodeURIComponent(order.order_number)}`}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all inline-flex items-center gap-1.5 cursor-pointer"
                   >
                     <Receipt className="w-4 h-4" />

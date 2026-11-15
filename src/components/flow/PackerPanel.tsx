@@ -18,10 +18,14 @@ import { useUrlStep } from '@/lib/useUrlStep';
 
 type Step = 'list' | 'pack' | 'confirm' | 'done';
 
-/** Batch stock minus pieces packed (not yet billed) on orders outside this group. */
+/**
+ * System stock minus pieces packed (not yet billed) on orders outside this group.
+ * It can be zero or negative: packing is still allowed, because the goods may be on the
+ * shelf before the purchase is entered.
+ */
 function freeStockExcluding(batches: { product_id: string; quantity: number }[], orders: Order[], exclude: Set<string>) {
   const free: Record<string, number> = {};
-  batches.forEach(b => { if ((b.quantity || 0) > 0) free[b.product_id] = (free[b.product_id] || 0) + b.quantity; });
+  batches.forEach(b => { if (b.quantity) free[b.product_id] = (free[b.product_id] || 0) + b.quantity; });
   orders.forEach(o => {
     if (exclude.has(o.id) || !o.flow_ready_to_bill) return;
     (o.items || []).forEach(it => {
@@ -29,7 +33,6 @@ function freeStockExcluding(batches: { product_id: string; quantity: number }[],
       if (q > 0) free[it.product_id] = (free[it.product_id] || 0) - q;
     });
   });
-  Object.keys(free).forEach(k => { if (free[k] < 0) free[k] = 0; });
   return free;
 }
 
@@ -70,7 +73,8 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
     // Short pieces left on the same shop's earlier order (packed part is waiting for the bill)
     // are shown together with the new order, so they can be packed in the same go.
     orders
-      .filter(o => o.status !== 'Cancelled' && o.flow_ready_to_bill && (o.items || []).some(it => flowShortQty(o, it) > 0))
+      .filter(o => o.status !== 'Cancelled' && (o.items || []).some(it => flowShortQty(o, it) > 0)
+        && (o.flow_ready_to_bill || flowOrderStage(o, freeAll) === 'backorder'))
       .forEach(o => {
         const k = flowShopKey(o);
         const g = map.get(k);
@@ -100,16 +104,15 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
         .map(it => {
           const product = products.find(p => p.id === it.product_id);
           const remaining = flowShortQty(o, it);
-          const stock = Math.max(0, (freeForGroup[it.product_id] || 0) - (used[it.product_id] || 0));
+          const stock = (freeForGroup[it.product_id] || 0) - (used[it.product_id] || 0);
           const raw = qty[it.id] ?? '';
           const n = raw === '' ? null : Number(raw);
           let error = '';
-          if (stock > 0 && raw !== '') {
+          if (raw !== '') {
             if (!Number.isInteger(n) || (n as number) < 0) error = 'Enter a whole number';
-            else if ((n as number) > stock) error = `Only ${stock} in stock`;
             else if ((n as number) > remaining) error = `Ordered only ${remaining}`;
           }
-          const packed = stock === 0 || error || n === null ? 0 : (n as number);
+          const packed = error || n === null ? 0 : (n as number);
           used[it.product_id] = (used[it.product_id] || 0) + packed;
           const unitsPerPack = it.units_per_trading_unit || product?.units_per_box_carton || 1;
           const split = unitsPerPack > 1 && packed > 0 ? splitBaseQuantity(packed, unitsPerPack) : null;
@@ -122,7 +125,8 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
             raw,
             error,
             packed,
-            decided: stock === 0 || (raw !== '' && !error),
+            decided: raw !== '' && !error,
+            overStock: !error && packed > Math.max(0, stock),
             splitText: split ? `${split.cartonQty} carton${split.cartonQty === 1 ? '' : 's'}${split.looseQty ? ` + ${split.looseQty} pcs` : ''}` : ''
           };
         })
@@ -134,8 +138,8 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
   const packedTotal = lines.reduce((s, l) => s + l.packed, 0);
   const backorderTotal = orderedTotal - packedTotal;
   const anyError = lines.some(l => l.error);
-  const anyEmpty = lines.some(l => l.stock > 0 && l.raw === '');
-  const blockReason = anyError ? 'Fix the highlighted quantities.' : anyEmpty ? 'Enter the packed quantity for every item in stock (0 is allowed).' : '';
+  const anyEmpty = lines.some(l => l.raw === '');
+  const blockReason = anyError ? 'Fix the highlighted quantities.' : anyEmpty ? 'Enter the packed quantity for every item (0 is allowed).' : '';
 
   const openGroup = (key: string) => {
     setQty({});
@@ -186,7 +190,7 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
           ) : (
             <>
               <strong className="text-xl text-slate-900">Saved as backorder</strong>
-              <span className="text-slate-600">Nothing was packed. The orders will come back here when stock arrives.</span>
+              <span className="text-slate-600">Nothing was packed. The orders are in Backorder and come back here when stock is entered or with the shop's next order.</span>
             </>
           )}
           <button type="button" onClick={backToList} className="min-h-12 px-6 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white font-bold">
@@ -213,7 +217,7 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
         {groups.map(g => {
           const items = g.orders.flatMap(o => (o.items || []).filter(it => flowShortQty(o, it) > 0).map(it => ({ o, it })));
           const pcs = items.reduce((s, x) => s + flowShortQty(x.o, x.it), 0);
-          const carried = g.orders.some(o => o.flow_ready_to_bill);
+          const carried = g.orders.length > 1 && g.orders.some(o => o.flow_ready_to_bill || !!o.flow_pack_attempted_at);
           const backorderBack = g.orders.some(o => !!o.flow_pack_attempted_at || (o.items || []).some(it => (it.fulfilled_qty ?? 0) > 0));
           const channels = Array.from(new Set(g.orders.map(o => flowChannelLabel(o))));
           return (
@@ -250,7 +254,7 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
                         )}
                         <span className="font-semibold text-indigo-800 bg-indigo-50 rounded px-1.5 py-0.5">{flowChannelLabel(o)}</span>
                         <span>{formatWhen(o.order_date || o.created_at)}</span>
-                        {o.flow_ready_to_bill && <span className="font-semibold text-amber-900 bg-amber-100 rounded px-1.5 py-0.5">Backorder</span>}
+                        {(o.flow_ready_to_bill || (!!o.flow_pack_attempted_at && !o.flow_repack)) && <span className="font-semibold text-amber-900 bg-amber-100 rounded px-1.5 py-0.5">Backorder</span>}
                       </div>
                       <ul className="text-sm text-slate-800 flex flex-col gap-0.5 pl-1">
                         {(o.items || []).filter(it => flowShortQty(o, it) > 0).map(it => (
@@ -314,7 +318,7 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
       <span className="font-semibold text-indigo-800 bg-indigo-50 rounded px-1.5 py-0.5">{flowChannelLabel(o)}</span>
       {o.created_by && <span>by {o.created_by}</span>}
       <span>· {formatWhen(o.order_date || o.created_at)}</span>
-      {o.flow_ready_to_bill && <span className="font-semibold text-amber-900 bg-amber-100 rounded px-1.5 py-0.5">Backorder from earlier packing</span>}
+      {(o.flow_ready_to_bill || !!o.flow_pack_attempted_at) && <span className="font-semibold text-amber-900 bg-amber-100 rounded px-1.5 py-0.5">Backorder from earlier packing</span>}
     </div>
   );
 
@@ -378,10 +382,9 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
                   <strong className="text-lg text-slate-900">{l.ordered}</strong>
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-xs text-slate-600">In stock</span>
-                  <strong className={`text-lg ${l.stock === 0 ? 'text-red-700' : 'text-slate-900'}`}>{l.stock}</strong>
+                  <span className="text-xs text-slate-600">In system</span>
+                  <strong className={`text-lg ${l.stock <= 0 ? 'text-red-700' : 'text-slate-900'}`}>{l.stock}</strong>
                 </div>
-                {l.stock > 0 ? (
                   <div className="flex flex-col">
                     <label htmlFor={`pack-${l.id}`} className="text-xs text-slate-600">Packed</label>
                     <input
@@ -395,12 +398,12 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
                       className={`min-h-11 w-full rounded-lg border-2 px-2 text-lg font-bold text-slate-900 ${l.error ? 'border-red-600' : 'border-slate-300 focus:border-indigo-600'} outline-none`}
                     />
                   </div>
-                ) : (
-                  <span className="text-sm font-bold text-red-800 bg-red-50 rounded-lg py-2.5 text-center">Out of stock</span>
-                )}
               </div>
               {l.error && <span className="text-sm font-semibold text-red-700">{l.error}</span>}
               {!l.error && l.splitText && <span className="text-xs text-slate-600">= {l.splitText}</span>}
+              {l.overStock && (
+                <span className="text-sm text-amber-800">More than the system stock. Pack it only if the goods are really here; stock will show negative until the purchase is entered.</span>
+              )}
               {l.decided && l.ordered - l.packed > 0 && (
                 <span className="text-sm text-amber-800">{l.ordered - l.packed} pcs will go to backorder</span>
               )}

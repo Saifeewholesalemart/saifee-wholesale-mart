@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 /**
  * Orders (admin): one page for everything.
  * To Pack → Ready to Bill → Billed, plus Backorder and All.
@@ -46,7 +47,7 @@ function csvCell(v: unknown) {
 }
 
 export default function OrdersHub() {
-  const { orders, products, batches, retailers, invoices, activeCompany } = useDb();
+  const { orders, products, batches, retailers, invoices, activeCompany, flowSendToPacking } = useDb();
   // Tab and open order are kept in the URL so the Back button works step by step
   const [tab, setTabUrl] = useUrlStep<Tab>('tab', 'to_pack', ['to_pack', 'ready_to_bill', 'billed', 'backorder', 'all']);
   const setTab = (t: Tab) => setTabUrl(t);
@@ -126,7 +127,7 @@ export default function OrdersHub() {
         const hay = [inv.invoice_number, r?.shop_name, r?.owner_name, r?.mobile, ...(inv.source_order_numbers || []),
           ...(inv.items || []).map(i => i.product_name || products.find(p => p.id === i.product_id)?.name)]
           .filter(Boolean).join(' ').toLowerCase();
-        return hay.includes(q);
+        return hasWords(hay, q);
       });
     return sortByOrderSort(list, sort, {
       time: inv => new Date(inv.date).getTime(),
@@ -341,6 +342,7 @@ export default function OrdersHub() {
                       <td className="px-5 py-3 text-right font-semibold">{formatINR(inv.grand_total)}</td>
                       <td className="px-5 py-3 text-right whitespace-nowrap">
                         <button type="button" onClick={() => setPreviewInvoice(inv)} className="min-h-9 px-3 rounded-lg border border-slate-300 text-sm font-semibold mr-1.5">View</button>
+                        <a href={`/admin/terminal?invoice=${encodeURIComponent(inv.id)}`} className="inline-flex items-center min-h-9 px-3 rounded-lg border border-indigo-300 text-indigo-800 text-sm font-semibold mr-1.5">Edit</a>
                         {firstOrderId && (
                           <button type="button" onClick={() => setDetailId(firstOrderId)} className="min-h-9 px-3 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-sm font-bold">Open</button>
                         )}
@@ -358,7 +360,7 @@ export default function OrdersHub() {
         <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
           <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap justify-between gap-2">
             <h2 className="text-base font-bold text-slate-900">Backorder</h2>
-            <span className="text-sm text-slate-600">These pieces come back to To Pack when stock arrives, or together with the shop's next order.</span>
+            <span className="text-sm text-slate-600">These pieces come back to To Pack when stock is entered, with the shop's next order, or when you press Pack now.</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-sm border-collapse">
@@ -389,9 +391,18 @@ export default function OrdersHub() {
                       ))}
                     </td>
                     <td className="px-5 py-3 text-right">
-                      <button type="button" onClick={() => setDetailId(o.id)} className="min-h-9 px-3 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-sm font-bold">
-                        Open / Close short
-                      </button>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {!o.flow_ready_to_bill && (
+                          <button type="button" onClick={() => { try { flowSendToPacking(o.id); } catch (e: any) { alert(e?.message || 'Could not send to packing.'); } }}
+                            title="Use this when the goods are in the shop but the stock is not entered yet"
+                            className="min-h-9 px-3 rounded-lg border border-indigo-700 text-indigo-800 bg-white hover:bg-indigo-50 text-sm font-bold">
+                            Pack now
+                          </button>
+                        )}
+                        <button type="button" onClick={() => setDetailId(o.id)} className="min-h-9 px-3 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-sm font-bold">
+                          Open / Close short
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

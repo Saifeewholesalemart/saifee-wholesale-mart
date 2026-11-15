@@ -629,6 +629,7 @@ interface DbContextType {
   flowReviseInvoice: (invoiceId: string, lines: { lineId?: string; productId: string; qty: number; rate: number }[], reason: string) => { invoice: Invoice; changes: string[] };
   /** Cancel everything not billed yet on an order (cancel order / close short) */
   flowCancelRemaining: (orderId: string, reason: string) => void;
+  flowSendToPacking: (orderId: string) => void;
   syncWithCloud: () => Promise<{ action: string; message: string }>;
   forcePushToCloud: () => Promise<string>;
   forcePullFromCloud: () => Promise<void>;
@@ -2482,6 +2483,9 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         flowReviseInvoice: (invoiceId, lines, reason) => {
           const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
           try { return db.flowReviseInvoice(invoiceId, lines, reason, user); } finally { refreshState(); }
+        },
+        flowSendToPacking: (orderId) => {
+          try { db.flowSendToPacking(orderId); } finally { refreshState(); }
         },
         flowCancelRemaining: (orderId, reason) => {
           const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;

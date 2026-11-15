@@ -1,5 +1,6 @@
 'use client';
 
+import { hasWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Filter, Download, Printer, ArrowUpDown, 
@@ -187,10 +188,10 @@ export default function PartyItemReportsView({
     if (!itemSearchText.trim()) return availableProducts;
     const q = itemSearchText.toLowerCase();
     return availableProducts.filter(p => 
-      p.name.toLowerCase().includes(q) ||
-      (p.brand && p.brand.toLowerCase().includes(q)) ||
-      (p.sku && p.sku.toLowerCase().includes(q)) ||
-      (p.pack_size && p.pack_size.toLowerCase().includes(q))
+      hasWords(p.name.toLowerCase(), q) ||
+      (p.brand && hasWords(p.brand.toLowerCase(), q)) ||
+      (p.sku && hasWords(p.sku.toLowerCase(), q)) ||
+      (p.pack_size && hasWords(p.pack_size.toLowerCase(), q))
     );
   }, [availableProducts, itemSearchText]);
 
@@ -246,10 +247,10 @@ export default function PartyItemReportsView({
     if (!partySearchText.trim()) return availableParties;
     const q = partySearchText.toLowerCase();
     return availableParties.filter(p => 
-      p.name.toLowerCase().includes(q) ||
-      (p.owner && p.owner.toLowerCase().includes(q)) ||
-      (p.code && p.code.toLowerCase().includes(q)) ||
-      (p.city && p.city.toLowerCase().includes(q))
+      hasWords(p.name.toLowerCase(), q) ||
+      (p.owner && hasWords(p.owner.toLowerCase(), q)) ||
+      (p.code && hasWords(p.code.toLowerCase(), q)) ||
+      (p.city && hasWords(p.city.toLowerCase(), q))
     );
   }, [availableParties, partySearchText]);
 
