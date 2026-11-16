@@ -13,6 +13,7 @@ import { useDb } from '@/context/DbContext';
 import type { Order } from '@/lib/db';
 import { flowOrderStage, flowShortQty, flowOrderedQty, flowShopKey, flowChannelLabel, splitBaseQuantity } from '@/lib/db';
 import { productLabel, customerName, formatWhen, sortByOrderSort, OrderSort } from './flowUi';
+import OrderNotes from './OrderNotes';
 import { CheckCircle2, ChevronLeft, PackageOpen } from 'lucide-react';
 import { useUrlStep } from '@/lib/useUrlStep';
 
@@ -239,6 +240,7 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
                   <span className="text-xs font-semibold text-amber-900 bg-amber-100 rounded px-2 py-0.5">Includes backorder from earlier order</span>
                 )}
               </div>
+              <OrderNotes orders={g.orders} compact />
               {expanded[g.key] && (
                 <div id={`details-${g.key}`} className="flex flex-col gap-2.5 border-t border-slate-100 pt-3">
                   {g.orders.map(o => (
@@ -295,6 +297,7 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
 
   // ---------------------------------------------------------------- HEADER
   const header = (
+    <>
     <div className="flex items-center justify-between gap-2 bg-slate-900 text-white rounded-xl px-4 py-3">
       <div className="min-w-0">
         <div className="text-xs text-slate-300">
@@ -310,6 +313,8 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
         <ChevronLeft className="w-4 h-4" aria-hidden="true" /> Back
       </button>
     </div>
+    <OrderNotes orders={groupOrders} />
+    </>
   );
 
   const orderHeading = (o: Order) => (

@@ -15,6 +15,7 @@ import { computeFreeStockByProduct, flowOrderStage, flowRemainingQty, flowShortQ
 import PackerPanel from './PackerPanel';
 import BillerPanel from './BillerPanel';
 import OrderDetailModal, { StageBadge } from './OrderDetailModal';
+import { orderNoteOf } from './OrderNotes';
 import {
   productLabel, customerName, formatINR, formatWhen, EMPTY_FILTER, OrderFilter, DatePreset,
   orderMatchesFilter, dateInRange, countActiveFilters, OrderSort, ORDER_SORT_OPTIONS, sortByOrderSort
@@ -383,6 +384,7 @@ export default function OrdersHub() {
                     <td className="px-5 py-3">
                       <div className="font-semibold text-slate-900">{customerName(o, retailers)}</div>
                       <div className="text-xs text-slate-600">Since {formatWhen(o.flow_pack_attempted_at || o.dispatched_at || o.order_date)}</div>
+                      {orderNoteOf(o) && <div className="text-xs text-amber-900 max-w-xs truncate" title={orderNoteOf(o)}>Note: {orderNoteOf(o)}</div>}
                       {o.flow_ready_to_bill && <div className="text-xs font-semibold text-indigo-800">Packed part is waiting for the bill</div>}
                     </td>
                     <td className="px-5 py-3 text-slate-700">
@@ -439,7 +441,10 @@ export default function OrdersHub() {
                       <div className="font-mono text-xs font-bold">{o.order_number}</div>
                       <div className="text-xs text-slate-600">{formatWhen(o.order_date || o.created_at)}</div>
                     </td>
-                    <td className="px-5 py-3 font-semibold text-slate-900">{customerName(o, retailers)}</td>
+                    <td className="px-5 py-3">
+                      <div className="font-semibold text-slate-900">{customerName(o, retailers)}</div>
+                      {orderNoteOf(o) && <div className="text-xs text-amber-900 max-w-xs truncate" title={orderNoteOf(o)}>Note: {orderNoteOf(o)}</div>}
+                    </td>
                     <td className="px-5 py-3 text-slate-700">{flowChannelLabel(o)}{o.created_by ? <div className="text-xs text-slate-600">{o.created_by}</div> : null}</td>
                     <td className="px-5 py-3"><StageBadge stage={stageOf.get(o.id) || 'to_pack'} /></td>
                     <td className="px-5 py-3 text-slate-700 text-xs">{(invoiceNumbersByOrder.get(o.id) || []).join(', ') || '—'}</td>

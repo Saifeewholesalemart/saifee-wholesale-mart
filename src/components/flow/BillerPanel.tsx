@@ -17,6 +17,7 @@ import {
 } from '@/lib/db';
 import { productLabel, customerName, formatINR, formatWhen, purchaseRateOf, marginPercent, sortByOrderSort, OrderSort } from './flowUi';
 import RateHistoryPanel from './RateHistoryPanel';
+import OrderNotes from './OrderNotes';
 import InvoicePreviewModal from '@/components/orders/InvoicePreviewModal';
 import { CheckCircle2, Receipt, History, Monitor } from 'lucide-react';
 import Link from 'next/link';
@@ -146,6 +147,7 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
               <span className="text-sm text-slate-600">
                 {packedItems} item{packedItems === 1 ? '' : 's'} packed{short ? ' · some on backorder' : ''} · {formatWhen(g.orders[g.orders.length - 1].packed_at)}
               </span>
+              <OrderNotes orders={g.orders} compact />
             </button>
           );
         })}
@@ -195,6 +197,7 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
                 {current.orders.length > 1 ? 'All these orders go into ONE invoice. ' : ''}Quantities come from the packer.
               </span>
             </div>
+            <OrderNotes orders={current.orders} className="mx-5 mt-3" />
 
             <div className="overflow-x-auto">
               <table className="w-full min-w-[620px] text-sm border-collapse">

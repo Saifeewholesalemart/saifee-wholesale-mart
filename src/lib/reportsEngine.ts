@@ -58,7 +58,28 @@ function rowsOfProduct<T extends { product_id: string }>(arr: T[] | undefined | 
  * so a stand-in product is made from what the line itself stored.
  */
 const REMOVED_COMPANY_ID = '__removed_items__';
-export function prepareReportState<T extends DbState>(db: T): T {
+export function prepareReportState<T extends DbState>(input: T): T {
+  // A credit note can carry a discount; reports work out return value as rate x qty,
+  // so the rate of a discounted line is set to its value after the discount.
+  let db = input;
+  if ((input.salesReturns || []).some(sr => (sr.items || []).some(i => Number((i as any).discount_amount) > 0))) {
+    db = {
+      ...input,
+      salesReturns: input.salesReturns.map(sr => {
+        if (!(sr.items || []).some(i => Number((i as any).discount_amount) > 0)) return sr;
+        return {
+          ...sr,
+          items: (sr.items || []).map(i => {
+            const q = Number(i.base_qty ?? i.quantity) || 0;
+            if (!(Number((i as any).discount_amount) > 0) || q <= 0 || i.taxable_value === undefined) return i;
+            const perPiece = Math.round(Number(i.taxable_value) / q * 10000) / 10000;
+            const units = Number(i.units_per_trading_unit) || 1;
+            return { ...i, rate: perPiece * units, loose_rate: perPiece };
+          })
+        };
+      })
+    };
+  }
   const known = new Set(db.products.map(p => p.id));
   const extra: Product[] = [];
   const add = (line: any) => {

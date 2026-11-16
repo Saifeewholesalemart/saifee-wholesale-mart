@@ -21,7 +21,7 @@ import {
   BadgeAlert,
   Warehouse
 } from 'lucide-react';
-import { SalesReturn, Retailer, Product, formatQuantityDisplay, calculateBaseQuantity } from '@/lib/db';
+import { SalesReturn, Retailer, Product, Invoice, formatQuantityDisplay, calculateBaseQuantity } from '@/lib/db';
 import SmartSearchBar from '@/components/SmartSearchBar';
 import CreditNoteModal from '@/components/CreditNoteModal';
 
@@ -33,6 +33,61 @@ interface ManualReturnRow {
   cartonRate: number;
   looseRate: number;
   condition: 'Sellable' | 'Damaged';
+  /** optional details (some companies ask for them) */
+  batchNumber: string;
+  mfgDate: string;
+  expiryDate: string;
+}
+
+const emptyRow = (): ManualReturnRow => ({
+  id: `row-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+  productId: '', cartonQty: 0, looseQty: 0, cartonRate: 0, looseRate: 0, condition: 'Sellable',
+  batchNumber: '', mfgDate: '', expiryDate: ''
+});
+
+/** Search box for the item of one return row (word search, arrow keys work). */
+function ItemPicker({ products, value, onPick, billProductIds }: {
+  products: Product[];
+  value: string;
+  onPick: (id: string) => void;
+  billProductIds: Set<string>;
+}) {
+  const [text, setText] = useState('');
+  const [open, setOpen] = useState(false);
+  const chosen = products.find(p => p.id === value);
+  const list = useMemo(() => {
+    const q = text.trim();
+    const pool = q ? products.filter(p => matchWords(q, p.name, p.brand, p.sku, p.barcode, p.product_code)) : products.filter(p => billProductIds.has(p.id));
+    // items on the chosen bill first
+    return [...pool].sort((a, b) => Number(billProductIds.has(b.id)) - Number(billProductIds.has(a.id))).slice(0, 40);
+  }, [products, text, billProductIds]);
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        value={open ? text : (chosen ? chosen.name : '')}
+        onFocus={() => { setOpen(true); setText(''); }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onChange={(e) => { setText(e.target.value); setOpen(true); }}
+        placeholder="Type item name, code or barcode"
+        className="w-full border border-slate-200 rounded-lg p-2 bg-white text-xs font-bold text-slate-800 outline-none focus:border-indigo-500"
+      />
+      {open && (
+        <div className="absolute left-0 right-0 top-full mt-1 z-40 bg-white border border-slate-300 rounded-lg shadow-xl max-h-64 overflow-y-auto text-xs">
+          {list.length === 0 && (
+            <div className="px-3 py-2 text-slate-500">{text.trim() ? 'No item matches.' : 'Type to search the item list.'}</div>
+          )}
+          {list.map(p => (
+            <button key={p.id} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { onPick(p.id); setText(''); setOpen(false); }}
+              className="w-full text-left px-3 py-2 border-b border-slate-100 last:border-0 hover:bg-indigo-50 flex justify-between gap-2">
+              <span className="font-semibold text-slate-800">{p.name}</span>
+              <span className="text-slate-500 shrink-0">{billProductIds.has(p.id) ? 'On bill · ' : ''}MRP ₹{p.mrp}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const COMMON_REASONS = [
@@ -64,6 +119,21 @@ export default function AdminReturns() {
   const [successMsg, setSuccessMsg] = useState('');
   const [selectedCreditNote, setSelectedCreditNote] = useState<SalesReturn | null>(null);
   const [retailerSearch, setRetailerSearch] = useState('');
+  // 'items' = goods come back item by item; 'general' = only an amount is credited
+  const [creditType, setCreditType] = useState<'items' | 'general'>('items');
+  const [againstInvoiceId, setAgainstInvoiceId] = useState('');
+  const [discountMode, setDiscountMode] = useState<'pct' | 'amt'>('pct');
+  const [discountValue, setDiscountValue] = useState('');
+  const [generalAmount, setGeneralAmount] = useState('');
+  const [generalGst, setGeneralGst] = useState('0');
+  const [description, setDescription] = useState('');
+  const [showBatchFields, setShowBatchFields] = useState(false);
+
+  const shopInvoices = useMemo(() => (invoices as Invoice[])
+    .filter(i => i.retailer_id === selectedRetailerId && (i as any).status !== 'Cancelled')
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()), [invoices, selectedRetailerId]);
+  const againstInvoice = shopInvoices.find(i => i.id === againstInvoiceId);
+  const billProductIds = useMemo(() => new Set((againstInvoice?.items || []).map(it => it.product_id)), [againstInvoice]);
 
   const chosenRetailer = useMemo(() => {
     return retailers.find(r => r.id === selectedRetailerId);
@@ -84,36 +154,23 @@ export default function AdminReturns() {
     setRetailerSearch('');
     setReturnDate(new Date().toISOString().split('T')[0]);
     setReturnReason('');
-    // Initialize with 1 empty row
-    const firstProd = products[0];
-    setReturnItems([
-      {
-        id: `row-${Date.now()}-1`,
-        productId: firstProd?.id || '',
-        cartonQty: 0,
-        looseQty: 0,
-        cartonRate: firstProd?.selling_price || 0,
-        looseRate: firstProd?.loose_selling_price || (firstProd ? Math.round((firstProd.selling_price / Math.max(1, firstProd.units_per_box_carton || 1)) * 100) / 100 : 0),
-        condition: 'Sellable'
-      }
-    ]);
+    setCreditType('items');
+    setAgainstInvoiceId('');
+    setDiscountMode('pct');
+    setDiscountValue('');
+    setGeneralAmount('');
+    setGeneralGst('0');
+    setDescription('');
+    setReturnItems([emptyRow()]);
     setReturnOpen(true);
   };
 
   const handleAddRow = () => {
-    const firstProd = products[0];
-    setReturnItems(prev => [
-      ...prev,
-      {
-        id: `row-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        productId: firstProd?.id || '',
-        cartonQty: 0,
-        looseQty: 0,
-        cartonRate: firstProd?.selling_price || 0,
-        looseRate: firstProd?.loose_selling_price || (firstProd ? Math.round((firstProd.selling_price / Math.max(1, firstProd.units_per_box_carton || 1)) * 100) / 100 : 0),
-        condition: 'Sellable'
-      }
-    ]);
+    setReturnItems(prev => [...prev, emptyRow()]);
+  };
+
+  const setRowField = (rowId: string, patch: Partial<ManualReturnRow>) => {
+    setReturnItems(prev => prev.map(r => r.id === rowId ? { ...r, ...patch } : r));
   };
 
   const handleRemoveRow = (rowId: string) => {
@@ -127,8 +184,13 @@ export default function AdminReturns() {
   const handleProductChange = (rowId: string, newProdId: string) => {
     const prod = products.find(p => p.id === newProdId);
     const unitsPerPack = prod?.units_per_box_carton || 1;
-    const defaultCartonRate = prod?.selling_price || 0;
-    const defaultLooseRate = prod?.loose_selling_price || Math.round((defaultCartonRate / Math.max(1, unitsPerPack)) * 100) / 100;
+    // the rate on the chosen bill (after its discount), otherwise the item's sale rate
+    const billLine = againstInvoice?.items?.find(it => it.product_id === newProdId);
+    const billRate = billLine ? Math.max(0, Number(billLine.carton_rate ?? billLine.rate) - Number(billLine.carton_discount || 0)) : undefined;
+    const defaultCartonRate = billRate ?? (prod?.selling_price || 0);
+    const defaultLooseRate = billLine
+      ? Math.max(0, Number(billLine.loose_rate ?? defaultCartonRate / Math.max(1, unitsPerPack)) - Number(billLine.loose_discount || 0))
+      : (prod?.loose_selling_price || Math.round((defaultCartonRate / Math.max(1, unitsPerPack)) * 100) / 100);
 
     setReturnItems(prev => prev.map(r => {
       if (r.id !== rowId) return r;
@@ -209,11 +271,28 @@ export default function AdminReturns() {
       };
     });
 
+    // Discount on the whole credit note, shared over the lines by value; GST on the value after it
+    const gross = totalTaxable;
+    const dv = Math.max(0, Number(discountValue) || 0);
+    const discount = Math.round(Math.min(gross, discountMode === 'pct' ? gross * Math.min(100, dv) / 100 : dv) * 100) / 100;
+    if (discount > 0 && gross > 0) {
+      totalTaxable = 0;
+      totalGst = 0;
+      rowDetails.forEach(rd => {
+        if (rd.baseUnits <= 0) return;
+        const t = rd.taxable - discount * rd.taxable / gross;
+        totalTaxable += t;
+        totalGst += t * rd.gstPct / 100;
+      });
+    }
+
     const netCredit = Math.round(totalTaxable + totalGst);
     const roundOff = netCredit - (totalTaxable + totalGst);
 
     return {
       rowDetails,
+      gross: Math.round(gross * 100) / 100,
+      discount,
       totalTaxable: Math.round(totalTaxable * 100) / 100,
       totalGst: Math.round(totalGst * 100) / 100,
       cgst: Math.round((totalGst / 2) * 100) / 100,
@@ -223,7 +302,13 @@ export default function AdminReturns() {
       totalBaseUnits,
       activeItemCount
     };
-  }, [returnItems, products]);
+  }, [returnItems, products, discountMode, discountValue]);
+
+  const generalCalc = useMemo(() => {
+    const amt = Math.max(0, Number(generalAmount) || 0);
+    const gst = Math.round(amt * Math.max(0, Number(generalGst) || 0)) / 100;
+    return { amt, gst, total: Math.round(amt + gst) };
+  }, [generalAmount, generalGst]);
 
   const handleSubmitReturn = (e: React.FormEvent) => {
     e.preventDefault();
@@ -232,35 +317,63 @@ export default function AdminReturns() {
       return;
     }
 
-    const validRows = returnItems.filter(r => (r.cartonQty > 0 || r.looseQty > 0));
-    if (validRows.length === 0) {
-      alert('Please enter a return quantity (Cartons or Loose units) for at least one item.');
+    if (!returnReason.trim()) {
+      alert('Please enter or select a reason.');
       return;
     }
 
-    if (!returnReason.trim()) {
-      alert('Please enter or select a reason for this sales return.');
+    const validRows = returnItems.filter(r => r.productId && (r.cartonQty > 0 || r.looseQty > 0));
+    if (creditType === 'items') {
+      if (validRows.length === 0) {
+        alert('Choose an item and enter the returned quantity for at least one row.');
+        return;
+      }
+      const bad = validRows.find(r => r.mfgDate && r.expiryDate && r.mfgDate > r.expiryDate);
+      if (bad) {
+        alert('The expiry date cannot be before the manufacturing date.');
+        return;
+      }
+    } else if (!(generalCalc.amt > 0)) {
+      alert('Enter the amount of the credit note.');
       return;
     }
 
     try {
-      const createdReturn = createDirectSalesReturn({
-        retailerId: selectedRetailerId,
-        returnDate: new Date(returnDate).toISOString(),
-        reason: returnReason.trim(),
-        receiving_godown_id: receivingGodownId || undefined,
-        items: validRows.map(r => ({
-          productId: r.productId,
-          cartonQty: r.cartonQty,
-          looseQty: r.looseQty,
-          rate: r.cartonRate,
-          looseRate: r.looseRate,
-          condition: r.condition
-        }))
-      });
+      const createdReturn = creditType === 'general'
+        ? createDirectSalesReturn({
+            retailerId: selectedRetailerId,
+            invoiceId: againstInvoiceId || undefined,
+            returnDate: new Date(returnDate).toISOString(),
+            reason: returnReason.trim(),
+            creditType: 'general',
+            generalAmount: generalCalc.amt,
+            generalGstPercent: Number(generalGst) || 0,
+            description: description.trim() || undefined,
+            items: []
+          })
+        : createDirectSalesReturn({
+            retailerId: selectedRetailerId,
+            invoiceId: againstInvoiceId || undefined,
+            returnDate: new Date(returnDate).toISOString(),
+            reason: returnReason.trim(),
+            receiving_godown_id: receivingGodownId || undefined,
+            discount: formCalculations.discount > 0 ? { mode: discountMode, value: Number(discountValue) || 0 } : undefined,
+            description: description.trim() || undefined,
+            items: validRows.map(r => ({
+              productId: r.productId,
+              cartonQty: r.cartonQty,
+              looseQty: r.looseQty,
+              rate: r.cartonRate,
+              looseRate: r.looseRate,
+              condition: r.condition,
+              batchNumber: r.batchNumber.trim() || undefined,
+              mfgDate: r.mfgDate || undefined,
+              expiryDate: r.expiryDate || undefined
+            }))
+          });
 
       const cnNo = createdReturn.credit_note_number || `CN-${createdReturn.id.slice(-5).toUpperCase()}`;
-      setSuccessMsg(`Credit Note ${cnNo} generated and ₹${(createdReturn.total_amount || formCalculations.netCredit).toLocaleString('en-IN')} credited to ${chosenRetailer?.shop_name}!`);
+      setSuccessMsg(`Credit Note ${cnNo} saved and ₹${(createdReturn.total_amount ?? 0).toLocaleString('en-IN')} credited to ${chosenRetailer?.shop_name}.`);
       setReturnOpen(false);
 
       // Open voucher preview modal immediately for easy printing
@@ -524,12 +637,18 @@ export default function AdminReturns() {
                   </div>
 
                   {/* Return Reason Box */}
-                  <div className="text-xs text-slate-700 bg-slate-50/80 p-2.5 rounded-lg border border-slate-100 flex items-center gap-2">
+                  <div className="text-xs text-slate-700 bg-slate-50/80 p-2.5 rounded-lg border border-slate-100 flex flex-wrap items-center gap-2">
+                    {sr.credit_type === 'general' && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-amber-100 text-amber-900">General credit note</span>
+                    )}
                     <span className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Reason:</span>
                     <span className="font-semibold">{sr.reason || 'Goods Return'}</span>
+                    {sr.description && <span className="text-slate-500">· {sr.description}</span>}
+                    {Number(sr.discount_amount) > 0 && <span className="text-amber-800 font-semibold">· Discount ₹{Number(sr.discount_amount).toLocaleString('en-IN')}</span>}
                   </div>
 
                   {/* Item List */}
+                  {(sr.items?.length || 0) > 0 && (
                   <div className="text-xs space-y-2 pt-1">
                     <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Returned Products:</span>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -551,6 +670,11 @@ export default function AdminReturns() {
                                 Qty: <strong className="text-slate-800">{formatQuantityDisplay(item.quantity, unitsPerPack, tradingUnit, baseUnit)}</strong>
                                 {' '}&bull; Rate: ₹{cRate}/{tradingUnit}
                               </span>
+                              {(item.batch_number || item.mfg_date || item.expiry_date) && (
+                                <span className="text-[10px] text-slate-500 block">
+                                  {[item.batch_number ? `Batch ${item.batch_number}` : '', item.mfg_date ? `Mfg ${item.mfg_date}` : '', item.expiry_date ? `Exp ${item.expiry_date}` : ''].filter(Boolean).join(' · ')}
+                                </span>
+                              )}
                             </div>
 
                             <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
@@ -565,6 +689,7 @@ export default function AdminReturns() {
                       })}
                     </div>
                   </div>
+                  )}
                 </div>
               );
             })}
@@ -651,6 +776,38 @@ export default function AdminReturns() {
                   )}
                 </div>
 
+                {/* Type of credit note and the bill it is against */}
+                <div className="space-y-2">
+                  <span className="text-xs font-black text-slate-700 uppercase tracking-wider block">Type of credit note</span>
+                  <div className="grid grid-cols-2 gap-2" role="group" aria-label="Type of credit note">
+                    {([
+                      { v: 'items', t: 'Item-wise return', d: 'Goods come back, item by item' },
+                      { v: 'general', t: 'General credit note', d: 'Only an amount, no items (rate difference, scheme...)' }
+                    ] as const).map(o => (
+                      <button key={o.v} type="button" aria-pressed={creditType === o.v} onClick={() => setCreditType(o.v)}
+                        className={`text-left rounded-xl p-3 border ${creditType === o.v ? 'border-2 border-indigo-600 bg-indigo-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
+                        <span className="block text-xs font-black text-slate-900">{o.t}</span>
+                        <span className="block text-[11px] text-slate-500">{o.d}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="space-y-1">
+                    <label htmlFor="cn-bill" className="text-xs font-bold text-slate-700">Against bill <span className="font-normal text-slate-500">(optional)</span></label>
+                    <select id="cn-bill" value={againstInvoiceId} onChange={(e) => setAgainstInvoiceId(e.target.value)} disabled={!selectedRetailerId}
+                      className="w-full border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 bg-white disabled:bg-slate-50">
+                      <option value="">No bill (not linked to a bill)</option>
+                      {shopInvoices.map(i => (
+                        <option key={i.id} value={i.id}>
+                          {i.invoice_number} · {new Date(i.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · ₹{Number(i.grand_total || 0).toLocaleString('en-IN')}{Number(i.outstanding_amount) > 0 ? ` · due ₹${Number(i.outstanding_amount).toLocaleString('en-IN')}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {againstInvoiceId && creditType === 'items' && (
+                      <span className="text-[11px] text-slate-500 block">Items on this bill come first in the item search, and their bill rate is filled in.</span>
+                    )}
+                  </div>
+                </div>
+
                 {/* 2. Return Date, Godown & Reason */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="space-y-1">
@@ -667,7 +824,7 @@ export default function AdminReturns() {
                     />
                   </div>
 
-                  <div className="space-y-1">
+                  <div className={`space-y-1 ${creditType === 'general' ? 'hidden' : ''}`}>
                     <label className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
                       <Warehouse className="w-3.5 h-3.5 text-indigo-600" />
                       <span>Restock Godown</span>
@@ -727,7 +884,34 @@ export default function AdminReturns() {
                   ))}
                 </div>
 
+                {/* General credit note: amount only */}
+                {creditType === 'general' && (
+                  <div className="space-y-3 p-4 rounded-xl border border-slate-200 bg-slate-50/60">
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="space-y-1 block">
+                        <span className="text-[10px] font-black text-slate-500 uppercase block">Amount before GST (₹)</span>
+                        <input type="number" min="0" step="0.01" value={generalAmount} onChange={(e) => setGeneralAmount(e.target.value)} placeholder="0.00"
+                          className="w-full border border-slate-200 rounded-lg p-2 text-right text-sm font-black text-slate-900 bg-white" />
+                      </label>
+                      <label className="space-y-1 block">
+                        <span className="text-[10px] font-black text-slate-500 uppercase block">GST %</span>
+                        <select value={generalGst} onChange={(e) => setGeneralGst(e.target.value)}
+                          className="w-full border border-slate-200 rounded-lg p-2 text-sm font-bold text-slate-800 bg-white">
+                          {['0', '5', '12', '18', '28'].map(g => <option key={g} value={g}>{g}%</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    <label className="space-y-1 block">
+                      <span className="text-[10px] font-black text-slate-500 uppercase block">What is this credit for? <span className="normal-case font-semibold">(optional)</span></span>
+                      <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="For example: rate difference on last bill, scheme for October"
+                        className="w-full border border-slate-200 rounded-lg p-2 text-xs font-medium text-slate-800 bg-white" />
+                    </label>
+                    <p className="text-[11px] text-slate-500">No stock changes. The amount is taken off the shop&apos;s balance{againstInvoiceId ? ' and off the due of the chosen bill' : ''}.</p>
+                  </div>
+                )}
+
                 {/* 3. Dynamic Product Items Table */}
+                {creditType === 'items' && (
                 <div className="space-y-3 pt-2">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
@@ -735,14 +919,20 @@ export default function AdminReturns() {
                       <span>Returned Items &amp; Manual Rates ({returnItems.length})</span>
                     </label>
 
-                    <button
-                      type="button"
-                      onClick={handleAddRow}
-                      className="flex items-center gap-1 px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition cursor-pointer"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Add Product Row</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600 cursor-pointer">
+                        <input type="checkbox" checked={showBatchFields} onChange={(e) => setShowBatchFields(e.target.checked)} className="w-4 h-4" />
+                        Batch / Mfg / Expiry
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleAddRow}
+                        className="flex items-center gap-1 px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Add Product Row</span>
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-3">
@@ -766,19 +956,15 @@ export default function AdminReturns() {
                           <div className="flex items-center justify-between gap-3">
                             <div className="flex-1">
                               <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block mb-1">
-                                Item #{idx + 1} &bull; Product Selection
+                                Item #{idx + 1}
                               </span>
-                              <select
-                                value={row.productId}
-                                onChange={(e) => handleProductChange(row.id, e.target.value)}
-                                className="w-full border border-slate-200 rounded-lg p-2 bg-white text-xs font-bold text-slate-800 outline-none focus:border-indigo-500"
-                              >
-                                {products.map(p => (
-                                  <option key={p.id} value={p.id}>
-                                    {p.name} ({p.brand}) &mdash; {p.units_per_box_carton || 1} {p.base_unit || 'Pcs'}/{p.trading_unit || 'Ctn'} &bull; MRP ₹{p.mrp}
-                                  </option>
-                                ))}
-                              </select>
+                              <ItemPicker products={products} value={row.productId} billProductIds={billProductIds}
+                                onPick={(id) => handleProductChange(row.id, id)} />
+                              {prod && (
+                                <span className="text-[10px] text-slate-500 block mt-0.5">
+                                  {prod.brand ? `${prod.brand} · ` : ''}{prod.units_per_box_carton || 1} {prod.base_unit || 'Pcs'}/{prod.trading_unit || 'Ctn'} · MRP ₹{prod.mrp}
+                                </span>
+                              )}
                             </div>
 
                             {returnItems.length > 1 && (
@@ -858,6 +1044,27 @@ export default function AdminReturns() {
                             </div>
                           </div>
 
+                          {/* Optional batch details */}
+                          {(showBatchFields || row.batchNumber || row.mfgDate || row.expiryDate) && (
+                            <div className="grid grid-cols-3 gap-3">
+                              <label className="space-y-1 block">
+                                <span className="text-[10px] font-black text-slate-500 uppercase block">Batch No.</span>
+                                <input type="text" value={row.batchNumber} onChange={(e) => setRowField(row.id, { batchNumber: e.target.value })} placeholder="Optional"
+                                  className="w-full border border-slate-200 rounded-lg p-2 text-xs font-bold text-slate-800 bg-white" />
+                              </label>
+                              <label className="space-y-1 block">
+                                <span className="text-[10px] font-black text-slate-500 uppercase block">Mfg Date</span>
+                                <input type="date" value={row.mfgDate} onChange={(e) => setRowField(row.id, { mfgDate: e.target.value })}
+                                  className="w-full border border-slate-200 rounded-lg p-2 text-xs font-bold text-slate-800 bg-white" />
+                              </label>
+                              <label className="space-y-1 block">
+                                <span className="text-[10px] font-black text-slate-500 uppercase block">Expiry Date</span>
+                                <input type="date" value={row.expiryDate} onChange={(e) => setRowField(row.id, { expiryDate: e.target.value })}
+                                  className="w-full border border-slate-200 rounded-lg p-2 text-xs font-bold text-slate-800 bg-white" />
+                              </label>
+                            </div>
+                          )}
+
                           {/* Row Footer: Condition & Line Total */}
                           <div className="flex items-center justify-between pt-2 border-t border-slate-200/60 text-xs">
                             <div className="flex items-center gap-2">
@@ -885,22 +1092,61 @@ export default function AdminReturns() {
                       );
                     })}
                   </div>
+
+                  {/* Discount on the credit note */}
+                  <div className="p-3.5 rounded-xl border border-slate-200 bg-white flex flex-wrap items-end gap-3">
+                    <div className="flex-1 min-w-[150px]">
+                      <span className="text-xs font-black text-slate-700 uppercase tracking-wider block">Discount</span>
+                      <span className="text-[11px] text-slate-500">Optional. Taken off the value before GST, shared over the items.</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <select value={discountMode} onChange={(e) => setDiscountMode(e.target.value as 'pct' | 'amt')} aria-label="Discount in"
+                        className="border border-slate-200 rounded-lg p-2 text-xs font-bold bg-white">
+                        <option value="pct">%</option>
+                        <option value="amt">₹</option>
+                      </select>
+                      <input type="number" min="0" step="0.01" value={discountValue} onChange={(e) => setDiscountValue(e.target.value)} placeholder="0" aria-label="Discount"
+                        className="w-24 border border-slate-200 rounded-lg p-2 text-right text-xs font-black text-slate-900 bg-white" />
+                    </div>
+                    {formCalculations.discount > 0 && (
+                      <span className="text-xs font-bold text-amber-800">− ₹{formCalculations.discount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    )}
+                  </div>
+
+                  <label className="space-y-1 block">
+                    <span className="text-[10px] font-black text-slate-500 uppercase block">Note on credit note <span className="normal-case font-semibold">(optional)</span></span>
+                    <input type="text" value={description} onChange={(e) => setDescription(e.target.value)}
+                      className="w-full border border-slate-200 rounded-lg p-2 text-xs font-medium text-slate-800 bg-white" />
+                  </label>
                 </div>
+                )}
 
                 {/* 4. Financial & Outstanding Summary Box */}
                 <div className="p-4 bg-slate-900 text-white rounded-2xl space-y-3">
                   <div className="flex items-center justify-between text-xs border-b border-slate-800 pb-2.5">
                     <span className="text-slate-400 font-bold uppercase tracking-wider">Credit Note Summary</span>
-                    <span className="text-slate-300 font-semibold">{formCalculations.activeItemCount} Active Items &bull; {formCalculations.totalBaseUnits} Units</span>
+                    <span className="text-slate-300 font-semibold">{creditType === 'general' ? 'Amount only' : `${formCalculations.activeItemCount} items · ${formCalculations.totalBaseUnits} units`}</span>
                   </div>
 
+                  {creditType === 'general' ? (
                   <div className="space-y-1.5 text-xs text-slate-300">
+                    <div className="flex justify-between"><span>Amount before GST:</span><span className="font-bold text-white">₹{generalCalc.amt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+                    <div className="flex justify-between"><span>GST ({generalGst}%):</span><span className="font-bold text-white">₹{generalCalc.gst.toFixed(2)}</span></div>
+                  </div>
+                  ) : (
+                  <div className="space-y-1.5 text-xs text-slate-300">
+                    {formCalculations.discount > 0 && (
+                      <>
+                        <div className="flex justify-between"><span>Value before discount:</span><span className="font-bold text-white">₹{formCalculations.gross.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+                        <div className="flex justify-between"><span>Discount{discountMode === 'pct' ? ` (${Number(discountValue) || 0}%)` : ''}:</span><span className="font-bold text-amber-300">− ₹{formCalculations.discount.toFixed(2)}</span></div>
+                      </>
+                    )}
                     <div className="flex justify-between">
-                      <span>Taxable Value Subtotal:</span>
+                      <span>Taxable value:</span>
                       <span className="font-bold text-white">₹{formCalculations.totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>CGST (9%) + SGST (9%):</span>
+                      <span>GST:</span>
                       <span className="font-bold text-white">₹{formCalculations.totalGst.toFixed(2)}</span>
                     </div>
                     {formCalculations.roundOff !== 0 && (
@@ -910,11 +1156,12 @@ export default function AdminReturns() {
                       </div>
                     )}
                   </div>
+                  )}
 
                   <div className="flex items-center justify-between pt-2.5 border-t border-slate-800">
                     <span className="text-sm font-black text-emerald-400">Total Credit Value:</span>
                     <span className="text-xl font-black text-emerald-400 font-mono">
-                      ₹{formCalculations.netCredit.toLocaleString('en-IN')}
+                      ₹{(creditType === 'general' ? generalCalc.total : formCalculations.netCredit).toLocaleString('en-IN')}
                     </span>
                   </div>
 
@@ -924,7 +1171,7 @@ export default function AdminReturns() {
                       <span className="font-bold text-white">
                         ₹{(chosenRetailer.outstanding || 0).toLocaleString('en-IN')} &rarr;{' '}
                         <strong className="text-emerald-400 font-black">
-                          ₹{Math.max(0, (chosenRetailer.outstanding || 0) - formCalculations.netCredit).toLocaleString('en-IN')}
+                          ₹{Math.max(0, (chosenRetailer.outstanding || 0) - (creditType === 'general' ? generalCalc.total : formCalculations.netCredit)).toLocaleString('en-IN')}
                         </strong>
                       </span>
                     </div>
@@ -937,11 +1184,11 @@ export default function AdminReturns() {
               <div className="pt-4 border-t border-slate-200">
                 <button
                   type="submit"
-                  disabled={!selectedRetailerId || formCalculations.activeItemCount === 0}
+                  disabled={!selectedRetailerId || (creditType === 'items' ? formCalculations.activeItemCount === 0 : !(generalCalc.amt > 0))}
                   className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black shadow-lg shadow-indigo-600/30 transition-all cursor-pointer flex items-center justify-center gap-2"
                 >
                   <CheckCircle className="w-4.5 h-4.5" />
-                  <span>Generate Credit Note &amp; Restock</span>
+                  <span>{creditType === 'general' ? 'Save Credit Note' : 'Generate Credit Note & Restock'}</span>
                 </button>
               </div>
             </form>
@@ -953,6 +1200,7 @@ export default function AdminReturns() {
       {selectedCreditNote && (
         <CreditNoteModal
           creditNote={selectedCreditNote}
+          invoiceNumber={invoices.find(i => i.id === selectedCreditNote.invoice_id)?.invoice_number}
           retailer={retailers.find(r => r.id === (selectedCreditNote.retailer_id || invoices.find(i => i.id === selectedCreditNote.invoice_id)?.retailer_id))}
           products={products}
           onClose={() => setSelectedCreditNote(null)}

@@ -1055,6 +1055,12 @@ export interface SalesReturnItem {
   igst?: number;
   total_amount?: number;
   condition: 'Sellable' | 'Damaged';
+  /** optional details some companies ask for */
+  batch_number?: string;
+  mfg_date?: string;
+  expiry_date?: string;
+  /** this line's share of the discount on the credit note (on the value before GST) */
+  discount_amount?: number;
 }
 
 export interface SalesReturn {
@@ -1075,6 +1081,14 @@ export interface SalesReturn {
   total_amount?: number;
   business_id?: string;
   items?: SalesReturnItem[];
+  /** 'items' = goods returned item by item; 'general' = an amount credited without items */
+  credit_type?: 'items' | 'general';
+  /** value before the discount (items) */
+  gross_taxable?: number;
+  discount_amount?: number;
+  discount_percent?: number;
+  /** what the general credit note is for */
+  description?: string;
 }
 
 export interface PurchaseReturnItem {
@@ -12299,6 +12313,14 @@ class FMCGDatabase {
     receiving_godown_id?: string;
     returnDate?: string;
     reason: string;
+    /** 'general' = credit an amount without items (no stock change) */
+    creditType?: 'items' | 'general';
+    /** general credit note: value before GST, GST % and what it is for */
+    generalAmount?: number;
+    generalGstPercent?: number;
+    description?: string;
+    /** discount on the whole credit note (item-wise), on the value before GST */
+    discount?: { mode: 'pct' | 'amt'; value: number };
     items: {
       productId: string;
       cartonQty?: number;
@@ -12307,8 +12329,12 @@ class FMCGDatabase {
       rate: number; // carton/trading unit return rate (manually entered by Admin)
       looseRate?: number; // loose unit rate
       condition: 'Sellable' | 'Damaged';
+      batchNumber?: string;
+      mfgDate?: string;
+      expiryDate?: string;
     }[];
   }): SalesReturn {
+    if (data.creditType === 'general') return this.createGeneralCreditNote(data);
     const activeBiz = this.getActiveBusinessCompanyId();
     const sReturns = this.getSalesReturns(activeBiz);
     const inventory = this.getInventory(activeBiz);
@@ -12339,7 +12365,36 @@ class FMCGDatabase {
 
     const returnItems: SalesReturnItem[] = [];
 
-    data.items.forEach(item => {
+    // Value of each line before discount, to share the credit-note discount by value
+    const lineValue = (item: typeof data.items[number]) => {
+      const prod = products.find(p => p.id === item.productId);
+      const units = prod?.units_per_box_carton || 1;
+      let c = item.cartonQty ?? 0;
+      let l = item.looseQty ?? 0;
+      if (item.cartonQty === undefined && item.looseQty === undefined && item.quantity !== undefined) {
+        const sp = splitBaseQuantity(item.quantity, units); c = sp.cartonQty; l = sp.looseQty;
+      }
+      if (calculateBaseQuantity(c, l, units) <= 0) return 0;
+      const lr = item.looseRate !== undefined ? item.looseRate : Math.round((item.rate / Math.max(1, units)) * 100) / 100;
+      return c * item.rate + l * lr;
+    };
+    const values = data.items.map(lineValue);
+    const grossTaxable = values.reduce((a, b) => a + b, 0);
+    const dVal = Math.max(0, Number(data.discount?.value) || 0);
+    const discountTotal = Math.round(Math.min(grossTaxable, data.discount?.mode === 'pct' ? grossTaxable * Math.min(100, dVal) / 100 : dVal) * 100) / 100;
+    const shares: number[] = values.map(() => 0);
+    if (discountTotal > 0 && grossTaxable > 0) {
+      let given = 0;
+      const lastIdx = values.reduce((last, v, i) => (v > 0 ? i : last), -1);
+      values.forEach((v, i) => {
+        if (v <= 0) return;
+        const share = i === lastIdx ? Math.round((discountTotal - given) * 100) / 100 : Math.round(discountTotal * v / grossTaxable * 100) / 100;
+        shares[i] = share;
+        given = Math.round((given + share) * 100) / 100;
+      });
+    }
+
+    data.items.forEach((item, itemIdx) => {
       const prod = products.find(p => p.id === item.productId);
       const unitsPerPack = prod?.units_per_box_carton || 1;
       const tradingUnit = prod?.trading_unit || 'Carton';
@@ -12363,7 +12418,8 @@ class FMCGDatabase {
       const cartonRate = item.rate;
       const looseRate = item.looseRate !== undefined ? item.looseRate : Math.round((cartonRate / Math.max(1, unitsPerPack)) * 100) / 100;
       
-      const lineTaxable = (cQty * cartonRate) + (lQty * looseRate);
+      const lineDiscount = shares[itemIdx] || 0;
+      const lineTaxable = Math.max(0, (cQty * cartonRate) + (lQty * looseRate) - lineDiscount);
       const gstPercent = (prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : (((item as any).gst_percent !== undefined && (item as any).gst_percent !== null) ? Number((item as any).gst_percent) : 0);
       const lineGst = (lineTaxable * gstPercent) / 100;
       const lineTotal = lineTaxable + lineGst;
@@ -12402,7 +12458,11 @@ class FMCGDatabase {
         sgst: Math.round(lineSgst * 100) / 100,
         igst: Math.round(lineIgst * 100) / 100,
         total_amount: Math.round(lineTotal * 100) / 100,
-        condition: item.condition
+        condition: item.condition,
+        batch_number: item.batchNumber?.trim() || undefined,
+        mfg_date: item.mfgDate || undefined,
+        expiry_date: item.expiryDate || undefined,
+        discount_amount: lineDiscount || undefined
       };
 
       returnItems.push(srItem);
@@ -12433,9 +12493,34 @@ class FMCGDatabase {
         // Good stock goes back into a batch too, so it can be packed and billed again
         const soldLine = invRef?.items?.find(l => l.product_id === item.productId);
         const ofProduct = returnBatches.filter(b => b.product_id === item.productId);
-        const backTo = ofProduct.find(b => b.id === soldLine?.batch_id)
-          || ofProduct.sort((x, y) => new Date(y.expiry_date || 0).getTime() - new Date(x.expiry_date || 0).getTime())[0];
-        if (backTo) {
+        const givenBatch = item.batchNumber?.trim();
+        const sameBatch = givenBatch ? ofProduct.find(b => String(b.batch_number || '').trim().toLowerCase() === givenBatch.toLowerCase()) : undefined;
+        const backTo = givenBatch
+          ? sameBatch
+          : (ofProduct.find(b => b.id === soldLine?.batch_id)
+            || ofProduct.sort((x, y) => new Date(y.expiry_date || 0).getTime() - new Date(x.expiry_date || 0).getTime())[0]);
+        if (givenBatch && !sameBatch) {
+          // the batch written on the goods is new to us: keep it as its own batch
+          returnBatches.push({
+            id: `bch-ret-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            product_id: item.productId,
+            godown_id: targetGodownId,
+            godown: targetGodownName,
+            batch_number: givenBatch,
+            mfg_date: item.mfgDate || undefined,
+            expiry_date: item.expiryDate || new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
+            purchase_rate: Number(prod?.purchase_price) || 0,
+            mrp: Number(prod?.mrp) || 0,
+            quantity: totalBaseQty,
+            entry_date: new Date().toISOString().slice(0, 10),
+            cost_layer: creditNoteNumber,
+            business_id: activeBiz
+          } as InventoryBatch);
+        } else if (backTo) {
+          if (givenBatch) {
+            if (item.mfgDate && !(backTo as any).mfg_date) (backTo as any).mfg_date = item.mfgDate;
+            if (item.expiryDate && !backTo.expiry_date) backTo.expiry_date = item.expiryDate;
+          }
           backTo.quantity = (Number(backTo.quantity) || 0) + totalBaseQty;
         } else {
           returnBatches.push({
@@ -12444,7 +12529,8 @@ class FMCGDatabase {
             godown_id: targetGodownId,
             godown: targetGodownName,
             batch_number: `RET-${creditNoteNumber}`,
-            expiry_date: new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
+            mfg_date: item.mfgDate || undefined,
+            expiry_date: item.expiryDate || new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10),
             purchase_rate: Number(prod?.purchase_price) || 0,
             mrp: Number(prod?.mrp) || 0,
             quantity: totalBaseQty,
@@ -12494,7 +12580,12 @@ class FMCGDatabase {
       round_off: Math.round(roundOff * 100) / 100,
       total_amount: grandCreditRounded,
       business_id: activeBiz,
-      items: returnItems
+      items: returnItems,
+      credit_type: 'items',
+      gross_taxable: Math.round(grossTaxable * 100) / 100,
+      discount_amount: discountTotal || undefined,
+      discount_percent: data.discount?.mode === 'pct' && discountTotal > 0 ? dVal : undefined,
+      description: data.description?.trim() || undefined
     };
 
     sReturns.push(newReturn);
@@ -12517,6 +12608,72 @@ class FMCGDatabase {
     }
 
     return newReturn;
+  }
+
+  /**
+   * General credit note: an amount credited to the shop without goods coming back
+   * (rate difference, scheme, discount given later, short supply...). No stock changes.
+   */
+  createGeneralCreditNote(data: {
+    retailerId: string;
+    invoiceId?: string;
+    returnDate?: string;
+    reason: string;
+    generalAmount?: number;
+    generalGstPercent?: number;
+    description?: string;
+  }): SalesReturn {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const sReturns = this.getSalesReturns(activeBiz);
+    const retailers = this.getRetailers(activeBiz);
+    const invoices = this.getInvoices(activeBiz);
+    const amount = Math.round((Number(data.generalAmount) || 0) * 100) / 100;
+    if (!(amount > 0)) throw new Error('Enter the amount of the credit note.');
+    const gstPct = Math.max(0, Number(data.generalGstPercent) || 0);
+    const retProfile = retailers.find(r => r.id === data.retailerId);
+    if (!retProfile) throw new Error('Choose the shop.');
+    const invRef = data.invoiceId ? invoices.find(i => i.id === data.invoiceId) : undefined;
+
+    const gst = Math.round(amount * gstPct) / 100;
+    const inter = !isIntraStateSupply(retProfile.state_code || getHomeStateCode());
+    const cgst = inter ? 0 : Math.round(gst / 2 * 100) / 100;
+    const sgst = inter ? 0 : Math.round((gst - cgst) * 100) / 100;
+    const igst = inter ? gst : 0;
+    const exact = amount + gst;
+    const total = Math.round(exact);
+    const creditNoteNumber = nextDocNumber(`CN-${new Date().getFullYear()}-`, sReturns.map(sr => sr.credit_note_number));
+
+    const note: SalesReturn = {
+      id: `sr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      credit_note_number: creditNoteNumber,
+      retailer_id: data.retailerId,
+      invoice_id: invRef?.id,
+      return_date: data.returnDate || new Date().toISOString(),
+      reason: data.reason,
+      status: 'Confirmed',
+      taxable_amount: amount,
+      gst_amount: gst,
+      cgst, sgst, igst,
+      round_off: Math.round((total - exact) * 100) / 100,
+      total_amount: total,
+      business_id: activeBiz,
+      items: [],
+      credit_type: 'general',
+      gross_taxable: amount,
+      description: data.description?.trim() || undefined
+    } as SalesReturn;
+    (note as any).gst_percent = gstPct;
+
+    sReturns.push(note);
+    this.saveSalesReturns(sReturns);
+    retProfile.outstanding = Math.max(0, (retProfile.outstanding || 0) - total);
+    this.saveRetailers(retailers);
+    if (invRef) {
+      invRef.outstanding_amount = Math.max(0, invRef.outstanding_amount - total);
+      if (invRef.outstanding_amount <= 0) invRef.payment_status = 'Paid';
+      this.saveInvoices(invoices);
+    }
+    return note;
   }
 
   /**

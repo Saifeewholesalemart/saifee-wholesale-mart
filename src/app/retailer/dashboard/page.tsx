@@ -32,6 +32,7 @@ export default function RetailerDashboard() {
   // Tab and step are kept in the URL so the phone Back button goes to the previous screen
   const [activeView, setActiveView] = useUrlStep<'catalog' | 'history' | 'finance'>('tab', 'catalog', ['catalog', 'history', 'finance']);
   const [orderStep, setOrderStep] = useUrlStep<'catalog' | 'cart' | 'confirm' | 'success'>('step', 'catalog', ['catalog', 'cart', 'confirm', 'success']);
+  const [orderNote, setOrderNote] = useState('');
 
   // Search & Filter States
   const [searchTerm, setSearchTerm] = useState('');
@@ -393,6 +394,7 @@ export default function RetailerDashboard() {
       channel: 'Retailer Direct',
       created_by: currentUser.id,
       total_amount: cartCalculations.grand,
+      order_notes: orderNote.trim() || undefined,
       items
     });
 
@@ -404,6 +406,7 @@ export default function RetailerDashboard() {
 
     setLatestOrderNum(ord.order_number);
     setCart({});
+    setOrderNote('');
     setShowPendingWarningModal(false);
     setOrderStep('success', { replace: true });
   };
@@ -874,6 +877,19 @@ export default function RetailerDashboard() {
                       );
                     })}
                   </div>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="order-note" className="text-xs font-bold text-slate-700">Note for this order <span className="font-normal text-slate-500">(optional)</span></label>
+                  <textarea
+                    id="order-note"
+                    value={orderNote}
+                    onChange={(e) => setOrderNote(e.target.value.slice(0, 500))}
+                    rows={3}
+                    placeholder="For example: deliver after 4 pm, send fresh stock, call before delivery"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 resize-y"
+                  />
+                  <span className="text-[11px] text-slate-500">The packer, the biller and the office will see this note.</span>
                 </div>
 
                 <div className="flex gap-3 pt-2">

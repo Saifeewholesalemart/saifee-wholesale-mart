@@ -14,6 +14,7 @@ import {
   computeFreeStockByProduct, flowOrderStage, flowRemainingQty, flowOrderedQty, flowItemRate, flowChannelLabel, FlowStage, isWalkInRetailerId
 } from '@/lib/db';
 import { productLabel, customerName, formatINR, formatWhen, purchaseRateOf, marginPercent } from './flowUi';
+import OrderNotes from './OrderNotes';
 import RateHistoryPanel from './RateHistoryPanel';
 import InvoicePreviewModal from '@/components/orders/InvoicePreviewModal';
 import { X } from 'lucide-react';
@@ -260,6 +261,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
         </header>
 
         <div className="p-5 flex flex-col gap-4">
+          <OrderNotes orders={[order]} />
           {notice && <div role="status" className="text-sm text-green-900 bg-green-50 border border-green-200 rounded-lg px-3 py-2">{notice}</div>}
           {error && <div role="alert" className="text-sm font-semibold text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
 

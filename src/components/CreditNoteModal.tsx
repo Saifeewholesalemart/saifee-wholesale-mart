@@ -8,6 +8,8 @@ import { printInvoiceDocument } from '@/lib/printInvoice';
 
 interface CreditNoteModalProps {
   creditNote: SalesReturn;
+  /** bill number to print instead of the bill id */
+  invoiceNumber?: string;
   retailer?: Retailer;
   products: Product[];
   businessCompany?: BusinessCompany;
@@ -16,6 +18,7 @@ interface CreditNoteModalProps {
 
 export default function CreditNoteModal({
   creditNote,
+  invoiceNumber,
   retailer,
   products,
   businessCompany,
@@ -141,7 +144,7 @@ export default function CreditNoteModal({
                 {creditNote.invoice_id && (
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold uppercase block">Inv Reference</span>
-                    <span className="font-bold text-slate-700">{creditNote.invoice_id}</span>
+                    <span className="font-bold text-slate-700">{invoiceNumber || creditNote.invoice_id}</span>
                   </div>
                 )}
               </div>
@@ -199,6 +202,21 @@ export default function CreditNoteModal({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium">
+                {(creditNote.items?.length || 0) === 0 && (
+                  <tr>
+                    <td className="py-3 px-3 text-center text-slate-400 font-bold">1</td>
+                    <td className="py-3 px-3" colSpan={5}>
+                      <span className="font-black text-slate-900 block">{creditNote.description || creditNote.reason || 'Credit'}</span>
+                      <span className="text-[10px] text-slate-500 font-semibold block">General credit note · no goods returned</span>
+                    </td>
+                    <td className="py-3 px-3 text-right font-bold text-slate-800">₹{subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="py-3 px-3 text-right text-slate-600">
+                      <span className="font-semibold block">{Number((creditNote as any).gst_percent) || 0}%</span>
+                      <span className="text-[10px] text-slate-500 block">₹{totalGst.toFixed(2)}</span>
+                    </td>
+                    <td className="py-3 px-3 text-right font-black text-slate-900">₹{(subtotal + totalGst).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  </tr>
+                )}
                 {creditNote.items?.map((item, index) => {
                   const prod = products.find(p => p.id === item.product_id);
                   const unitsPerPack = item.units_per_trading_unit || prod?.units_per_box_carton || 1;
@@ -223,6 +241,14 @@ export default function CreditNoteModal({
                         <span className="text-[10px] text-slate-500 font-semibold block">
                           Brand: {prod?.brand || '—'} &bull; Pack: {unitsPerPack} {baseUnit}s/{tradingUnit}
                         </span>
+                        {(item.batch_number || item.mfg_date || item.expiry_date) && (
+                          <span className="text-[10px] text-slate-600 font-semibold block">
+                            {[item.batch_number ? `Batch: ${item.batch_number}` : '', item.mfg_date ? `Mfg: ${new Date(item.mfg_date).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}` : '', item.expiry_date ? `Exp: ${new Date(item.expiry_date).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}` : ''].filter(Boolean).join(' · ')}
+                          </span>
+                        )}
+                        {Number(item.discount_amount) > 0 && (
+                          <span className="text-[10px] text-amber-700 font-semibold block">Discount ₹{Number(item.discount_amount).toFixed(2)}</span>
+                        )}
                       </td>
                       <td className="py-3 px-3 text-center font-mono text-[11px] text-slate-600">
                         {item.hsn || prod?.hsn || '19053100'}
@@ -279,12 +305,26 @@ export default function CreditNoteModal({
                 The total credit value of <strong className="text-slate-900 font-black">₹{totalAmount.toLocaleString('en-IN')}</strong> has been credited to <strong className="text-slate-900 font-bold">{retailer?.shop_name || 'Retailer Account'}</strong>. This amount reduces the retailer&apos;s active outstanding dues.
               </p>
               <div className="text-[11px] text-slate-500 pt-1 border-t border-emerald-200/60">
-                Stock Condition: Items marked <span className="font-bold text-emerald-700">Sellable</span> have been restored to inventory. Items marked <span className="font-bold text-red-700">Damaged</span> are written off.
+                {(creditNote.items?.length || 0) === 0
+                  ? 'General credit note: no goods were returned and stock is not changed.'
+                  : <>Stock Condition: Items marked <span className="font-bold text-emerald-700">Sellable</span> have been restored to inventory. Items marked <span className="font-bold text-red-700">Damaged</span> are written off.</>}
               </div>
             </div>
 
             {/* Right Box: Tax Breakdown Subtotal */}
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2 text-xs">
+              {Number(creditNote.discount_amount) > 0 && (
+                <>
+                  <div className="flex justify-between text-slate-600">
+                    <span>Value before discount:</span>
+                    <span className="font-bold text-slate-900">₹{Number(creditNote.gross_taxable || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-600">
+                    <span>Discount{creditNote.discount_percent ? ` (${creditNote.discount_percent}%)` : ''}:</span>
+                    <span className="font-bold text-slate-900">− ₹{Number(creditNote.discount_amount).toFixed(2)}</span>
+                  </div>
+                </>
+              )}
               <div className="flex justify-between text-slate-600">
                 <span>Taxable Subtotal:</span>
                 <span className="font-bold text-slate-900">₹{subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>

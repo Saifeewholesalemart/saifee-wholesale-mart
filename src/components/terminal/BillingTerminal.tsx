@@ -21,6 +21,7 @@ import { recentBillingRates, formatINR } from '@/components/flow/flowUi';
 import InvoicePreviewModal from '@/components/orders/InvoicePreviewModal';
 import InvoiceAuditTrailModal from '@/components/InvoiceAuditTrailModal';
 import BillsRegister from './BillsRegister';
+import OrderNotes from '@/components/flow/OrderNotes';
 import {
   TerminalLine, num, r2, lineAmount, syncDiscount, billTotals,
   splitBillDiscount, discountPerPiece, newLineKey
@@ -807,6 +808,7 @@ export default function BillingTerminal() {
               {shortOnOrders.length > 0 && (
                 <div className="text-amber-900">Not packed (stays on backorder): {shortOnOrders.join('; ')}.</div>
               )}
+              <OrderNotes orders={tabOrders} compact />
               {(tabOrders.length === 0 || tabOrders.some(o => !o.flow_ready_to_bill)) && (
                 <div className="text-red-800 font-semibold">
                   {tabOrders.length === 0 ? 'These orders are no longer waiting for billing.' : 'This order is not packed yet (or was already billed).'} Close this tab.
@@ -823,6 +825,9 @@ export default function BillingTerminal() {
               <span className="text-slate-600 text-[13px] flex-1">Edit any cell; on save the bill keeps its number. Stock and the shop balance change by the difference.</span>
               <button type="button" onClick={() => setHistoryFor(savedInvoice)} className="min-h-9 px-3 rounded-lg border border-emerald-300 bg-white text-emerald-900 text-[13px] font-semibold">Change history</button>
             </div>
+          )}
+          {savedInvoice && (
+            <OrderNotes compact orders={(orders as Order[]).filter(o => (savedInvoice.source_order_ids || []).includes(o.id) || o.id === savedInvoice.order_ref_id)} />
           )}
 
           {/* Search */}
