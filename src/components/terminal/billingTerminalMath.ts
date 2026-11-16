@@ -19,6 +19,8 @@ export interface TerminalLine {
   discMode: DiscMode;
   gst: string;
   purchaseRate: number;
+  /** order line this bill line comes from (bill made from packed orders) */
+  orderItemId?: string;
   /** existing invoice line id (saved bill) */
   lineId?: string;
   batchId?: string;

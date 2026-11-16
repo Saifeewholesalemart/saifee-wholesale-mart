@@ -184,8 +184,10 @@ export default function ReportTable<T extends Record<string, any>>({
     if (externalSearchTerm !== undefined) setSearchTerm(externalSearchTerm);
   }, [externalSearchTerm]);
 
-  // New data (other date range, other filters on the page) starts again from page 1
-  useEffect(() => { setCurrentPage(1); }, [data]);
+  // The page number is kept when the report refreshes in the background (cloud sync, other
+  // devices); it only goes back to page 1 when the search at the top of the page changes.
+  // If the list gets shorter, the page shown is capped at the last page (see `page` below).
+  useEffect(() => { setCurrentPage(1); }, [pageSearch]);
 
   const colId = (col: ColumnDef<T>) => (col.key as string) || col.header;
 
@@ -455,7 +457,7 @@ export default function ReportTable<T extends Record<string, any>>({
         <div className="flex items-center gap-3 text-xs text-slate-500 font-semibold">
           <span>
             {processedData.length === data.length
-              ? `${data.length} rows`
+              ? `${data.length} ${data.length === 1 ? 'row' : 'rows'}`
               : `${processedData.length} of ${data.length} rows`}
           </span>
           <div className="flex items-center gap-1.5">

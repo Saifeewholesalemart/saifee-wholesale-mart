@@ -2,7 +2,8 @@
 
 import React from 'react';
 import { useDb } from '@/context/DbContext';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
+import Link from 'next/link';
 import { Boxes, LogOut, ArrowLeft } from 'lucide-react';
 import RoleSwitcher from '@/components/RoleSwitcher';
 import { CloudSyncStatusButton } from '@/components/CloudSyncStatusButton';
@@ -10,6 +11,7 @@ import { CloudSyncStatusButton } from '@/components/CloudSyncStatusButton';
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
   const { currentUser, isAuthenticated, isAuthLoading, logout } = useDb();
   const router = useRouter();
+  const pathname = usePathname() || '';
 
   const isAllowed = isAuthenticated && !!currentUser?.id;
   React.useEffect(() => {
@@ -67,6 +69,21 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           </button>
         </div>
       </header>
+
+      {/* Biller menu: Ready to Bill and the Billing Terminal */}
+      {(currentUser?.role === 'admin' || String(currentUser?.custom_role || '').toLowerCase().includes('biller')) && (
+        <nav className="bg-slate-800 px-3 flex gap-1" aria-label="Biller screens">
+          {[
+            { href: '/staff', label: 'Ready to Bill', active: !pathname.startsWith('/staff/terminal') },
+            { href: '/staff/terminal', label: 'Billing Terminal', active: pathname.startsWith('/staff/terminal') }
+          ].map(item => (
+            <Link key={item.href} href={item.href} aria-current={item.active ? 'page' : undefined}
+              className={`px-3.5 py-2 text-sm font-semibold rounded-t-md ${item.active ? 'bg-slate-100 text-slate-900' : 'text-slate-300 hover:text-white'}`}>
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 w-full">

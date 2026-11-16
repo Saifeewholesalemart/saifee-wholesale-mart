@@ -18,7 +18,9 @@ import {
 import { productLabel, customerName, formatINR, formatWhen, purchaseRateOf, marginPercent, sortByOrderSort, OrderSort } from './flowUi';
 import RateHistoryPanel from './RateHistoryPanel';
 import InvoicePreviewModal from '@/components/orders/InvoicePreviewModal';
-import { CheckCircle2, Receipt, History } from 'lucide-react';
+import { CheckCircle2, Receipt, History, Monitor } from 'lucide-react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 
 type Mode = 'Cash' | 'UPI' | 'Credit';
 
@@ -32,6 +34,8 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
   const [done, setDone] = useState<{ invoice: Invoice; challan?: DeliveryChallan; shortfall: string; retailerId: string; mode: Mode } | null>(null);
   const [preview, setPreview] = useState(false);
   const [rateLine, setRateLine] = useState<string | null>(null);
+  const pathname = usePathname() || '';
+  const terminalBase = pathname.startsWith('/admin') ? '/admin/terminal' : '/staff/terminal';
 
   const freeAll = useMemo(() => computeFreeStockByProduct(batches, orders), [batches, orders]);
   const groups = useMemo(() => {
@@ -298,6 +302,13 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
                 >
                   {current.orders.length > 1 ? `Generate 1 Invoice (${current.orders.length} orders)` : 'Generate Invoice'}
                 </button>
+                <Link
+                  href={`${terminalBase}?orders=${current.orders.map(o => o.id).join(',')}`}
+                  className="min-h-11 rounded-lg border border-indigo-300 bg-white text-indigo-800 font-bold text-sm flex items-center justify-center gap-2 hover:bg-indigo-50"
+                >
+                  <Monitor className="w-4 h-4" aria-hidden="true" /> Open in Billing Terminal
+                </Link>
+                <span className="text-xs text-slate-600">Use the terminal to change quantities or discounts, or to add items.</span>
               </div>
             </div>
           </>

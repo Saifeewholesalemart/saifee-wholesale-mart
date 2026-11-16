@@ -22,8 +22,7 @@ import FilterDiagnosticsBar from '@/components/reports/FilterDiagnosticsBar';
 
 // Category Views
 import SalesReportsView from '@/components/reports/categories/SalesReportsView';
-import ItemReportByPartyView from '@/components/reports/categories/ItemReportByPartyView';
-import PartyItemReportsView from '@/components/reports/categories/PartyItemReportsView';
+import PartyItemVyaparReport from '@/components/reports/categories/PartyItemVyaparReport';
 import ProfitLossReportsView from '@/components/reports/categories/ProfitLossReportsView';
 import RetailerReportsView from '@/components/reports/categories/RetailerReportsView';
 import CompanyBrandReportsView from '@/components/reports/categories/CompanyBrandReportsView';
@@ -58,6 +57,7 @@ export default function AdminReports() {
 
   // Active Category State
   const [activeCategory, setActiveCategory] = useState<ReportCategory>('sales');
+  const vyaparStyleReport = activeCategory === 'item_party' || activeCategory === 'party_item';
 
   // Shared Global Filter State across reports
   const [filters, setFilters] = useState<ReportFilterState>({
@@ -100,8 +100,8 @@ export default function AdminReports() {
   // 14 Report Categories Configuration
   const categories: { id: ReportCategory; name: string; shortName: string; icon: any; badge?: string }[] = [
     { id: 'sales', name: 'A. Sales Reports', shortName: 'Sales', icon: TrendingUp },
-    { id: 'item_party', name: 'B1. Item Report by Party', shortName: 'Item by Party', icon: Package, badge: 'Stock' },
-    { id: 'party_item', name: 'B2. Party Report by Item', shortName: 'Party by Item', icon: Users, badge: 'ERP' },
+    { id: 'item_party', name: 'B1. Item Report By Party', shortName: 'Item by Party', icon: Package },
+    { id: 'party_item', name: 'B2. Party Report By Item', shortName: 'Party by Item', icon: Users },
     { id: 'profit_loss', name: 'C. Profit & Loss', shortName: 'P&L / Margin', icon: DollarSign, badge: 'Admin' },
     { id: 'retailer', name: 'D. Retailer Reports', shortName: 'Retailers', icon: Store },
     { id: 'company_brand', name: 'E. Company & Brand', shortName: 'Companies', icon: Building2 },
@@ -392,7 +392,8 @@ export default function AdminReports() {
         </div>
       </div>
 
-      {/* Common Universal Report Filter Bar */}
+      {/* Common Universal Report Filter Bar (the two Vyapar-style party/item reports have their own filters) */}
+      {!vyaparStyleReport && (
       <ReportFilterBar
         filters={filters}
         onChange={setFilters}
@@ -405,6 +406,7 @@ export default function AdminReports() {
         showCharts={showCharts}
         onToggleCharts={() => setShowCharts(!showCharts)}
       />
+      )}
 
       {/* Interactive Filter Diagnostics & Testing Bar (when toggled) */}
       {showDiagnostics && (
@@ -418,7 +420,7 @@ export default function AdminReports() {
       )}
 
       {/* DYNAMIC REPORT CATEGORY VIEW */}
-      <ReportSearchContext.Provider value={filters.searchQuery || ''}>
+      <ReportSearchContext.Provider value={vyaparStyleReport ? '' : (filters.searchQuery || '')}>
       <div className="transition-all duration-150">
         {activeCategory === 'sales' && (
           <SalesReportsView
@@ -431,21 +433,11 @@ export default function AdminReports() {
         )}
 
         {activeCategory === 'item_party' && (
-          <ItemReportByPartyView
-            filters={filters}
-            dbState={dbState}
-            userContext={userContext}
-            showCharts={showCharts}
-          />
+          <PartyItemVyaparReport mode="item_by_party" dbState={dbState} />
         )}
 
         {activeCategory === 'party_item' && (
-          <PartyItemReportsView
-            filters={filters}
-            dbState={dbState}
-            userContext={userContext}
-            showCharts={showCharts}
-          />
+          <PartyItemVyaparReport mode="party_by_item" dbState={dbState} />
         )}
 
         {activeCategory === 'profit_loss' && (

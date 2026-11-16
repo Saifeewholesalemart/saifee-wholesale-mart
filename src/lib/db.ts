@@ -3014,6 +3014,205 @@ class FMCGDatabase {
   }
 
   /**
+   * Bill packed orders from the billing terminal.
+   * The packed quantities are billed exactly like flowBillShop (backorder stays on the orders),
+   * then whatever the biller changed in the terminal is applied to that bill:
+   * other quantities, discounts, GST, removed lines and extra items (updateInvoice keeps the
+   * orders in step). Money received now is recorded against this bill only.
+   */
+  flowBillShopFromTerminal(
+    orderIds: string[],
+    data: {
+      lines: {
+        orderItemId?: string;
+        productId: string;
+        name?: string;
+        qty: number;
+        rate: number;              // per piece
+        discountPerPiece: number;  // item discount + share of the bill discount, per piece
+        gst: number;
+        unitsPerPack?: number;
+        mrp?: number;
+        purchaseRate?: number;
+        hsn?: string;
+        packing?: string;
+      }[];
+      paymentMode: 'Cash' | 'UPI' | 'Credit';
+      paidAmount: number;
+      notes?: string;
+      generateChallan?: boolean;
+    },
+    user?: { id: string; name: string }
+  ): { invoice: Invoice; challan?: DeliveryChallan; shortfall: string } {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const orders = this.getOrders(activeBiz);
+    const products = this.getProducts(activeBiz);
+    const list = orderIds.map(id => orders.find(o => o.id === id)).filter(Boolean) as Order[];
+    if (list.length === 0) throw new Error('Order not found.');
+    const lines = (data.lines || []).filter(l => l.productId && Number(l.qty) > 0);
+    if (lines.length === 0) throw new Error('Add at least one item.');
+    if (lines.some(l => !Number.isInteger(Number(l.qty)))) throw new Error('Quantity must be a whole number.');
+    if (lines.some(l => Number(l.rate) < 0 || isNaN(Number(l.rate)))) throw new Error('A rate cannot be negative.');
+    if (data.paymentMode === 'Credit' && isWalkInRetailerId(list[0].retailer_id)) {
+      throw new Error('A walk-in customer cannot buy on credit. Take Cash or UPI.');
+    }
+
+    // 1. Packed lines as the packer packed them, at the biller's rates
+    const packed = new Map<string, { qty: number; units: number; gst: number }>();
+    list.forEach(o => (o.items || []).forEach(it => {
+      const q = Math.floor(Number(it.flow_packed_qty) || 0);
+      if (q <= 0) return;
+      const prod = products.find(p => p.id === it.product_id);
+      const units = it.units_per_trading_unit || prod?.units_per_box_carton || 1;
+      const gst = (prod?.gst_percent !== undefined && prod?.gst_percent !== null) ? Number(prod.gst_percent) : (Number(it.gst_percent) || 0);
+      packed.set(it.id, { qty: q, units, gst });
+    }));
+    const rates: Record<string, number> = {};
+    lines.forEach(l => {
+      if (!l.orderItemId || !packed.has(l.orderItemId)) return;
+      rates[l.orderItemId] = Math.round(Number(l.rate) * packed.get(l.orderItemId)!.units * 100) / 100;
+    });
+    const res = this.flowBillShop(orderIds, { rates, paymentMode: 'Credit', generateChallan: data.generateChallan === true }, user);
+
+    // 2. Anything changed in the terminal?
+    const seen = new Set<string>();
+    let changed = false;
+    lines.forEach(l => {
+      const p = l.orderItemId ? packed.get(l.orderItemId) : undefined;
+      if (!p || seen.has(l.orderItemId!)) { changed = true; return; }
+      seen.add(l.orderItemId!);
+      if (Number(l.qty) !== p.qty) changed = true;
+      if ((Number(l.discountPerPiece) || 0) > 0.0001) changed = true;
+      if (Math.abs((Number(l.gst) || 0) - p.gst) > 0.001) changed = true;
+    });
+    packed.forEach((_, id) => { if (!seen.has(id)) changed = true; });
+
+    let invoice: Invoice = res.invoice;
+    if (changed) {
+      const items: InvoiceItem[] = lines.map(l => {
+        const prod = products.find(p => p.id === l.productId);
+        const units = Math.max(1, Number(l.unitsPerPack) || prod?.units_per_box_carton || 1);
+        const qty = Number(l.qty);
+        const rate = Math.round(Number(l.rate) * 100) / 100;
+        const d = Number(l.discountPerPiece) || 0;
+        return {
+          id: `inv-item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          invoice_id: invoice.id,
+          product_id: l.productId,
+          product_name: l.name || prod?.name || 'Item',
+          hsn: l.hsn || prod?.hsn || '',
+          packing: l.packing || prod?.pack_size || '',
+          quantity: qty,
+          carton_qty: 0,
+          loose_qty: qty,
+          base_qty: qty,
+          trading_unit: 'Piece',
+          base_unit: 'Piece',
+          units_per_trading_unit: units,
+          units_per_box_carton: units,
+          rate,
+          carton_rate: rate,
+          loose_rate: rate,
+          discount: Math.round(d * qty * 100) / 100,
+          carton_discount: d,
+          loose_discount: d,
+          gst_percent: Number(l.gst) || 0,
+          taxable_value: 0, cgst: 0, sgst: 0, igst: 0, total_amount: 0,
+          mrp: l.mrp ?? prod?.mrp,
+          purchase_rate: l.purchaseRate ?? prod?.purchase_price,
+          manual_billing_rate: rate,
+          manual_rate_applied: true
+        } as any;
+      });
+      const upd = this.updateInvoice(invoice.id, {
+        date: invoice.date,
+        place_of_supply: invoice.place_of_supply,
+        items,
+        paid_amount: 0
+      }, 'Changed in the billing terminal while billing packed orders', user);
+      if (!upd) throw new Error('The bill was made, but the changes could not be saved. Open the bill and save it again.');
+      invoice = upd.invoice;
+    }
+
+    // 3. Note and money received now (for this bill only)
+    const invoices = this.getInvoices(activeBiz);
+    const idx = invoices.findIndex(i => i.id === invoice.id);
+    if (idx >= 0) {
+      const inv = invoices[idx];
+      if (data.notes && data.notes.trim()) inv.notes = data.notes.trim();
+      inv.payment_mode = data.paymentMode;
+      const amount = data.paymentMode === 'Credit' ? 0 : Math.max(0, Math.min(Number(inv.grand_total) || 0, Number(data.paidAmount) || 0));
+      if (amount > 0) {
+        const payments = this.getPayments(activeBiz);
+        const allocations = this.getPaymentAllocations(activeBiz);
+        const payId = `pay-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const payNum = nextDocNumber(`PAY-${new Date().getFullYear()}-`, payments.map(d => d.payment_number));
+        const now = new Date().toISOString();
+        payments.push({
+          id: payId,
+          retailer_id: inv.retailer_id,
+          payment_number: payNum,
+          amount,
+          method: data.paymentMode as Payment['method'],
+          reference_number: payNum,
+          notes: `GST Invoice ${inv.invoice_number} billing payment`,
+          date: now,
+          business_id: activeBiz
+        } as Payment);
+        this.savePayments(payments, activeBiz);
+        allocations.push({
+          id: `alloc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          payment_id: payId,
+          invoice_id: inv.id,
+          amount_allocated: amount,
+          business_id: activeBiz
+        } as any);
+        this.savePaymentAllocations(allocations, activeBiz);
+        inv.paid_amount = Math.round(((Number(inv.paid_amount) || 0) + amount) * 100) / 100;
+        inv.outstanding_amount = Math.max(0, Math.round(((Number(inv.grand_total) || 0) - inv.paid_amount) * 100) / 100);
+        inv.payment_status = inv.outstanding_amount <= 0 ? 'Paid' : 'Partial';
+        const retailers = this.getRetailers(activeBiz);
+        const ret = retailers.find(r => r.id === inv.retailer_id);
+        if (ret) {
+          ret.outstanding = (ret.outstanding || 0) - amount;
+          ret.outstanding_balance = (ret.outstanding_balance || 0) - amount;
+          ret.current_balance = (ret.current_balance || 0) - amount;
+          this.saveRetailers(retailers, activeBiz);
+        }
+        try {
+          this.createCashFlowTransaction({
+            company_id: activeBiz,
+            date: now.split('T')[0],
+            time: new Date().toTimeString().split(' ')[0],
+            type: 'CASH_IN',
+            amount,
+            payment_mode: data.paymentMode === 'UPI' ? 'UPI' : 'Cash',
+            category: 'Invoice Payment',
+            party_type: 'retailer',
+            party_id: inv.retailer_id,
+            party_name: ret?.shop_name || 'Customer',
+            reference_number: payNum,
+            source_type: 'Invoice Payment',
+            source_id: payId,
+            linked_invoice_id: inv.id,
+            linked_invoice_number: inv.invoice_number,
+            linked_retailer_id: inv.retailer_id,
+            remarks: `Payment received against Invoice ${inv.invoice_number} via ${data.paymentMode}`,
+            created_by: user?.name || 'Biller'
+          } as any, user);
+        } catch (e) {
+          console.warn('Cash flow entry skipped:', e);
+        }
+      } else {
+        inv.payment_status = (Number(inv.outstanding_amount) || 0) <= 0 ? 'Paid' : (Number(inv.paid_amount) > 0 ? 'Partial' : 'Unpaid');
+      }
+      this.saveInvoices(invoices, activeBiz);
+      invoice = inv;
+    }
+    return { invoice, challan: res.challan, shortfall: res.shortfall };
+  }
+
+  /**
    * Admin edits an order that is not billed yet (or the unbilled part of it).
    * lines = the full list of items still to supply: qty (pcs) and rate.
    * Items left out are removed (or their pending part is cancelled if something was billed).

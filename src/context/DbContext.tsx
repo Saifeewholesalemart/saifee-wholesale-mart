@@ -623,6 +623,11 @@ interface DbContextType {
     orderIds: string[],
     options: { rates?: Record<string, number>; paymentMode: 'Cash' | 'UPI' | 'Credit'; generateChallan?: boolean }
   ) => { invoice: Invoice; challan?: DeliveryChallan; shortfall: string };
+  /** Bill packed orders from the billing terminal (with the biller's changes) */
+  flowBillShopFromTerminal: (
+    orderIds: string[],
+    data: Parameters<typeof db.flowBillShopFromTerminal>[1]
+  ) => { invoice: Invoice; challan?: DeliveryChallan; shortfall: string };
   /** Admin: edit the unbilled part of an order */
   flowEditOrder: (orderId: string, lines: { itemId?: string; productId: string; qty: number; rate: number }[]) => { changes: string[] };
   /** Admin: revise a bill that is already made */
@@ -2475,6 +2480,10 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         flowBillShop: (orderIds, options) => {
           const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
           try { return db.flowBillShop(orderIds, options, user); } finally { refreshState(); }
+        },
+        flowBillShopFromTerminal: (orderIds, data) => {
+          const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
+          try { return db.flowBillShopFromTerminal(orderIds, data, user); } finally { refreshState(); }
         },
         flowEditOrder: (orderId, lines) => {
           const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
