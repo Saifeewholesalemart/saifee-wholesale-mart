@@ -6,7 +6,7 @@ import {
   Tag, Store, Truck, FileText, History as HistoryIcon, ShieldAlert,
   Edit3, Ban, User, Building2, Layers
 } from 'lucide-react';
-import { CashFlowTransaction } from '@/lib/db';
+import { CashFlowTransaction, cashFlowCategoryLabel } from '@/lib/db';
 import { useDb } from '@/context/DbContext';
 
 function formatINR(val?: number) {
@@ -120,7 +120,7 @@ export default function CashFlowDetailsModal({
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500 font-medium">Category:</span>
-                <span className="font-bold text-indigo-700">{transaction.category}</span>
+                <span className="font-bold text-indigo-700">{cashFlowCategoryLabel(transaction.category)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500 font-medium">Source:</span>
@@ -144,7 +144,7 @@ export default function CashFlowDetailsModal({
               </div>
               {transaction.party_type && (
                 <span className="text-[11px] text-slate-500 block">
-                  Party Type: <span className="font-semibold capitalize">{transaction.party_type}</span>
+                  Party Type: <span className="font-semibold capitalize">{transaction.party_type === 'retailer' || transaction.party_type === 'supplier' ? 'Party' : transaction.party_type}</span>
                 </span>
               )}
             </div>

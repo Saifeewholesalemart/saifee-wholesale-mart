@@ -205,7 +205,7 @@ export default function AIPurchaseImport() {
   const handleSaveSupplier = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!supplierFormName.trim()) {
-      alert('Please enter supplier name.');
+      alert('Please enter party name.');
       return;
     }
     const newSupp = createSupplier(
@@ -708,7 +708,7 @@ export default function AIPurchaseImport() {
         }
         setSelectedSupplierId(currentSupplierId);
       } else {
-        alert('Please select or create a supplier first.');
+        alert('Please select or create a party first.');
         return;
       }
     }
@@ -1089,20 +1089,20 @@ export default function AIPurchaseImport() {
       {!verificationData ? (
         <div className="max-w-3xl mx-auto my-8 space-y-6">
           <div className="erp-card bg-white p-8 space-y-6 shadow-sm border border-slate-200 rounded-2xl">
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">1. Select supplier &amp; Upload Purchase Bill</h3>
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">1. Select party &amp; Upload Purchase Bill</h3>
             
             <div className="space-y-5">
               {/* Supplier select */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Supplier (Optional)</label>
+                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Party (Optional)</label>
                   <button
                     type="button"
                     onClick={() => handleOpenSupplierModal(false)}
                     className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 transition-colors cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>+ Add Supplier</span>
+                    <span>+ Add Party</span>
                   </button>
                 </div>
                 <select
@@ -1110,7 +1110,7 @@ export default function AIPurchaseImport() {
                   onChange={(e) => setSelectedSupplierId(e.target.value)}
                   className="w-full border border-slate-200 rounded-xl p-3.5 text-xs outline-none focus:border-indigo-500 font-semibold text-slate-700 bg-white shadow-sm transition-all"
                 >
-                  <option value="">-- Choose Supplier (Auto-detected from bill if left empty) --</option>
+                  <option value="">-- Choose Party (Auto-detected from bill if left empty) --</option>
                   {suppliers.map(s => (
                     <option key={s.id} value={s.id}>{s.name} {s.gstin ? `(${s.gstin})` : ''}</option>
                   ))}
@@ -1355,7 +1355,7 @@ export default function AIPurchaseImport() {
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4 flex-1 w-full text-xs">
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Supplier Link</label>
+                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Party Link</label>
                   <button
                     type="button"
                     onClick={() => handleOpenSupplierModal(true)}
@@ -1370,7 +1370,7 @@ export default function AIPurchaseImport() {
                   onChange={(e) => setSelectedSupplierId(e.target.value)}
                   className="w-full border border-slate-200 rounded-lg p-2 font-semibold text-slate-700 bg-white focus:border-indigo-500 outline-none"
                 >
-                  <option value="">-- Choose Supplier --</option>
+                  <option value="">-- Choose Party --</option>
                   {suppliers.map(s => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
@@ -1561,7 +1561,7 @@ export default function AIPurchaseImport() {
                 </button>
                 {(!isFullyResolved || !selectedSupplierId) && (
                   <span className="absolute bottom-full right-0 mb-2 w-64 p-2.5 bg-slate-800 text-white text-xs rounded-lg shadow-lg font-bold opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity text-center leading-normal z-20">
-                    {!selectedSupplierId ? 'Select database supplier' : unassignedCompanyCount > 0 ? `Assign company to all ${unassignedCompanyCount} remaining items` : unitMissingCount > 0 ? `Choose Carton or Pieces for ${unitMissingCount} item(s)` : badPackCount > 0 ? `Enter pieces per carton for ${badPackCount} item(s)` : 'Resolve all items before confirming'}
+                    {!selectedSupplierId ? 'Select database party' : unassignedCompanyCount > 0 ? `Assign company to all ${unassignedCompanyCount} remaining items` : unitMissingCount > 0 ? `Choose Carton or Pieces for ${unitMissingCount} item(s)` : badPackCount > 0 ? `Enter pieces per carton for ${badPackCount} item(s)` : 'Resolve all items before confirming'}
                   </span>
                 )}
               </div>
@@ -2979,8 +2979,8 @@ export default function AIPurchaseImport() {
                   <Building2 className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-extrabold text-slate-800 tracking-tight">Add Supplier Details</h3>
-                  <p className="text-xs text-slate-500 font-medium">Create a new supplier profile for this purchase invoice</p>
+                  <h3 className="text-base font-extrabold text-slate-800 tracking-tight">Add Party Details</h3>
+                  <p className="text-xs text-slate-500 font-medium">Create a new party profile for this purchase invoice</p>
                 </div>
               </div>
               <button
@@ -2995,7 +2995,7 @@ export default function AIPurchaseImport() {
             <form onSubmit={handleSaveSupplier} className="space-y-4 text-xs">
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-700 uppercase tracking-wider block">
-                  Supplier Name <span className="text-rose-500">*</span>
+                  Party Name <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -3044,7 +3044,7 @@ export default function AIPurchaseImport() {
                   className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-md transition-all cursor-pointer text-xs flex items-center gap-1.5"
                 >
                   <Check className="w-4 h-4" />
-                  <span>Save Supplier</span>
+                  <span>Save Party</span>
                 </button>
               </div>
             </form>

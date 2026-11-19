@@ -576,7 +576,7 @@ export default function OrderReviewConfirmModal({
                             });
                           }}
                           className="px-2.5 py-1.5 bg-slate-100 hover:bg-indigo-100 hover:text-indigo-700 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1 cursor-pointer shadow-2xs"
-                          title="View last 5 billed rates for this retailer"
+                          title="View last 5 billed rates for this party"
                         >
                           <History className="w-3.5 h-3.5 text-indigo-600" />
                           <span>Last 5 Rates</span>

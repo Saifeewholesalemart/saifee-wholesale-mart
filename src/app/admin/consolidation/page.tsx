@@ -481,7 +481,7 @@ function ConsolidationWorkspaceContent() {
   if (selectedRetailerId) {
     const retailerInfo = retailers.find(r => r.id === selectedRetailerId);
     if (!retailerInfo) {
-      return <div className="text-xs text-red-500 font-bold p-6">Retailer not found.</div>;
+      return <div className="text-xs text-red-500 font-bold p-6">Party not found.</div>;
     }
 
     // Get contributing orders
@@ -711,7 +711,7 @@ function ConsolidationWorkspaceContent() {
         {/* Retailer Info Header Card */}
         <div className="erp-card bg-white p-6 grid grid-cols-1 md:grid-cols-3 gap-6 shadow-sm border border-slate-150 rounded-xl">
           <div className="space-y-1.5">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Retailer Profile</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Party Profile</span>
             <h3 className="text-lg font-black text-slate-900 leading-tight">{retailerInfo.shop_name}</h3>
             <p className="text-xs text-slate-600 font-medium flex items-center gap-1">
               <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
@@ -722,7 +722,7 @@ function ConsolidationWorkspaceContent() {
 
           <div className="border-l border-slate-100 pl-0 md:pl-6 space-y-2 text-xs">
             <div className="flex justify-between">
-              <span className="text-slate-500 font-medium">Retailer ID:</span>
+              <span className="text-slate-500 font-medium">Party ID:</span>
               <span className="font-mono font-bold text-slate-800">{retailerInfo.retailer_code}</span>
             </div>
             <div className="flex justify-between">
@@ -1324,7 +1324,7 @@ function ConsolidationWorkspaceContent() {
                       </span>
                     </div>
                     <p className="text-xs text-slate-500 mt-0.5 font-semibold">
-                      Retailer: {retObj ? retObj.shop_name : 'Unknown'} &bull; Fulfilment: {packingFul.fulfilment_number}
+                      Party: {retObj ? retObj.shop_name : 'Unknown'} &bull; Fulfilment: {packingFul.fulfilment_number}
                     </p>
                   </div>
                   <button 
@@ -1694,7 +1694,7 @@ function ConsolidationWorkspaceContent() {
         <div>
           <h2 className="text-xl font-extrabold text-slate-800">Admin Fulfilment &amp; Consolidation Desk</h2>
           <p className="text-xs text-slate-500 mt-1">
-            Combines multi-channel backlog orders by Retailer into a single commercial delivery run.
+            Combines multi-channel backlog orders by Party into a single commercial delivery run.
           </p>
         </div>
         <button
@@ -1752,7 +1752,7 @@ function ConsolidationWorkspaceContent() {
           <SmartSearchBar
             value={searchTerm}
             onChange={setSearchTerm}
-            placeholder="Search shop, order #, retailer..."
+            placeholder="Search shop, order #, party..."
             size="sm"
           />
 
@@ -1777,7 +1777,7 @@ function ConsolidationWorkspaceContent() {
               onChange={(e) => setFilterRetailer(e.target.value)}
               className="w-full bg-transparent text-xs outline-none text-slate-700 font-medium"
             >
-              <option value="all">All Retailers</option>
+              <option value="all">All Parties</option>
               {retailers.map(r => (
                 <option key={r.id} value={r.id}>{r.shop_name}</option>
               ))}
@@ -1850,7 +1850,7 @@ function ConsolidationWorkspaceContent() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {groupedQueue.length === 0 ? (
           <div className="col-span-full text-center py-16 bg-white border border-slate-150 rounded-xl text-slate-400 text-xs font-semibold">
-            No retailers awaiting fulfilment match your filters.
+            No parties awaiting fulfilment match your filters.
           </div>
         ) : (
           groupedQueue.map(item => {

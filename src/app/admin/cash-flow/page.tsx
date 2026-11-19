@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { 
   CashFlowTransaction, CashFlowPaymentMode, CashFlowType, 
-  CompanyOpeningBalance 
+  CompanyOpeningBalance, cashFlowCategoryLabel
 } from '@/lib/db';
 import CashFlowSummaryCards from '@/components/cashflow/CashFlowSummaryCards';
 import PaymentModeBreakdown, { ModeBreakdownData } from '@/components/cashflow/PaymentModeBreakdown';
@@ -637,7 +637,7 @@ function AdminCashFlowContent() {
                     </td>
 
                     <td className="py-2.5 px-2 font-semibold text-slate-700">
-                      {tx.category}
+                      {cashFlowCategoryLabel(tx.category)}
                     </td>
 
                     <td className="py-2.5 px-2">
@@ -752,7 +752,7 @@ function AdminCashFlowContent() {
                   <div className="text-xs text-slate-500 flex items-center gap-2">
                     <span>{tx.payment_mode}</span>
                     <span>&bull;</span>
-                    <span>{tx.category}</span>
+                    <span>{cashFlowCategoryLabel(tx.category)}</span>
                   </div>
                 </div>
 

@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { 
   CashFlowType, CashFlowPaymentMode, CashFlowTransaction,
-  DEFAULT_CASH_IN_CATEGORIES, DEFAULT_CASH_OUT_CATEGORIES,
+  DEFAULT_CASH_IN_CATEGORIES, DEFAULT_CASH_OUT_CATEGORIES, cashFlowCategoryLabel,
   Retailer, Supplier, Invoice, Purchase
 } from '@/lib/db';
 import { useDb } from '@/context/DbContext';
@@ -300,7 +300,7 @@ export default function CashFlowEntryModal({
                 className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-slate-800 font-semibold focus:border-indigo-500 outline-none"
               >
                 {categories.map((c) => (
-                  <option key={c} value={c}>{c}</option>
+                  <option key={c} value={c}>{cashFlowCategoryLabel(c)}</option>
                 ))}
               </select>
             </div>
@@ -310,7 +310,7 @@ export default function CashFlowEntryModal({
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="block text-slate-700 font-bold">
-                {type === 'CASH_IN' ? 'Received From (Party / Customer)' : 'Paid To (Supplier / Payee)'} <span className="text-rose-500">*</span>
+                {type === 'CASH_IN' ? 'Received From (Party / Customer)' : 'Paid To (Party / Payee)'} <span className="text-rose-500">*</span>
               </label>
               <div className="flex items-center gap-2">
                 <button
@@ -341,7 +341,7 @@ export default function CashFlowEntryModal({
                 className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-slate-800 font-semibold focus:border-indigo-500 outline-none"
               >
                 <option value="">
-                  {type === 'CASH_IN' ? '-- Select Registered Retailer --' : '-- Select Registered Supplier --'}
+                  {type === 'CASH_IN' ? '-- Select Registered Party --' : '-- Select Registered Party --'}
                 </option>
                 {type === 'CASH_IN'
                   ? retailers.map(r => (

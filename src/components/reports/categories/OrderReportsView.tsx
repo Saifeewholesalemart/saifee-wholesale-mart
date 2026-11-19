@@ -46,7 +46,7 @@ export default function OrderReportsView({
         pendingItems.push({
           orderNumber: o.order_number,
           orderDate: o.order_date.slice(0, 10),
-          retailerName: ret?.shop_name || 'Retailer',
+          retailerName: ret?.shop_name || 'Party',
           city: ret?.city || '',
           productName: prod?.name || i.product_name || 'Item',
           variantPacking: prod?.pack_size || '',
@@ -129,7 +129,7 @@ export default function OrderReportsView({
               <span className="font-bold text-indigo-600 hover:underline">{r.orderNumber}</span>
             )},
             { header: 'Order Date', key: 'orderDate' },
-            { header: 'Retailer Store', render: (r) => <span className="font-bold text-slate-800">{r.retailerName}</span> },
+            { header: 'Party Store', render: (r) => <span className="font-bold text-slate-800">{r.retailerName}</span> },
             { header: 'Booked By', key: 'salespersonName' },
             { header: 'Items', key: 'itemCount', format: 'number', align: 'center' },
             { header: 'Ordered', key: 'orderedQty', format: 'number', align: 'right' },
@@ -177,7 +177,7 @@ export default function OrderReportsView({
               <span className="font-bold text-indigo-600">{r.orderNumber}</span>
             )},
             { header: 'Order Date', key: 'orderDate' },
-            { header: 'Retailer', render: (r) => (
+            { header: 'Party', render: (r) => (
               <div>
                 <span className="font-bold text-slate-800 block">{r.retailerName}</span>
                 <span className="text-xs text-slate-500 font-medium">{r.city}</span>

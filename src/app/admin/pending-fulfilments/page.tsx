@@ -84,7 +84,7 @@ function PendingFulfilmentsContent() {
           orderNumber: ord.order_number,
           orderDate: ord.order_date,
           retailerId: ord.retailer_id,
-          retailerName: ret ? ret.shop_name : 'Unknown Retailer',
+          retailerName: ret ? ret.shop_name : 'Unknown Party',
           city: ret ? ret.city : 'Unknown',
           itemId: item.id,
           productId: item.product_id,
@@ -237,7 +237,7 @@ function PendingFulfilmentsContent() {
       {/* Title */}
       <div>
         <h2 className="text-xl font-extrabold text-slate-800">Pending Fulfillments Registry</h2>
-        <p className="text-xs text-slate-500 mt-1">Review and process individual unfulfilled quantities for retailer orders when new stock becomes available.</p>
+        <p className="text-xs text-slate-500 mt-1">Review and process individual unfulfilled quantities for party orders when new stock becomes available.</p>
       </div>
 
       {/* Quick filters */}
@@ -286,7 +286,7 @@ function PendingFulfilmentsContent() {
             <SmartSearchBar
               value={searchTerm}
               onChange={setSearchTerm}
-              placeholder="Search order #, retailer, product, brand, city, salesperson..."
+              placeholder="Search order #, party, product, brand, city, salesperson..."
               size="sm"
             />
           </div>
@@ -319,7 +319,7 @@ function PendingFulfilmentsContent() {
               onChange={(e) => setFilterRetailer(e.target.value)}
               className="w-full bg-transparent text-xs outline-none text-slate-700 font-medium"
             >
-              <option value="all">All Retailers</option>
+              <option value="all">All Parties</option>
               {uniqueRetailers.map(r => (
                 <option key={r.id} value={r.id}>{r.name}</option>
               ))}
@@ -413,7 +413,7 @@ function PendingFulfilmentsContent() {
             <thead>
               <tr>
                 <th>Order Ref #</th>
-                <th>Retailer Shop</th>
+                <th>Party Shop</th>
                 <th>City</th>
                 <th>Product Description</th>
                 <th>Ordered</th>
@@ -505,7 +505,7 @@ function PendingFulfilmentsContent() {
                   <span className="font-bold text-slate-800">{selectedFulfillRow.orderNumber}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500 font-medium">Retailer Shop:</span>
+                  <span className="text-slate-500 font-medium">Party Shop:</span>
                   <span className="font-bold text-slate-800">{selectedFulfillRow.retailerName}</span>
                 </div>
                 <div className="flex justify-between">
@@ -617,7 +617,7 @@ function PendingFulfilmentsContent() {
                   className="w-full border border-slate-200 bg-white rounded-lg p-2 text-slate-700 font-semibold cursor-pointer"
                 >
                   <option value="Stock permanently out of stock">Stock permanently out of stock</option>
-                  <option value="Retailer cancelled requirement">Retailer cancelled requirement</option>
+                  <option value="Retailer cancelled requirement">Party cancelled requirement</option>
                   <option value="Pricing mismatch / terms conflict">Pricing mismatch / terms conflict</option>
                   <option value="Wrong item ordered by sales agent">Wrong item ordered by sales agent</option>
                   <option value="Other">Other (Enter below)</option>

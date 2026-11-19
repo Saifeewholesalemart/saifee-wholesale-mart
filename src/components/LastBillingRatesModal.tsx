@@ -98,7 +98,7 @@ export default function LastBillingRatesModal({
                 Last 5 Billed Rates
               </span>
               <span className="px-2.5 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 rounded text-xs font-bold">
-                Retailer Specific History
+                Party Specific History
               </span>
             </div>
 
@@ -133,7 +133,7 @@ export default function LastBillingRatesModal({
 
             {retailer && (
               <div className="pt-1 text-xs text-slate-300 flex items-center gap-1.5">
-                <span className="text-slate-400">Retailer:</span>
+                <span className="text-slate-400">Party:</span>
                 <span className="font-bold text-amber-300">{retailer.shop_name}</span>
                 <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono font-bold">
                   {retailer.retailer_code}
@@ -177,7 +177,7 @@ export default function LastBillingRatesModal({
                 <AlertCircle className="w-5 h-5" />
               </div>
               <p className="text-sm font-bold text-slate-700">
-                No previous billing rate found for this retailer and product variant.
+                No previous billing rate found for this party and product variant.
               </p>
               <p className="text-xs text-slate-500 max-w-sm mx-auto">
                 No finalized tax invoices exist for this customer yet. Default catalogue rates apply.

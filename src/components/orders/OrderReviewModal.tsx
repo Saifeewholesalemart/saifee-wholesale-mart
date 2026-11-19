@@ -362,7 +362,7 @@ export default function OrderReviewModal({
             <div className="text-[11px] text-slate-300 space-y-0.5 pt-1 border-t border-white/10">
               <div className="flex items-center gap-1.5 font-bold text-white truncate">
                 <Store className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span className="truncate text-xs">{retailer?.shop_name || 'Retailer Customer'}</span>
+                <span className="truncate text-xs">{retailer?.shop_name || 'Party'}</span>
                 {retailer?.city && <span className="text-slate-400 font-normal text-[11px] truncate">• {retailer.city}</span>}
               </div>
               <div className="flex items-center gap-1.5 text-[10px] text-slate-300 flex-wrap">
@@ -414,7 +414,7 @@ export default function OrderReviewModal({
               <div className="flex items-center gap-2 text-xs text-slate-300 mt-1.5 flex-wrap">
                 <span className="flex items-center gap-1 font-bold text-white">
                   <Store className="w-3.5 h-3.5 text-emerald-400" />
-                  {retailer?.shop_name || 'Retailer Customer'}
+                  {retailer?.shop_name || 'Party'}
                 </span>
                 <span>&bull;</span>
                 <span className="text-slate-300">{retailer?.city || ''}</span>
@@ -546,7 +546,7 @@ export default function OrderReviewModal({
                   type="text"
                   value={cancelReason}
                   onChange={(e) => setCancelReason(e.target.value)}
-                  placeholder="e.g. Retailer requested cancellation / Wrong items entered"
+                  placeholder="e.g. Party requested cancellation / Wrong items entered"
                   className="w-full px-3 py-2 bg-white border border-rose-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-1 focus:ring-rose-500"
                 />
               </div>

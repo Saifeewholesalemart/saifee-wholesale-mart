@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { computeRetailerBalances } from '@/lib/retailerBalance';
 import { 
   db, Profile, Retailer, Product, Inventory, InventoryBatch, StockLedgerEntry, 
-  Order, OrderItem, OrderChannel, Fulfilment, Invoice, InvoiceItem, Purchase, Payment, SalesReturn, Company, Supplier,
+  Order, OrderItem, OrderChannel, Fulfilment, Invoice, InvoiceItem, Purchase, Payment, SalesReturn, PurchaseReturn, Company, Supplier,
   BillingRateAuditLog, BillingRateRecord, DeliveryChallan, FifoBatchSuggestion, BatchAllocation,
   Category, ProductCategory, ItemActivityLog, VyaparImportBatch, InvoiceAuditLog, CustomerCreditProfile, CustomerLedgerEntry,
   BusinessCompany, CompanyMember, Godown, StockTransfer, StockTransferItem,
@@ -14,7 +14,7 @@ import {
   getPendingItemsForRetailer, checkSingleItemPendingWarning, PendingOrderItemWarning, PendingOrderRef, CartItemToCheck,
   CashFlowTransaction, CompanyOpeningBalance, CashFlowType, CashFlowPaymentMode, CashFlowSource, CashFlowStatus,
   TradeMode, formatAutoBoxQuantity, formatProductStockDisplay, getProductTradeMode, AutoBoxResult,
-  DatabaseBackupSnapshot
+  DatabaseBackupSnapshot, isWalkInRetailerId
 } from '@/lib/db';
 import { 
   pushCloudSnapshot, 
@@ -110,6 +110,9 @@ interface DbContextType {
   purchases: Purchase[];
   payments: Payment[];
   salesReturns: SalesReturn[];
+  /** debit notes to suppliers (purchase returns) */
+  purchaseReturns: PurchaseReturn[];
+  createDebitNote: (data: Parameters<typeof db.createDebitNote>[0]) => PurchaseReturn;
   auditLogs: BillingRateAuditLog[];
   invoiceAuditLogs: InvoiceAuditLog[];
   itemActivityLogs: ItemActivityLog[];
@@ -475,6 +478,8 @@ interface DbContextType {
     reason: string
   ) => SalesReturn;
   createSupplier: (name: string, gstin: string, address: string) => Supplier;
+  /** Parties (customers and suppliers in one list): add or change one */
+  saveParty: (data: Parameters<typeof db.saveParty>[0]) => Retailer;
   createCompany: (name: string, code?: string) => Company;
   deleteCompany: (id: string, options?: { handleLinkedProducts?: 'unlink' | 'cascade' | 'error' }) => { success: boolean; message?: string; affectedProducts?: number };
   createRetailer: (data: Parameters<typeof db.createRetailer>[0]) => Retailer;
@@ -775,6 +780,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   const [purchases, setPurchases] = useState<Purchase[]>(() => db.getInitialPurchases());
   const [payments, setPayments] = useState<Payment[]>(() => db.getInitialPayments());
   const [salesReturns, setSalesReturns] = useState<SalesReturn[]>(() => db.getInitialSalesReturns());
+  const [purchaseReturns, setPurchaseReturns] = useState<PurchaseReturn[]>([]);
   const [auditLogs, setAuditLogs] = useState<BillingRateAuditLog[]>(() => db.getInitialAuditLogs());
   const [invoiceAuditLogs, setInvoiceAuditLogs] = useState<InvoiceAuditLog[]>(() => db.getInitialInvoiceAuditLogs());
   const [itemActivityLogs, setItemActivityLogs] = useState<ItemActivityLog[]>(() => db.getInitialItemActivityLogs());
@@ -820,6 +826,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     setPurchases([...db.getPurchases(activeId)]);
     setPayments([...db.getPayments(activeId)]);
     setSalesReturns([...db.getSalesReturns(activeId)]);
+    setPurchaseReturns([...db.getPurchaseReturns(activeId)]);
     setAuditLogs([...db.getBillingRateAuditLogs(activeId)]);
     setInvoiceAuditLogs([...db.getInvoiceAuditLogs(undefined, activeId)]);
     setItemActivityLogs([...db.getItemActivityLogs(undefined, activeId)]);
@@ -1754,6 +1761,44 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     return res;
   };
 
+  const createDebitNote = (data: Parameters<typeof db.createDebitNote>[0]) => {
+    const user = currentUser ? { id: currentUser.id, name: currentUser.name } : undefined;
+    const res = db.createDebitNote(data, user);
+    refreshState();
+    return res;
+  };
+
+  const saveParty = (data: Parameters<typeof db.saveParty>[0]) => {
+    const res = db.saveParty(data);
+    refreshState();
+    return res;
+  };
+
+  // Old suppliers become parties (once, when the cloud data is loaded; safe to repeat)
+  const partySyncTried = React.useRef('');
+  useEffect(() => {
+    if (cloudStatus.state !== 'ready' || !isAuthenticated) return;
+    if (!(currentUser?.role === 'admin' || (currentUser as any)?.profile_type === 'ADMIN')) return;
+    const ids = new Set(retailersRaw.map(r => r.id));
+    const supIds = new Set(suppliers.map(sp => sp.id));
+    const missingParties = suppliers.filter(sp => !sp.party_id || !ids.has(sp.party_id)).map(sp => sp.id);
+    // Vyapar style: every party can be picked in purchases, so each party needs a supplier record
+    const missingSuppliers = retailersRaw
+      .filter(r => !isWalkInRetailerId(r.id) && (r as any).approval_status !== 'rejected' && (!r.linked_supplier_id || !supIds.has(r.linked_supplier_id)))
+      .map(r => r.id);
+    const missing = [...missingParties, '|', ...missingSuppliers].sort().join(',');
+    if ((missingParties.length === 0 && missingSuppliers.length === 0) || partySyncTried.current === missing) return;
+    partySyncTried.current = missing; // try each set of unlinked records once
+    try {
+      if (missingParties.length) db.syncSupplierParties();
+      db.syncPartySuppliers();
+      refreshState();
+    } catch (e) {
+      console.warn('Supplier parties could not be added:', e);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cloudStatus.state, isAuthenticated, currentUser?.id, suppliers, retailersRaw]);
+
   const createCompany = (name: string, code?: string) => {
     const res = db.createCompany(name, code);
     loadData();
@@ -2255,6 +2300,8 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         purchases,
         payments,
         salesReturns,
+        purchaseReturns,
+        createDebitNote,
         auditLogs,
         itemActivityLogs,
         refreshState,
@@ -2329,6 +2376,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         updatePurchase,
         payInvoice,
         createDirectSalesReturn,
+        saveParty,
         returnSales,
         createSupplier,
         createCompany,

@@ -31,12 +31,13 @@ const MENU_ITEMS: MenuItem[] = [
   { name: 'Purchases', path: '/admin/purchases', icon: PackageCheck },
   { name: 'AI Purchase Import', path: '/admin/purchase/import', icon: Cpu },
   { name: 'Inventory & Batch', path: '/admin/inventory', icon: Boxes },
+  { name: 'Parties', path: '/admin/parties', icon: Users },
   { name: 'Manage Profiles', path: '/admin/profiles', icon: UserCog },
   { name: 'Shop Approvals', path: '/admin/approvals', icon: BadgeCheck },
   { name: 'Salesman Tracking', path: '/admin/tracking', icon: MapPin },
   { name: 'Payments & Ledger', path: '/admin/payments', icon: DollarSign },
   { name: 'Cash Flow', path: '/admin/cash-flow', icon: ArrowLeftRight },
-  { name: 'Returns History', path: '/admin/returns', icon: RotateCcw },
+  { name: 'Returns', path: '/admin/returns', icon: RotateCcw },
   { name: 'ERP Reports', path: '/admin/reports', icon: TrendingUp },
   { name: 'Database & Backups', path: '/admin/backup', icon: Database }
 ];

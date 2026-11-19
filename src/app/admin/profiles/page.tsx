@@ -3,7 +3,7 @@
 import { hasWords, matchWords } from '@/lib/searchWords';
 import React, { useState, useMemo } from 'react';
 import { useDb } from '@/context/DbContext';
-import { Profile, Retailer, Company, Category } from '@/lib/db';
+import { Profile, Retailer, Company, Category, isCustomerParty } from '@/lib/db';
 import { useRouter } from 'next/navigation';
 import {
   Users, UserPlus, Shield, Store, Smartphone, Building2,
@@ -28,11 +28,13 @@ const COMMON_JOB_ROLES = [
 
 export default function ManageProfilesPage() {
   const {
-    profiles, retailers, companies, categories,
+    profiles, retailers: allParties, companies, categories,
     createRetailerProfile, createSalespersonProfile, createStaffProfile,
     updateSalespersonProfile, updateRetailerProfile, updateStaffProfile,
     resetProfilePassword, toggleProfileStatus, deleteProfilePermanently
   } = useDb();
+  // shop logins: suppliers are managed on the Parties page
+  const retailers = useMemo(() => allParties.filter(isCustomerParty), [allParties]);
 
   const router = useRouter();
 
@@ -314,7 +316,7 @@ export default function ManageProfilesPage() {
         credit_limit: parseFloat(retCreditLimit) || 50000
       });
 
-      showToast(`Retailer Profile for "${created.retailer.shop_name}" saved successfully!`, 'success');
+      showToast(`Party Profile for "${created.retailer.shop_name}" saved successfully!`, 'success');
 
       // Reset form
       setRetShopName('');
@@ -330,7 +332,7 @@ export default function ManageProfilesPage() {
       setActiveMainTab('all');
       setDirectoryFilter('retailers');
     } catch (err: any) {
-      showToast(err?.message || 'Failed to create retailer profile', 'error');
+      showToast(err?.message || 'Failed to create party profile', 'error');
     } finally {
       setRetSubmitting(false);
     }
@@ -565,7 +567,7 @@ export default function ManageProfilesPage() {
                   <span>Manage Profiles</span>
                 </h1>
                 <p className="text-xs text-slate-500 max-w-2xl mt-0.5">
-                  Unified user directory, credential storage, and role management for Retailers, Sales Reps, and Warehouse Staff.
+                  Unified user directory, credential storage, and role management for Parties, Sales Reps, and Warehouse Staff.
                 </p>
               </div>
             </div>
@@ -606,7 +608,7 @@ export default function ManageProfilesPage() {
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
           <div className="bg-white border border-slate-200 p-3.5 rounded-xl shadow-xs flex items-center justify-between">
             <div>
-              <p className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider">Retailers</p>
+              <p className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider">Parties</p>
               <p className="text-xl sm:text-2xl font-black text-slate-900 mt-0.5">{metrics.totalRetailers}</p>
               <span className="text-[10px] text-emerald-600 font-bold">{metrics.activeRetailers} Active</span>
             </div>
@@ -694,7 +696,7 @@ export default function ManageProfilesPage() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
-                      <span>Retailer Profile</span>
+                      <span>Party Profile</span>
                       {createProfileType === 'retailer' && <Check className="w-4 h-4 text-blue-600" />}
                     </h3>
                     <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed truncate">
@@ -761,7 +763,7 @@ export default function ManageProfilesPage() {
               <form onSubmit={handleCreateRetailerSubmit} className="space-y-5 pt-3 border-t border-slate-200">
                 <div className="flex items-center justify-between">
                   <span className="px-2.5 py-1 rounded-md text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-200 uppercase tracking-widest">
-                    RETAILER PROFILE SPECIFICATION
+                    PARTY PROFILE SPECIFICATION
                   </span>
                   <span className="text-xs text-slate-400">* Mandatory fields</span>
                 </div>
@@ -870,7 +872,7 @@ export default function ManageProfilesPage() {
                         type={retShowPassword ? 'text' : 'password'}
                         value={retPassword}
                         onChange={(e) => setRetPassword(e.target.value)}
-                        placeholder="Create retailer login password"
+                        placeholder="Create party login password"
                         className={`w-full bg-slate-50 border px-3.5 py-2.5 pr-10 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${retErrors.password ? 'border-rose-500 ring-1 ring-rose-500 bg-rose-50/20' : 'border-slate-300'
                           }`}
                       />
@@ -925,7 +927,7 @@ export default function ManageProfilesPage() {
                     className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-98 text-white rounded-xl text-xs font-black shadow-md shadow-blue-600/20 transition-all cursor-pointer disabled:opacity-50"
                   >
                     <Check className="w-4 h-4" />
-                    <span>{retSubmitting ? 'Saving Retailer...' : 'Save Retailer Profile'}</span>
+                    <span>{retSubmitting ? 'Saving Party...' : 'Save Party Profile'}</span>
                   </button>
                 </div>
               </form>
@@ -1517,7 +1519,7 @@ export default function ManageProfilesPage() {
                       : 'text-slate-600 hover:bg-slate-100'
                     }`}
                 >
-                  Retailers ({metrics.totalRetailers})
+                  Parties ({metrics.totalRetailers})
                 </button>
                 <button
                   type="button"
@@ -1653,7 +1655,7 @@ export default function ManageProfilesPage() {
                               <td className="py-3.5 px-4">
                                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-200">
                                   <Store className="w-3 h-3" />
-                                  <span>Retailer</span>
+                                  <span>Party</span>
                                 </span>
                               </td>
 
@@ -1690,7 +1692,7 @@ export default function ManageProfilesPage() {
                                   <button
                                     type="button"
                                     onClick={() => setEditingRetailer(r)}
-                                    title="Edit Retailer Profile"
+                                    title="Edit Party Profile"
                                     className="p-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 border border-slate-200 transition-colors cursor-pointer shadow-2xs"
                                   >
                                     <Edit className="w-3.5 h-3.5" />
@@ -1702,7 +1704,7 @@ export default function ManageProfilesPage() {
                                     onClick={() => setResetPwdProfile({
                                       id: row.profileId,
                                       name: `${r.shop_name} (${r.owner_name})`,
-                                      roleText: 'Retailer Account'
+                                      roleText: 'Party Account'
                                     })}
                                     title="Reset Password"
                                     className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 transition-colors cursor-pointer shadow-2xs"
@@ -1718,7 +1720,7 @@ export default function ManageProfilesPage() {
                                       name: r.shop_name,
                                       currentActive: r.active
                                     })}
-                                    title={r.active ? 'Deactivate Retailer' : 'Activate Retailer'}
+                                    title={r.active ? 'Deactivate Party' : 'Activate Party'}
                                     className={`p-1.5 rounded-lg border transition-colors cursor-pointer shadow-2xs ${r.active
                                         ? 'bg-rose-50 hover:bg-rose-100 text-rose-600 border-rose-200'
                                         : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 border-emerald-200'
@@ -2333,7 +2335,7 @@ export default function ManageProfilesPage() {
                   <Store className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-black text-slate-900">Edit Retailer Profile</h3>
+                  <h3 className="text-sm font-black text-slate-900">Edit Party Profile</h3>
                   <p className="text-xs text-slate-400 font-medium">Update shop master and contact info</p>
                 </div>
               </div>
@@ -2359,11 +2361,11 @@ export default function ManageProfilesPage() {
                     gstin: editingRetailer.gstin
                   });
                   if (updated) {
-                    showToast(`Retailer profile for "${updated.retailer.shop_name}" updated successfully!`, 'success');
+                    showToast(`Party profile for "${updated.retailer.shop_name}" updated successfully!`, 'success');
                   }
                   setEditingRetailer(null);
                 } catch (err: any) {
-                  showToast(err?.message || 'Failed to update retailer profile', 'error');
+                  showToast(err?.message || 'Failed to update party profile', 'error');
                 }
               }}
               className="space-y-4"

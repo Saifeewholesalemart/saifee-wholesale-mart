@@ -371,11 +371,11 @@ export default function OrderDetailDrawer({
             <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
               <div className="flex items-center gap-2 text-xs font-black text-slate-800 uppercase tracking-wider">
                 <Store className="w-4 h-4 text-indigo-600" />
-                <span>Retailer Customer</span>
+                <span>Party</span>
               </div>
 
               <div>
-                <h3 className="text-base font-black text-slate-900">{retailer?.shop_name || 'Retailer Customer'}</h3>
+                <h3 className="text-base font-black text-slate-900">{retailer?.shop_name || 'Party'}</h3>
                 <p className="text-xs text-slate-600 font-medium">Owner: {retailer?.owner_name || 'N/A'}</p>
               </div>
 

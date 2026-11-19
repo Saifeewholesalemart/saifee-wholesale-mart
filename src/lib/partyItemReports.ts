@@ -197,7 +197,31 @@ function movements(src: PartyItemSource, from: string, to: string): Movement[] {
       });
     }
   }
+  // One party, one row (Vyapar style): purchases from a supplier that is linked to a party
+  // are counted under that party.
+  const partyIds = new Set((src.retailers || []).map(r => r.id));
+  const supplierParty = new Map<string, string>();
+  for (const sp of src.suppliers || []) {
+    if (sp?.party_id && partyIds.has(sp.party_id)) supplierParty.set(sp.id, sp.party_id);
+  }
+  for (const r of src.retailers || []) {
+    if (r?.linked_supplier_id && !supplierParty.has(r.linked_supplier_id)) supplierParty.set(r.linked_supplier_id, r.id);
+  }
+  for (const mv of out) {
+    if (mv.partyKind !== 'Supplier') continue;
+    const pid = supplierParty.get(mv.partyId);
+    if (pid) { mv.partyKind = 'Retailer'; mv.partyId = pid; }
+  }
   return out;
+}
+
+/** Suppliers that are linked to a party: they are shown under the party, not on their own. */
+export function linkedSupplierIds(src: { retailers?: any[]; suppliers?: any[] }): Set<string> {
+  const partyIds = new Set((src.retailers || []).map(r => r.id));
+  const ids = new Set<string>();
+  for (const sp of src.suppliers || []) if (sp?.party_id && partyIds.has(sp.party_id)) ids.add(sp.id);
+  for (const r of src.retailers || []) if (r?.linked_supplier_id) ids.add(r.linked_supplier_id);
+  return ids;
 }
 
 export interface ReportOptions {
@@ -245,7 +269,7 @@ export function partyReportByItem(src: PartyItemSource, opts: ReportOptions & { 
     if (!row) {
       const name = mv.partyKind === 'Retailer'
         ? (retailers.get(mv.partyId)?.shop_name || retailers.get(mv.partyId)?.owner_name || 'Unknown party')
-        : (suppliers.get(mv.partyId)?.name || 'Unknown supplier');
+        : (suppliers.get(mv.partyId)?.name || 'Unknown party');
       row = { id: key, name, kind: mv.partyKind, saleQty: 0, saleAmount: 0, purchaseQty: 0, purchaseAmount: 0 };
       map.set(key, row);
     }

@@ -614,7 +614,7 @@ export default function CategoryManagementPage() {
           }`}
         >
           <ShieldCheck className="w-4 h-4" />
-          <span>Access Permissions (Retailers &amp; Salespersons)</span>
+          <span>Access Permissions (Parties &amp; Salespersons)</span>
         </button>
 
         <button
@@ -783,14 +783,14 @@ export default function CategoryManagementPage() {
                           )}
 
                           {isRestrictedRetailer ? (
-                            <span className="text-[11px] px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 font-bold border border-amber-200 flex items-center gap-1" title="Restricted to specific retailers">
+                            <span className="text-[11px] px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 font-bold border border-amber-200 flex items-center gap-1" title="Restricted to specific parties">
                               <Store className="w-3 h-3 text-amber-600" />
-                              <span>{cat.assigned_retailer_ids?.length} Retailers</span>
+                              <span>{cat.assigned_retailer_ids?.length} Parties</span>
                             </span>
                           ) : (
-                            <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-50 text-slate-600 font-semibold border border-slate-200 flex items-center gap-1" title="Available to all retailers">
+                            <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-50 text-slate-600 font-semibold border border-slate-200 flex items-center gap-1" title="Available to all parties">
                               <Store className="w-3 h-3 text-slate-400" />
-                              <span>All Retailers</span>
+                              <span>All Parties</span>
                             </span>
                           )}
                         </div>
@@ -804,7 +804,7 @@ export default function CategoryManagementPage() {
                         <button
                           type="button"
                           onClick={() => handleOpenAccessModal(cat)}
-                          title="Configure Retailer & Salesperson Access"
+                          title="Configure Party & Salesperson Access"
                           className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors cursor-pointer"
                         >
                           <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
@@ -1077,7 +1077,7 @@ export default function CategoryManagementPage() {
               <span className="text-xs font-bold text-indigo-300 uppercase tracking-wider block">Access Control &amp; Allocation</span>
               <h2 className="text-lg font-black mt-0.5">Category Assignment &amp; Visibility Permissions</h2>
               <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
-                Control which product categories are assigned to <strong className="text-white">Individual Retailers</strong> (for retailer app ordering) and <strong className="text-white">Individual Salespersons</strong> (for order taking on field beats).
+                Control which product categories are assigned to <strong className="text-white">Individual Parties</strong> (for party app ordering) and <strong className="text-white">Individual Salespersons</strong> (for order taking on field beats).
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -1088,7 +1088,7 @@ export default function CategoryManagementPage() {
                 {salespersonsList.length} Salespeople
               </span>
               <span className="px-3 py-1 rounded-xl bg-amber-800/80 text-amber-200 text-xs font-bold border border-amber-700">
-                {retailers.length} Retailers
+                {retailers.length} Parties
               </span>
             </div>
           </div>
@@ -1116,7 +1116,7 @@ export default function CategoryManagementPage() {
               }`}
             >
               <Store className="w-4 h-4" />
-              <span>By Individual Retailer ({retailers.length})</span>
+              <span>By Individual Party ({retailers.length})</span>
             </button>
 
             <button
@@ -1324,7 +1324,7 @@ export default function CategoryManagementPage() {
               {/* Left Column: Retailer List */}
               <div className="lg:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-xs p-4 space-y-3">
                 <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                  <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Select Retailer</span>
+                  <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Select Party</span>
                   <span className="text-xs text-slate-400 font-bold">{retailers.length} total</span>
                 </div>
 
@@ -1332,7 +1332,7 @@ export default function CategoryManagementPage() {
                   type="text"
                   value={assigneeSearch}
                   onChange={(e) => setAssigneeSearch(e.target.value)}
-                  placeholder="Search retailer shop / code..."
+                  placeholder="Search party shop / code..."
                   className="w-full border border-slate-200 rounded-xl p-2.5 text-xs font-semibold focus:border-indigo-500 outline-none"
                 />
 
@@ -1378,7 +1378,7 @@ export default function CategoryManagementPage() {
                   const activeRetId = selectedAssigneeRetailerId || retailers[0]?.id;
                   const activeRet = retailers.find(r => r.id === activeRetId);
                   if (!activeRet) {
-                    return <div className="text-center py-12 text-slate-400 font-bold text-xs">Please select a retailer from the left list.</div>;
+                    return <div className="text-center py-12 text-slate-400 font-bold text-xs">Please select a party from the left list.</div>;
                   }
 
                   const isAllAccess = activeRet.category_access_mode !== 'custom';
@@ -1400,7 +1400,7 @@ export default function CategoryManagementPage() {
                             </span>
                           </div>
                           <p className="text-xs text-slate-500 mt-0.5 font-medium">
-                            {isAllAccess ? 'Can order all active product categories from retailer portal' : `Restricted to ${assignedCatIds.size} specific categories`}
+                            {isAllAccess ? 'Can order all active product categories from party portal' : `Restricted to ${assignedCatIds.size} specific categories`}
                           </p>
                         </div>
 
@@ -1434,7 +1434,7 @@ export default function CategoryManagementPage() {
                       {/* Bulk Select/Clear Buttons */}
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-                          Categories Available To Retailer ({assignedCatIds.size} of {categories.length} Selected)
+                          Categories Available To Party ({assignedCatIds.size} of {categories.length} Selected)
                         </span>
                         <div className="flex items-center gap-2">
                           <button
@@ -1513,7 +1513,7 @@ export default function CategoryManagementPage() {
               <div className="p-4 border-b border-slate-100 flex items-center justify-between">
                 <div>
                   <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">All Categories Permissions Matrix</h3>
-                  <p className="text-xs text-slate-500 font-medium">Click on any category to configure salesperson or retailer restrictions</p>
+                  <p className="text-xs text-slate-500 font-medium">Click on any category to configure salesperson or party restrictions</p>
                 </div>
               </div>
               <div className="overflow-x-auto">
@@ -1523,7 +1523,7 @@ export default function CategoryManagementPage() {
                       <th className="py-3 px-4">Category Name</th>
                       <th className="py-3 px-4">Active Products</th>
                       <th className="py-3 px-4">Salesperson Access</th>
-                      <th className="py-3 px-4">Retailer Access</th>
+                      <th className="py-3 px-4">Party Access</th>
                       <th className="py-3 px-4 text-right">Action</th>
                     </tr>
                   </thead>
@@ -1551,11 +1551,11 @@ export default function CategoryManagementPage() {
                           <td className="py-3 px-4">
                             {isRetailerRestricted ? (
                               <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200">
-                                Restricted ({cat.assigned_retailer_ids?.length} Retailers)
+                                Restricted ({cat.assigned_retailer_ids?.length} Parties)
                               </span>
                             ) : (
                               <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">
-                                Open to All Retailers
+                                Open to All Parties
                               </span>
                             )}
                           </td>
@@ -2179,7 +2179,7 @@ export default function CategoryManagementPage() {
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 font-medium mt-0.5">
-                    Choose which salespeople and retailers can view &amp; order products from this category.
+                    Choose which salespeople and parties can view &amp; order products from this category.
                   </p>
                 </div>
               </div>
@@ -2317,7 +2317,7 @@ export default function CategoryManagementPage() {
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Store className="w-4 h-4 text-amber-600" />
-                    <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">Retailer Portal Permissions</h4>
+                    <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">Party Portal Permissions</h4>
                   </div>
 
                   {/* Mode selector */}
@@ -2331,7 +2331,7 @@ export default function CategoryManagementPage() {
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      All Retailers
+                      All Parties
                     </button>
                     <button
                       type="button"
@@ -2350,7 +2350,7 @@ export default function CategoryManagementPage() {
                 {accessRetailerMode === 'all' ? (
                   <div className="p-3 bg-emerald-50/60 border border-emerald-200/80 rounded-xl text-xs text-emerald-900 flex items-center gap-2">
                     <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span><strong>Unrestricted Access:</strong> All registered retailer accounts can browse and order items from <strong>{showAccessModal.name}</strong> on their direct ordering app.</span>
+                    <span><strong>Unrestricted Access:</strong> All registered party accounts can browse and order items from <strong>{showAccessModal.name}</strong> on their direct ordering app.</span>
                   </div>
                 ) : (
                   <div className="space-y-3 bg-white p-3.5 rounded-xl border border-slate-200">
@@ -2436,7 +2436,7 @@ export default function CategoryManagementPage() {
               <div className="text-xs text-slate-500 font-medium">
                 <span>Sales: <strong>{accessSalespersonMode === 'all' ? 'All' : `${accessSalespersonIds.length} Selected`}</strong></span>
                 <span className="mx-2">•</span>
-                <span>Retailers: <strong>{accessRetailerMode === 'all' ? 'All' : `${accessRetailerIds.length} Selected`}</strong></span>
+                <span>Parties: <strong>{accessRetailerMode === 'all' ? 'All' : `${accessRetailerIds.length} Selected`}</strong></span>
               </div>
 
               <div className="flex items-center gap-2">

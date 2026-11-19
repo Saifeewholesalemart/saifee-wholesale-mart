@@ -299,7 +299,7 @@ export default function AdminBillingOverrideModal({
                 </span>
               </div>
               <p className="text-xs text-slate-300 mt-0.5 font-medium">
-                Retailer: <strong className="text-white">{retailer?.shop_name || 'Retailer Store'}</strong> ({retailer?.city || 'Local Beat'}) &bull; {computedLines.length} Total Packed Line Items
+                Party: <strong className="text-white">{retailer?.shop_name || 'Party Store'}</strong> ({retailer?.city || 'Local Beat'}) &bull; {computedLines.length} Total Packed Line Items
               </p>
             </div>
           </div>

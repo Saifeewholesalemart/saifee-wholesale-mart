@@ -165,12 +165,12 @@ export default function FilterDiagnosticsBar({
       const t1Passed = t1Matches.length > 0;
       results.push({
         id: 'test_search_retailer',
-        name: `Test 1: Search by partial Retailer Name ("${searchKeyword}")`,
+        name: `Test 1: Search by partial Party Name ("${searchKeyword}")`,
         passed: t1Passed,
         count: t1Matches.length,
         durationMs: Math.round(performance.now() - t1Start),
         message: t1Passed 
-          ? `Passed (Found ${t1Matches.length} matching invoices for retailer "${sampleRetailer?.shop_name || searchKeyword}")` 
+          ? `Passed (Found ${t1Matches.length} matching invoices for party "${sampleRetailer?.shop_name || searchKeyword}")` 
           : `Failed (Reason: 0 records found for keyword "${searchKeyword}")`
       });
 
@@ -286,7 +286,7 @@ Active Filters:
 - Date Preset: ${filters.datePreset} (${activeDateRange.start.toLocaleDateString('en-IN')} to ${activeDateRange.end.toLocaleDateString('en-IN')})
 - Payment Status: ${filters.paymentStatus || 'All'}
 - Expiry / Aging: ${filters.expiryStatus || 'None'}
-- Retailer ID: ${filters.retailerId || 'All'}
+- Party ID: ${filters.retailerId || 'All'}
 - Salesperson ID: ${filters.salespersonId || 'All'}
 - Company ID: ${filters.companyId || 'All'}
 
@@ -303,7 +303,7 @@ Initial: ${pipeline.rawCount} -> After Search: ${pipeline.afterSearchCount} -> A
   // Resolved filter labels for display
   const activeRetailer = filters.retailerId 
     ? dbState.retailers.find(r => r.id === filters.retailerId)?.shop_name || filters.retailerId 
-    : 'All Retailers';
+    : 'All Parties';
 
   const activeSalesperson = filters.salespersonId 
     ? dbState.profiles.find(p => p.id === filters.salespersonId)?.name || filters.salespersonId 
@@ -379,7 +379,7 @@ Initial: ${pipeline.rawCount} -> After Search: ${pipeline.afterSearchCount} -> A
                 {pipeline.rawCount} <span className="text-xs text-slate-400 font-normal">Invoices</span>
               </p>
               <span className="text-xs text-slate-400 block font-medium">
-                {dbState.orders?.length || 0} Orders &bull; {dbState.retailers?.length || 0} Retailers
+                {dbState.orders?.length || 0} Orders &bull; {dbState.retailers?.length || 0} Parties
               </span>
             </div>
 
@@ -571,7 +571,7 @@ Initial: ${pipeline.rawCount} -> After Search: ${pipeline.afterSearchCount} -> A
                   {pipeline.afterSearchCount === 0 && 'The Search Term eliminated all records. '}
                   {pipeline.afterSearchCount > 0 && pipeline.afterDateCount === 0 && `Date preset "${filters.datePreset}" filtered out all remaining records. Try selecting "All Dates". `}
                   {pipeline.afterDateCount > 0 && pipeline.afterStatusCount === 0 && `Payment status "${filters.paymentStatus}" matched 0 records in this date window. `}
-                  {pipeline.afterStatusCount > 0 && pipeline.finalCount === 0 && 'Sales rep / Retailer / Company filter matched 0 records. '}
+                  {pipeline.afterStatusCount > 0 && pipeline.finalCount === 0 && 'Sales rep / Party / Company filter matched 0 records. '}
                 </div>
                 <button
                   onClick={() => onChange({ datePreset: 'all', paymentStatus: 'All', orderStatus: 'All', expiryStatus: 'All' })}

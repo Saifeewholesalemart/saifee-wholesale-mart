@@ -261,7 +261,7 @@ export default function CentralItemDetailHub({
             invoiceNumber: pur.invoice_number || 'N/A',
             invoiceDate: pur.invoice_date || pur.created_at,
             supplierId: pur.supplier_id,
-            supplierName: isOpeningStock ? (supp?.name || 'Opening Stock (Initial Inventory Setup)') : (supp?.name || 'Authorized FMCG Supplier'),
+            supplierName: isOpeningStock ? (supp?.name || 'Opening Stock (Initial Inventory Setup)') : (supp?.name || 'Party'),
             quantity: item.quantity,
             tradingUnit: item.trading_unit || product.trading_unit,
             purchaseRate: item.purchase_rate,
@@ -645,7 +645,7 @@ export default function CentralItemDetailHub({
     e.preventDefault();
     if (!product) return;
     if (!purSupplierId) {
-      setPurError('Please select a supplier');
+      setPurError('Please select a party');
       return;
     }
     const meta = getProductTradeMode(product);
@@ -1317,7 +1317,7 @@ export default function CentralItemDetailHub({
                       <thead>
                         <tr className="border-b border-slate-200 text-xs font-bold text-slate-600 uppercase">
                           <th className="pb-2">Date</th>
-                          <th className="pb-2">Customer / Retailer</th>
+                          <th className="pb-2">Party</th>
                           <th className="pb-2">Invoice #</th>
                           <th className="pb-2">Qty</th>
                           <th className="pb-2">Billing Rate</th>
@@ -1623,13 +1623,13 @@ export default function CentralItemDetailHub({
             </div>
 
             <div className="flex items-center gap-2 w-full sm:w-auto">
-              <span className="text-xs font-bold text-slate-600 uppercase">Supplier:</span>
+              <span className="text-xs font-bold text-slate-600 uppercase">Party:</span>
               <select
                 value={purchaseSupplierFilter}
                 onChange={(e) => setPurchaseSupplierFilter(e.target.value)}
                 className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-white outline-none cursor-pointer"
               >
-                <option value="all">All Suppliers</option>
+                <option value="all">All Parties</option>
                 {suppliers.map(s => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
@@ -1649,7 +1649,7 @@ export default function CentralItemDetailHub({
                   <tr className="border-b border-slate-200 text-xs font-bold text-slate-600 uppercase bg-slate-50/50">
                     <th className="p-2.5">Date</th>
                     <th className="p-2.5">Purchase Ref #</th>
-                    <th className="p-2.5">Supplier</th>
+                    <th className="p-2.5">Party</th>
                     <th className="p-2.5">Inward Quantity</th>
                     <th className="p-2.5">Purchase Rate</th>
                     <th className="p-2.5">Batch</th>
@@ -1722,7 +1722,7 @@ export default function CentralItemDetailHub({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div>
               <h3 className="text-sm font-bold text-slate-800">Orders &amp; Billing</h3>
-              <p className="text-xs text-slate-500 font-medium">Retailer order bookings and GST tax invoices</p>
+              <p className="text-xs text-slate-500 font-medium">Party order bookings and GST tax invoices</p>
             </div>
 
             {/* Segmented Switcher */}
@@ -1771,7 +1771,7 @@ export default function CentralItemDetailHub({
                     onChange={(e) => setOrderRetailerFilter(e.target.value)}
                     className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-white outline-none cursor-pointer"
                   >
-                    <option value="all">All Retailers</option>
+                    <option value="all">All Parties</option>
                     {retailers.map(r => (
                       <option key={r.id} value={r.id}>{r.shop_name}</option>
                     ))}
@@ -1821,7 +1821,7 @@ export default function CentralItemDetailHub({
                       <tr className="border-b border-slate-200 text-xs font-bold text-slate-600 uppercase bg-slate-50/50">
                         <th className="p-2.5">Order #</th>
                         <th className="p-2.5">Date</th>
-                        <th className="p-2.5">Customer / Retailer</th>
+                        <th className="p-2.5">Party</th>
                         <th className="p-2.5">Ordered Qty</th>
                         <th className="p-2.5">Order Rate</th>
                         <th className="p-2.5">Fulfilled Qty</th>
@@ -1904,7 +1904,7 @@ export default function CentralItemDetailHub({
                     onChange={(e) => setBillingCustomerFilter(e.target.value)}
                     className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-white outline-none cursor-pointer"
                   >
-                    <option value="all">All Retailers</option>
+                    <option value="all">All Parties</option>
                     {retailers.map(r => (
                       <option key={r.id} value={r.id}>{r.shop_name}</option>
                     ))}
@@ -1933,7 +1933,7 @@ export default function CentralItemDetailHub({
                       <tr className="border-b border-slate-200 text-xs font-bold text-slate-600 uppercase bg-slate-50/50">
                         <th className="p-2.5">Invoice #</th>
                         <th className="p-2.5">Date</th>
-                        <th className="p-2.5">Customer / Retailer</th>
+                        <th className="p-2.5">Party</th>
                         <th className="p-2.5">Quantity Billed</th>
                         <th className="p-2.5">Billing Rate</th>
                         <th className="p-2.5">Discount</th>
@@ -2648,7 +2648,7 @@ export default function CentralItemDetailHub({
             <form onSubmit={handleSavePurchase} className="space-y-3.5 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
-                  <label className="font-semibold text-slate-700 block mb-1">Supplier *</label>
+                  <label className="font-semibold text-slate-700 block mb-1">Party *</label>
                   <select
                     value={purSupplierId}
                     onChange={(e) => setPurSupplierId(e.target.value)}

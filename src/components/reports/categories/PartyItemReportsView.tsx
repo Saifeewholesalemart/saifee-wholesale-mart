@@ -297,7 +297,7 @@ export default function PartyItemReportsView({
     const isItemFiltered = selectedItem !== 'all';
     const columns: ExportColumn<PartyReportPartyRow>[] = isItemFiltered ? [
       { header: '#', key: 'srNo' },
-      { header: 'Retailer / Party', key: 'partyName' },
+      { header: 'Party', key: 'partyName' },
       { header: 'City', key: 'city' },
       { header: 'Quantity Sold', key: 'saleQty', format: 'number' },
       { header: 'Avg Billing Rate', key: 'avgBillingRate', format: 'currency' },
@@ -307,8 +307,8 @@ export default function PartyItemReportsView({
       { header: 'Purchase Amount', key: 'purchaseAmount', format: 'currency' }
     ] : [
       { header: '#', key: 'srNo' },
-      { header: 'Retailer / Party', key: 'partyName' },
-      { header: 'Retailer Code', key: 'retailerCode' },
+      { header: 'Party', key: 'partyName' },
+      { header: 'Party Code', key: 'retailerCode' },
       { header: 'City', key: 'city' },
       { header: 'Sale Quantity', key: 'saleQty', format: 'number' },
       { header: 'Sale Amount', key: 'saleAmount', format: 'currency' },
@@ -340,7 +340,7 @@ export default function PartyItemReportsView({
     if (searchQuery) filterSummaryParts.push(`Search: "${searchQuery}"`);
 
     exportToCSV({
-      reportTitle: 'PARTY REPORT BY ITEM (Retailer-wise Sales & Purchase Summary)',
+      reportTitle: 'PARTY REPORT BY ITEM (Party-wise Sales & Purchase Summary)',
       companyName: 'SAIFEE GENERAL STORES',
       filterSummary: filterSummaryParts,
       columns,
@@ -360,7 +360,7 @@ export default function PartyItemReportsView({
     const isItemFiltered = selectedItem !== 'all';
     const columns: ExportColumn<PartyReportPartyRow>[] = isItemFiltered ? [
       { header: '#', key: 'srNo' },
-      { header: 'Retailer / Party', key: 'partyName' },
+      { header: 'Party', key: 'partyName' },
       { header: 'City', key: 'city' },
       { header: 'Quantity Sold', key: 'saleQty', format: 'number' },
       { header: 'Avg Billing Rate', key: 'avgBillingRate', format: 'currency' },
@@ -370,8 +370,8 @@ export default function PartyItemReportsView({
       { header: 'Purchase Amount', key: 'purchaseAmount', format: 'currency' }
     ] : [
       { header: '#', key: 'srNo' },
-      { header: 'Retailer / Party', key: 'partyName' },
-      { header: 'Retailer Code', key: 'retailerCode' },
+      { header: 'Party', key: 'partyName' },
+      { header: 'Party Code', key: 'retailerCode' },
       { header: 'City', key: 'city' },
       { header: 'Sale Quantity', key: 'saleQty', format: 'number' },
       { header: 'Sale Amount', key: 'saleAmount', format: 'currency' },
@@ -437,7 +437,7 @@ export default function PartyItemReportsView({
               Party Report by Item
             </h1>
             <p className="text-xs text-slate-500 mt-0.5 font-medium">
-              Retailer-wise Sales &amp; Purchase Summary — answers for a selected period how much was sold to each retailer and purchased from each party.
+              Party-wise Sales &amp; Purchase Summary — answers for a selected period how much was sold to each party and purchased from each party.
             </p>
           </div>
 
@@ -630,7 +630,7 @@ export default function PartyItemReportsView({
           <div className="space-y-1 relative">
             <label className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider flex items-center gap-1">
               <Store className="w-3 h-3 text-indigo-500" />
-              Retailer / Party
+              Party
             </label>
             <div className="relative">
               <button
@@ -639,7 +639,7 @@ export default function PartyItemReportsView({
                 className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-800 outline-none flex items-center justify-between text-left truncate"
               >
                 <span className="truncate">
-                  {selectedParty === 'all' ? '[All Retailers]' : (selectedPartyObj?.name || selectedParty)}
+                  {selectedParty === 'all' ? '[All Parties]' : (selectedPartyObj?.name || selectedParty)}
                 </span>
                 <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0 ml-1" />
               </button>
@@ -650,7 +650,7 @@ export default function PartyItemReportsView({
                     <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2 top-2" />
                     <input
                       type="text"
-                      placeholder="Search retailer, owner, city..."
+                      placeholder="Search party, owner, city..."
                       value={partySearchText}
                       onChange={(e) => setPartySearchText(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-7 pr-2 py-1 text-xs outline-none"
@@ -667,7 +667,7 @@ export default function PartyItemReportsView({
                         selectedParty === 'all' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-100 text-slate-700'
                       }`}
                     >
-                      [All Retailers]
+                      [All Parties]
                     </button>
                     {filteredPartyOptions.map(p => (
                       <button
@@ -759,7 +759,7 @@ export default function PartyItemReportsView({
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
             <input
               type="text"
-              placeholder="Search retailer, owner, mobile, product, SKU, invoice..."
+              placeholder="Search party, owner, mobile, product, SKU, invoice..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-8 py-1.5 text-xs font-medium text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all shadow-inner"
@@ -941,7 +941,7 @@ export default function PartyItemReportsView({
                 <span className="font-bold text-slate-900 flex items-center gap-1.5">
                   {r.partyName}
                   {r.partyType === 'Supplier' && (
-                    <span className="text-[10px] px-1 bg-amber-100 text-amber-800 rounded font-black uppercase">Supplier</span>
+                    <span className="text-[10px] px-1 bg-amber-100 text-amber-800 rounded font-black uppercase">Party</span>
                   )}
                 </span>
                 {(r.ownerName || r.retailerCode) && (
@@ -1001,7 +1001,7 @@ export default function PartyItemReportsView({
               <div>
                 <div className="flex items-center gap-2">
                   <span className="px-2 py-0.5 bg-indigo-600 text-white text-[10px] font-black rounded uppercase tracking-wider">
-                    Retailer Details &amp; Drill-down
+                    Party Details &amp; Drill-down
                   </span>
                   <span className="text-xs text-slate-400">•</span>
                   <span className="text-xs text-indigo-300 font-bold">

@@ -1,7 +1,7 @@
 'use client';
 
 import { hasWords, matchWords } from '@/lib/searchWords';
-import { ensureWalkInRetailer, describeStockShortfall } from '@/lib/db';
+import { ensureWalkInRetailer, describeStockShortfall, isCustomerParty } from '@/lib/db';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useDb } from '@/context/DbContext';
 import { 
@@ -44,13 +44,15 @@ export default function SpotOrderModal({
   onOrderCreated
 }: SpotOrderModalProps) {
   const { 
-    retailers, 
+    retailers: allParties, 
     products, 
     inventory, 
     placeOrder, 
     dispatchRetailerPackingLot, 
     currentUser 
   } = useDb();
+  // supplier-only parties do not place orders
+  const retailers = useMemo(() => allParties.filter(isCustomerParty), [allParties]);
 
   // Retailer state
   const [selectedRetailerId, setSelectedRetailerId] = useState<string>('');
@@ -349,7 +351,7 @@ export default function SpotOrderModal({
   // Submit Handler
   const handleSubmit = async (mode: 'book_only' | 'instant_bill') => {
     if (!isWalkIn && !selectedRetailer) {
-      alert('Please search and select a retailer customer, or check Walk-in / Cash customer.');
+      alert('Please search and select a party, or check Walk-in / Cash customer.');
       retailerInputRef.current?.focus();
       return;
     }
@@ -497,7 +499,7 @@ export default function SpotOrderModal({
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Wholesale spot booking with high-speed retailer autocomplete &amp; product combobox search
+                Wholesale spot booking with high-speed party autocomplete &amp; product combobox search
               </p>
             </div>
           </div>
@@ -523,7 +525,7 @@ export default function SpotOrderModal({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-3">
               <span className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
                 <Store className="w-4 h-4 text-indigo-600" />
-                <span>1. Select Retailer Customer</span>
+                <span>1. Select Party</span>
               </span>
 
               <label className="text-xs font-bold text-slate-600 flex items-center gap-2 cursor-pointer bg-white px-3 py-1.5 rounded-xl border border-slate-200 hover:border-slate-300 transition-all self-start sm:self-auto">
@@ -550,7 +552,7 @@ export default function SpotOrderModal({
                 {/* Unified Autocomplete Search Bar */}
                 <div className="relative" ref={retailerComboboxRef}>
                   <label className="block text-[11px] font-black text-slate-600 uppercase tracking-wider mb-1.5">
-                    Search Store / Retailer Master ({retailers.length} Registered Accounts)
+                    Search Store / Party Master ({retailers.length} Registered Accounts)
                   </label>
 
                   <div className="relative flex items-center">

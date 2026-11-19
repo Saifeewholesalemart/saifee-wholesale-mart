@@ -527,7 +527,7 @@ export default function InvoicePreviewModal({
                 </span>
               </div>
               <p className="text-xs text-slate-300 mt-0.5 font-medium">
-                {ret?.shop_name || 'Retailer Customer'} &bull; {formatDate(invoice.date)}
+                {ret?.shop_name || 'Party'} &bull; {formatDate(invoice.date)}
               </p>
             </div>
           </div>
@@ -637,7 +637,7 @@ export default function InvoicePreviewModal({
               <div className="grid grid-cols-2 gap-4 border-b border-slate-300 pb-2 text-[11px]">
                 <div className="space-y-0.5 pr-2 border-r border-slate-200">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">BUYER (BILL TO)</span>
-                  <p className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] leading-snug tracking-tight uppercase">{ret?.shop_name || 'Retailer Store'}</p>
+                  <p className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] leading-snug tracking-tight uppercase">{ret?.shop_name || 'Party Store'}</p>
                   <p className="text-slate-700 leading-tight">{ret?.address || 'Local Market Area'}</p>
                   <p className="text-slate-800"><span className="text-slate-500">Prop:</span> {ret?.owner_name || 'N/A'} <span className="text-slate-500">| Ph:</span> {ret?.mobile || ret?.phone || 'N/A'}</p>
                   <p className="font-bold text-slate-900"><span className="text-slate-500 font-normal">GSTIN:</span> {ret?.gstin || 'Unregistered'} <span className="text-slate-500 font-normal">| State:</span> {formatPlaceOfSupply(ret?.state_code)}</p>
@@ -970,7 +970,7 @@ export default function InvoicePreviewModal({
                 <div className="grid grid-cols-2 gap-8 border-y border-slate-200 py-4 text-xs leading-relaxed">
                   <div className="space-y-1.5 pr-4 border-r border-slate-100">
                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-1">CONSIGNEE DETAILS</span>
-                    <p className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] tracking-tight uppercase">{ret?.shop_name || 'Retailer Customer'}</p>
+                    <p className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] tracking-tight uppercase">{ret?.shop_name || 'Party'}</p>
                     <p className="text-slate-700">{ret?.address}</p>
                     <p className="text-slate-600">Phone: {ret?.mobile || ret?.phone || 'N/A'}</p>
                   </div>

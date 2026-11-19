@@ -100,10 +100,10 @@ export default function RetailerReportsView({
   }));
 
   const subTabs = [
-    { id: 'summary', label: 'Retailer Sales Summary', icon: Store },
+    { id: 'summary', label: 'Party Sales Summary', icon: Store },
     { id: 'history', label: 'Purchase & Rate History', icon: History },
     { id: 'outstanding', label: 'Outstanding Aging & Credit', icon: DollarSign },
-    { id: 'growth', label: 'Retailer Growth & Frequency', icon: TrendingUp }
+    { id: 'growth', label: 'Party Growth & Frequency', icon: TrendingUp }
   ];
 
   // Aging totals for chart
@@ -143,7 +143,7 @@ export default function RetailerReportsView({
       {showCharts && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in-50 duration-200">
           <AgingBucketsChart
-            title="Total Retailer Outstanding by Aging"
+            title="Total Party Outstanding by Aging"
             buckets={[
               { label: 'Current (Not Due)', amount: agingTotals.current, color: '#10b981' },
               { label: '1–30 Days', amount: agingTotals.days1to30, color: '#3b82f6' },
@@ -154,7 +154,7 @@ export default function RetailerReportsView({
           />
 
           <HorizontalBarChart
-            title="Top Retailers by Gross Purchases"
+            title="Top Parties by Gross Purchases"
             subtitle="Ranked by total order billing value"
             items={summary.slice(0, 7).map(r => ({
               label: r.retailerName,
@@ -169,7 +169,7 @@ export default function RetailerReportsView({
       {subTab === 'summary' && (
         <ReportTable
           columns={[
-            { header: 'Retailer Name', render: (r) => (
+            { header: 'Party Name', render: (r) => (
               <div>
                 <span className="font-bold text-slate-800 block">{r.retailerName}</span>
                 <span className="text-xs text-slate-500 font-medium">{r.retailerCode} &bull; {r.city}</span>
@@ -316,7 +316,7 @@ export default function RetailerReportsView({
       {subTab === 'outstanding' && (
         <ReportTable
           columns={[
-            { header: 'Retailer Store', render: (r) => (
+            { header: 'Party Store', render: (r) => (
               <div>
                 <span className="font-bold text-slate-800 block">{r.retailerName}</span>
                 <span className="text-xs text-slate-500 font-medium">{r.retailerCode} &bull; {r.city}</span>
@@ -366,7 +366,7 @@ export default function RetailerReportsView({
       {/* SUB-VIEW 4: RETAILER GROWTH */}
       {subTab === 'growth' && (
         <div className="erp-card bg-white p-6 space-y-4">
-          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Retailer Growth &amp; Order Frequency Benchmark</h3>
+          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Party Growth &amp; Order Frequency Benchmark</h3>
           <p className="text-xs text-slate-500">
             Compare monthly order frequencies, basket sizes, and repeat replenishment intervals across the distribution network.
           </p>

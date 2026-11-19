@@ -219,9 +219,9 @@ export default function DatabaseBackupPage() {
   const handleExportRetailers = (format: 'xlsx' | 'csv') => {
     try {
       const { count, fileName } = exportRetailerLedgers(retailers, invoices, payments, format);
-      showToast(`Exported ${count} Retailer Ledgers & Outstanding records (${fileName})`);
+      showToast(`Exported ${count} Party Ledgers & Outstanding records (${fileName})`);
     } catch (e: any) {
-      showToast(e?.message || 'Error exporting retailer ledgers', 'error');
+      showToast(e?.message || 'Error exporting party ledgers', 'error');
     }
   };
 
@@ -420,7 +420,7 @@ export default function DatabaseBackupPage() {
                 Database Backup & Data Export Utility
               </h1>
               <p className="text-sm text-slate-500 font-medium">
-                Comprehensive data snapshot manager for Products, Batches, Invoices, Orders, Retailer Ledgers & Configurations.
+                Comprehensive data snapshot manager for Products, Batches, Invoices, Orders, Party Ledgers & Configurations.
               </p>
             </div>
           </div>
@@ -564,7 +564,7 @@ export default function DatabaseBackupPage() {
               One-Click Full Database Backup
             </h2>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Extract and download a complete, restorable snapshot containing every entity in your FMCG ERP system — Products, Multi-Warehouse Batches, Invoices, Retailer Accounts, Ledgers, Cash Flow, and System Configurations.
+              Extract and download a complete, restorable snapshot containing every entity in your FMCG ERP system — Products, Multi-Warehouse Batches, Invoices, Party Accounts, Ledgers, Cash Flow, and System Configurations.
             </p>
           </div>
 
@@ -604,7 +604,7 @@ export default function DatabaseBackupPage() {
             <p className="font-bold text-slate-800 text-sm mt-0.5">{batches.length} Lots</p>
           </div>
           <div className="p-2.5 bg-white rounded-lg border border-slate-200">
-            <p className="text-slate-400 font-semibold">Retailers</p>
+            <p className="text-slate-400 font-semibold">Parties</p>
             <p className="font-bold text-slate-800 text-sm mt-0.5">{retailers.length} Stores</p>
           </div>
           <div className="p-2.5 bg-white rounded-lg border border-slate-200">
@@ -720,7 +720,7 @@ export default function DatabaseBackupPage() {
                   {retailers.length} Parties
                 </span>
               </div>
-              <h3 className="font-bold text-slate-800 text-base">Retailer Ledgers & Dues</h3>
+              <h3 className="font-bold text-slate-800 text-base">Party Ledgers & Dues</h3>
               <p className="text-xs text-slate-500 leading-relaxed">
                 Customer directory with Credit Limits, Outstanding Dues, Available Balances, Total Billed, and Payment histories.
               </p>
@@ -758,7 +758,7 @@ export default function DatabaseBackupPage() {
               </div>
               <h3 className="font-bold text-slate-800 text-base">Purchases Register</h3>
               <p className="text-xs text-slate-500 leading-relaxed">
-                Inward supplier bills, Bill reference numbers, Tax breakdowns, Payment statuses, and outstanding supplier payables.
+                Inward party bills, Bill reference numbers, Tax breakdowns, Payment statuses, and outstanding party payables.
               </p>
             </div>
             <div className="flex items-center gap-2 pt-2 border-t border-slate-200">
@@ -830,7 +830,7 @@ export default function DatabaseBackupPage() {
               </div>
               <h3 className="font-bold text-slate-900 text-base">All-In-One Workbook</h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Combines Products, Invoices, Retailers, Batches, Purchases, and Profiles into individual tabs inside one master Excel spreadsheet.
+                Combines Products, Invoices, Parties, Batches, Purchases, and Profiles into individual tabs inside one master Excel spreadsheet.
               </p>
             </div>
             <div className="pt-2 border-t border-indigo-100">
@@ -1077,7 +1077,7 @@ export default function DatabaseBackupPage() {
                   </p>
                 </div>
                 <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200">
-                  <p className="text-slate-400 font-semibold">Retailers</p>
+                  <p className="text-slate-400 font-semibold">Parties</p>
                   <p className="font-bold text-slate-800">
                     {restorePayload.tables?.retailers?.length ?? restorePayload.retailers?.length ?? 0} Stores
                   </p>

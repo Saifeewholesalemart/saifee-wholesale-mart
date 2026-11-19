@@ -254,7 +254,7 @@ function ConsolidatedOrdersContent() {
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/70 text-xs font-bold text-slate-600 uppercase tracking-wider">
                 <th className="p-3">Run Details</th>
-                <th className="p-3">Retailer Profile</th>
+                <th className="p-3">Party Profile</th>
                 <th className="p-3 text-center">Items / CTN</th>
                 <th className="p-3 text-center">Stage Status</th>
                 <th className="p-3 text-right">Value</th>
@@ -281,7 +281,7 @@ function ConsolidatedOrdersContent() {
                       </span>
                     </td>
                     <td className="p-3">
-                      <span className="font-bold text-slate-800 block text-xs">{ret?.shop_name || 'Retailer'}</span>
+                      <span className="font-bold text-slate-800 block text-xs">{ret?.shop_name || 'Party'}</span>
                       <span className="text-xs text-slate-500 block">{ret?.city} &bull; {ret?.owner_name}</span>
                     </td>
                     <td className="p-3 text-center">
@@ -340,7 +340,7 @@ function ConsolidatedOrdersContent() {
               <div>
                 <h3 className="font-black text-slate-800 text-sm uppercase">Consolidated Order Overview</h3>
                 <span className="text-xs text-slate-500 font-bold uppercase tracking-wider block mt-0.5">
-                  ID: {selectedFul.fulfilment_number} &bull; Retailer: {retailers.find(r => r.id === selectedFul.retailer_id)?.shop_name}
+                  ID: {selectedFul.fulfilment_number} &bull; Party: {retailers.find(r => r.id === selectedFul.retailer_id)?.shop_name}
                 </span>
               </div>
               <button 
@@ -592,7 +592,7 @@ function ConsolidatedOrdersContent() {
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 mt-0.5 font-semibold">
-                    Retailer: {retObj ? retObj.shop_name : 'Unknown'} &bull; Fulfilment: {packingFul.fulfilment_number}
+                    Party: {retObj ? retObj.shop_name : 'Unknown'} &bull; Fulfilment: {packingFul.fulfilment_number}
                   </p>
                 </div>
                 <button 

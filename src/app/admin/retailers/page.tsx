@@ -117,8 +117,8 @@ export default function AdminRetailers() {
             <span className="text-xs text-slate-400 font-bold">&bull;</span>
             <span className="text-xs text-slate-500 font-semibold">{retailers.length} Registered Accounts</span>
           </div>
-          <h2 className="text-xl font-black text-slate-900 mt-1">Retailer Profiles &amp; Limits</h2>
-          <p className="text-xs text-slate-500 mt-0.5">Manage registered shops, audit purchase credit limits, and add new retailers.</p>
+          <h2 className="text-xl font-black text-slate-900 mt-1">Party Profiles &amp; Limits</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Manage registered shops, audit purchase credit limits, and add new parties.</p>
         </div>
 
         <button
@@ -126,7 +126,7 @@ export default function AdminRetailers() {
           className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-900/10 flex items-center justify-center gap-2 transition-all cursor-pointer flex-shrink-0"
         >
           <Plus className="w-4 h-4" />
-          <span>Register New Retailer</span>
+          <span>Register New Party</span>
         </button>
       </div>
 
@@ -171,7 +171,7 @@ export default function AdminRetailers() {
           <div className="flex items-center gap-2">
             <Users className="w-5 h-5 text-indigo-600" />
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-              Retailer Directory ({filteredRetailers.length}{filteredRetailers.length !== retailers.length ? ` of ${retailers.length}` : ''})
+              Party Directory ({filteredRetailers.length}{filteredRetailers.length !== retailers.length ? ` of ${retailers.length}` : ''})
             </h3>
           </div>
 
@@ -217,7 +217,7 @@ export default function AdminRetailers() {
           <table className="erp-table w-full min-w-[700px]">
             <thead>
               <tr>
-                <th>Retailer / Shop Details</th>
+                <th>Party / Shop Details</th>
                 <th>Contact &amp; Location</th>
                 <th className="text-right">Outstanding Bal</th>
                 <th className="text-right">Credit Limit</th>
@@ -230,7 +230,7 @@ export default function AdminRetailers() {
               {filteredRetailers.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="text-center py-10 text-slate-400 font-semibold">
-                    No retailers matched the current search and filter criteria.
+                    No parties matched the current search and filter criteria.
                   </td>
                 </tr>
               ) : (
@@ -245,7 +245,7 @@ export default function AdminRetailers() {
                           <Link
                             href={`/admin/orders?retailer=${ret.id}`}
                             className="font-extrabold text-slate-900 hover:text-indigo-600 text-sm block leading-tight hover:underline"
-                            title="View Orders for this Retailer"
+                            title="View Orders for this Party"
                           >
                             {ret.shop_name}
                           </Link>

@@ -75,7 +75,7 @@ export default function PendingDeliveryWarningModal({
                 {retailerName && (
                   <p className="text-xs text-amber-100 font-medium mt-0.5 flex items-center gap-1">
                     <Store className="w-3.5 h-3.5 opacity-80" />
-                    <span>Retailer: <strong className="text-white font-bold">{retailerName}</strong> {retailerCode ? `(${retailerCode})` : ''}</span>
+                    <span>Party: <strong className="text-white font-bold">{retailerName}</strong> {retailerCode ? `(${retailerCode})` : ''}</span>
                   </p>
                 )}
               </div>
@@ -98,13 +98,13 @@ export default function PendingDeliveryWarningModal({
             {isSingle ? (
               <div className="text-xs sm:text-sm text-slate-700 leading-relaxed">
                 <p>
-                  The item <strong className="font-extrabold text-slate-900">{singleItem.productName}</strong> — <strong className="font-black text-amber-800 underline decoration-amber-400">{singleItem.totalPendingDisplay}</strong> is already pending for delivery from a previous order to this retailer.
+                  The item <strong className="font-extrabold text-slate-900">{singleItem.productName}</strong> — <strong className="font-black text-amber-800 underline decoration-amber-400">{singleItem.totalPendingDisplay}</strong> is already pending for delivery from a previous order to this party.
                 </p>
               </div>
             ) : (
               <div className="text-xs sm:text-sm text-slate-700 leading-relaxed">
                 <p>
-                  The following <strong className="font-bold text-amber-900">{warnings.length} items</strong> are already pending for delivery from previous orders to this retailer:
+                  The following <strong className="font-bold text-amber-900">{warnings.length} items</strong> are already pending for delivery from previous orders to this party:
                 </p>
               </div>
             )}

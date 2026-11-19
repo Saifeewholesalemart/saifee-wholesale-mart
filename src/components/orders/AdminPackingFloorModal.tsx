@@ -324,7 +324,7 @@ export default function AdminPackingFloorModal({
 
   const handleSaveAndMoveToPacked = useCallback(() => {
     if (!effectiveRetailer) {
-      alert('Error: Retailer account information is missing.');
+      alert('Error: Party account information is missing.');
       return;
     }
 
@@ -386,7 +386,7 @@ export default function AdminPackingFloorModal({
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-extrabold text-base text-amber-300">
-                  Consolidated Packing: {effectiveRetailer?.shop_name || 'Retailer Store'}
+                  Consolidated Packing: {effectiveRetailer?.shop_name || 'Party Store'}
                 </span>
                 <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-indigo-500/30 text-indigo-200 border border-indigo-400/30">
                   {activeOrders.length} Orders + {activeBackorders.length} Backorders
@@ -628,7 +628,7 @@ export default function AdminPackingFloorModal({
                                 <option value="Short Packed">Short Packed</option>
                                 <option value="Damaged Box">Damaged Box</option>
                                 <option value="Batch Expired">Batch Expired</option>
-                                <option value="Custom Retailer Request">Custom Retailer Request</option>
+                                <option value="Custom Retailer Request">Custom Party Request</option>
                               </select>
                             </div>
                             <span className="inline-block px-1.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded text-[10px] font-bold">

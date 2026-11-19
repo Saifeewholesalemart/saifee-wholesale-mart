@@ -187,10 +187,10 @@ export function exportSalesRegisterInvoices(
     return {
       'Invoice No': inv.invoice_number || inv.id,
       'Invoice Date': inv.date || '-',
-      'Retailer / Shop Name': shopName,
+      'Party Name': shopName,
       'Owner Name': retailer?.owner_name || '-',
       'Mobile No': contact,
-      'Retailer GSTIN': gstin,
+      'Party GSTIN': gstin,
       'Route / Beat': route,
       'Place of Supply': inv.place_of_supply || 'Maharashtra (27)',
       'Items Count': inv.items?.length || 0,
@@ -256,7 +256,7 @@ export function exportRetailerLedgers(
     const availableCredit = Math.max(0, creditLimit - currentOutstanding);
 
     return {
-      'Retailer Code': ret.retailer_code || ret.id,
+      'Party Code': ret.retailer_code || ret.id,
       'Shop Name': ret.shop_name,
       'Owner Name': ret.owner_name || '-',
       'Mobile / Contact': ret.mobile || ret.phone || '-',
@@ -276,7 +276,7 @@ export function exportRetailerLedgers(
   });
 
   const fileName = generateBackupFileName('saifee_retailer_ledgers_outstanding', format);
-  downloadWorkbookFile([{ name: 'Retailer Ledgers', data: rows }], fileName, format);
+  downloadWorkbookFile([{ name: 'Party Ledgers', data: rows }], fileName, format);
   return { count: rows.length, fileName };
 }
 
@@ -297,11 +297,11 @@ export function exportPurchasesRegister(
 
     return {
       'Purchase ID': pur.id,
-      'Supplier Invoice No': pur.invoice_number || pur.id,
+      'Party Invoice No': pur.invoice_number || pur.id,
       'Invoice Date': pur.invoice_date || pur.created_at?.split('T')[0] || '-',
-      'Supplier / Vendor Name': supName,
-      'Supplier GSTIN': supplier?.gstin || '-',
-      'Supplier Address': supplier?.address || '-',
+      'Party Name': supName,
+      'Party GSTIN': supplier?.gstin || '-',
+      'Party Address': supplier?.address || '-',
       'Items Count': pur.items?.length || 0,
       'Grand Total (₹)': totalAmount.toFixed(2),
       'Status': pur.status || 'Confirmed',
@@ -381,7 +381,7 @@ export function exportFullExcelMasterWorkbook(
   const invoiceRows = snapshot.tables.invoices.map(i => ({
     'Invoice No': i.invoice_number,
     'Date': i.date,
-    'Retailer ID': i.retailer_id,
+    'Party ID': i.retailer_id,
     'Taxable Value': i.taxable_value,
     'CGST': i.cgst,
     'SGST': i.sgst,
@@ -404,7 +404,7 @@ export function exportFullExcelMasterWorkbook(
     'Credit Limit': r.credit_limit,
     'Outstanding': r.outstanding
   }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(retailerRows), 'Retailers');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(retailerRows), 'Parties');
 
   // 4. Batches Sheet
   const batchRows = snapshot.tables.batches.map(b => ({
@@ -422,7 +422,7 @@ export function exportFullExcelMasterWorkbook(
   const purchaseRows = snapshot.tables.purchases.map(p => ({
     'Invoice No': p.invoice_number,
     'Date': p.invoice_date,
-    'Supplier ID': p.supplier_id,
+    'Party ID': p.supplier_id,
     'Grand Total': p.total_amount,
     'Status': p.status
   }));

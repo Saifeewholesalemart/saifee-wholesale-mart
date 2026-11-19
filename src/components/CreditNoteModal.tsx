@@ -156,10 +156,10 @@ export default function CreditNoteModal({
             <div className="space-y-1">
               <div className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-slate-500 mb-1">
                 <Store className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Credited To Retailer</span>
+                <span>Credited To Party</span>
               </div>
               <h3 className="retailer-name-print text-base font-black text-slate-950 print:text-[11pt] tracking-tight uppercase">
-                {retailer?.shop_name || 'Direct Retailer Account'}
+                {retailer?.shop_name || 'Direct Party Account'}
               </h3>
               <p className="text-xs text-slate-600 font-semibold">
                 Proprietor: {retailer?.owner_name || 'Store Owner'}
@@ -171,7 +171,7 @@ export default function CreditNoteModal({
 
             <div className="space-y-1 sm:text-right flex flex-col sm:items-end justify-center">
               <div className="text-xs text-slate-600">
-                Retailer Code: <strong className="font-bold text-slate-900">{retailer?.retailer_code || 'RET-STORE'}</strong>
+                Party Code: <strong className="font-bold text-slate-900">{retailer?.retailer_code || 'RET-STORE'}</strong>
               </div>
               <div className="text-xs text-slate-600">
                 GSTIN: <strong className="font-bold text-slate-900">{retailer?.gstin || 'Unregistered / Consumer'}</strong>
@@ -299,10 +299,10 @@ export default function CreditNoteModal({
             <div className="space-y-3 bg-emerald-50/60 p-4 rounded-xl border border-emerald-200/80 text-xs">
               <div className="flex items-center gap-2 text-emerald-800 font-black uppercase tracking-wide">
                 <CheckCircle className="w-4 h-4 text-emerald-600" />
-                <span>Retailer Ledger Credited</span>
+                <span>Party Ledger Credited</span>
               </div>
               <p className="text-slate-600 text-xs leading-relaxed font-medium">
-                The total credit value of <strong className="text-slate-900 font-black">₹{totalAmount.toLocaleString('en-IN')}</strong> has been credited to <strong className="text-slate-900 font-bold">{retailer?.shop_name || 'Retailer Account'}</strong>. This amount reduces the retailer&apos;s active outstanding dues.
+                The total credit value of <strong className="text-slate-900 font-black">₹{totalAmount.toLocaleString('en-IN')}</strong> has been credited to <strong className="text-slate-900 font-bold">{retailer?.shop_name || 'Party Account'}</strong>. This amount reduces the party&apos;s active outstanding dues.
               </p>
               <div className="text-[11px] text-slate-500 pt-1 border-t border-emerald-200/60">
                 {(creditNote.items?.length || 0) === 0
@@ -362,7 +362,7 @@ export default function CreditNoteModal({
           {/* Footer Signature */}
           <div className="flex justify-between items-end pt-8 text-xs text-slate-500 border-t border-slate-200">
             <div>
-              <p className="font-semibold">Receiver / Retailer Signature</p>
+              <p className="font-semibold">Receiver / Party Signature</p>
               <div className="h-12 border-b border-dashed border-slate-300 w-44 mt-1"></div>
             </div>
             <div className="text-right">

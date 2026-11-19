@@ -115,7 +115,7 @@ export default function AuditTrailModal({
                           )}
                         </div>
                         <span className="text-xs text-slate-500 font-semibold block mt-0.5">
-                          Retailer: <strong className="text-slate-700">{ret?.shop_name || log.retailer_id}</strong>
+                          Party: <strong className="text-slate-700">{ret?.shop_name || log.retailer_id}</strong>
                           {log.order_id && ` &bull; Order: ${log.order_id}`}
                         </span>
                       </div>

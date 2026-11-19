@@ -187,7 +187,7 @@ export default function AdminDashboard() {
               <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Total Outstanding</span>
               <span className="text-2xl font-black text-red-600">₹{totalOutstanding.toLocaleString('en-IN')}</span>
               <span className="text-xs text-slate-500 font-medium">
-                Across {retailers.filter(r => r.outstanding > 0).length} Retailers
+                Across {retailers.filter(r => r.outstanding > 0).length} Parties
               </span>
             </div>
             <div className="w-12 h-12 rounded-xl bg-red-50 text-red-600 flex items-center justify-center">
@@ -471,7 +471,7 @@ export default function AdminDashboard() {
                 <thead>
                   <tr className="border-b border-slate-100 text-xs font-bold text-slate-600 uppercase tracking-wider">
                     <th className="py-2.5">Order #</th>
-                    <th className="py-2.5">Retailer</th>
+                    <th className="py-2.5">Party</th>
                     <th className="py-2.5">Total</th>
                     <th className="py-2.5 text-right">Status</th>
                   </tr>
@@ -486,7 +486,7 @@ export default function AdminDashboard() {
                             {ord.order_number}
                           </Link>
                         </td>
-                        <td className="py-2.5 text-slate-800 truncate max-w-[140px] font-bold">{ret?.shop_name || 'Retailer'}</td>
+                        <td className="py-2.5 text-slate-800 truncate max-w-[140px] font-bold">{ret?.shop_name || 'Party'}</td>
                         <td className="py-2.5 font-black text-slate-900">₹{ord.total_amount.toLocaleString('en-IN')}</td>
                         <td className="py-2.5 text-right">
                           <span className={`px-2.5 py-0.5 rounded-[4px] text-xs font-bold uppercase ${
@@ -527,7 +527,7 @@ export default function AdminDashboard() {
                 <thead>
                   <tr className="border-b border-slate-100 text-xs font-bold text-slate-600 uppercase tracking-wider">
                     <th className="py-2.5">Invoice #</th>
-                    <th className="py-2.5">Retailer</th>
+                    <th className="py-2.5">Party</th>
                     <th className="py-2.5">Grand Total</th>
                     <th className="py-2.5 text-right">Balance</th>
                   </tr>

@@ -792,7 +792,7 @@ function ProductsContent() {
     e.preventDefault();
     if (!showPurchaseModal) return;
     if (!purSupplierId) {
-      setPurError('Please select a supplier');
+      setPurError('Please select a party');
       return;
     }
     if (!purQuantity || purQuantity <= 0) {
@@ -2050,7 +2050,7 @@ function ProductsContent() {
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
                           <label className="font-bold text-slate-700 block mb-1 text-xs">
-                            Supplier / Opening Source
+                            Party / Opening Source
                           </label>
                           <select
                             value={formInitialSupplierId}
@@ -2598,7 +2598,7 @@ function ProductsContent() {
             <form onSubmit={handleSavePurchaseModal} className="space-y-3.5 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
-                  <label className="font-semibold text-slate-700 block mb-1">Supplier *</label>
+                  <label className="font-semibold text-slate-700 block mb-1">Party *</label>
                   <select
                     value={purSupplierId}
                     onChange={(e) => setPurSupplierId(e.target.value)}

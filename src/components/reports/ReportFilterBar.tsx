@@ -147,7 +147,7 @@ export default function ReportFilterBar({
   if (filters.retailerId) {
     const r = dbState.retailers.find(ret => ret.id === filters.retailerId);
     activeChips.push({
-      label: `Retailer: ${r?.shop_name || filters.retailerId}`,
+      label: `Party: ${r?.shop_name || filters.retailerId}`,
       onRemove: () => onChange({ ...filters, retailerId: undefined })
     });
   }
@@ -207,7 +207,7 @@ export default function ReportFilterBar({
               <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               <input
                 type="text"
-                placeholder="Search invoices, retailers, items..."
+                placeholder="Search invoices, parties, items..."
                 value={filters.searchQuery || ''}
                 onChange={(e) => onChange({ ...filters, searchQuery: e.target.value || undefined })}
                 className="bg-transparent border-none outline-none text-xs text-slate-800 placeholder:text-slate-400 font-medium w-full"
@@ -323,7 +323,7 @@ export default function ReportFilterBar({
                   onChange={(e) => onChange({ ...filters, retailerId: e.target.value || undefined })}
                   className="bg-transparent border-none outline-none text-slate-800 cursor-pointer text-xs max-w-[150px] truncate"
                 >
-                  <option value="">All Retailers</option>
+                  <option value="">All Parties</option>
                   {dbState.retailers.map(r => (
                     <option key={r.id} value={r.id}>{r.shop_name} {r.city ? `(${r.city})` : ''}</option>
                   ))}
@@ -625,13 +625,13 @@ export default function ReportFilterBar({
               {/* Retailer Selector */}
               {userContext.role !== 'retailer' && (
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 block">Retailer</label>
+                  <label className="text-xs font-bold text-slate-700 block">Party</label>
                   <select
                     value={filters.retailerId || ''}
                     onChange={(e) => onChange({ ...filters, retailerId: e.target.value || undefined })}
                     className="w-full p-2.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 outline-none"
                   >
-                    <option value="">All Retailers</option>
+                    <option value="">All Parties</option>
                     {dbState.retailers.map(r => (
                       <option key={r.id} value={r.id}>{r.shop_name} {r.city ? `(${r.city})` : ''}</option>
                     ))}

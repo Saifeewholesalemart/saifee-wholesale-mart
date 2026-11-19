@@ -93,11 +93,11 @@ export default function ViewPreviousOrderModal({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                Retailer Information
+                Party Information
               </span>
               <div className="font-extrabold text-slate-900 text-sm flex items-center gap-1.5">
                 <Store className="w-4 h-4 text-indigo-600" />
-                <span>{retailer?.shop_name || 'Retailer Name'}</span>
+                <span>{retailer?.shop_name || 'Party Name'}</span>
               </div>
               <p className="text-slate-500 font-medium mt-0.5">
                 Code: {retailer?.retailer_code || 'RET'} &bull; Owner: {retailer?.owner_name || 'Owner'}

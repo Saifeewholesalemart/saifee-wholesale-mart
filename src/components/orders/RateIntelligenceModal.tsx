@@ -92,7 +92,7 @@ export default function RateIntelligenceModal({
 
     sortedInvoices.forEach(inv => {
       const ret = retailers.find(r => r.id === inv.retailer_id);
-      const retName = ret?.shop_name || 'Retailer';
+      const retName = ret?.shop_name || 'Party';
       const retCity = ret?.city || 'Nagpur';
       const retBeat = ret?.beat_name || ret?.route;
 
@@ -230,7 +230,7 @@ export default function RateIntelligenceModal({
               }`}
             >
               <Store className="w-3.5 h-3.5 text-indigo-600" />
-              <span>This Retailer History</span>
+              <span>This Party History</span>
               <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
                 scopeTab === 'THIS_RETAILER' ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-200 text-slate-600'
               }`}>
@@ -249,7 +249,7 @@ export default function RateIntelligenceModal({
               }`}
             >
               <Globe className="w-3.5 h-3.5 text-purple-600" />
-              <span>Market Rate (All Retailers)</span>
+              <span>Market Rate (All Parties)</span>
               <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
                 scopeTab === 'ALL_RETAILERS' ? 'bg-purple-100 text-purple-800' : 'bg-slate-200 text-slate-600'
               }`}>
@@ -275,7 +275,7 @@ export default function RateIntelligenceModal({
               <h4 className="font-extrabold text-slate-800 text-sm">
                 {scopeTab === 'THIS_RETAILER'
                   ? `No previous invoice history found for ${retailerName}`
-                  : 'No market rate history found across retailers'}
+                  : 'No market rate history found across parties'}
               </h4>
               <p className="text-xs text-slate-500 max-w-sm mx-auto">
                 {scopeTab === 'THIS_RETAILER'
@@ -309,7 +309,7 @@ export default function RateIntelligenceModal({
                             </span>
                             {rec.isThisRetailer && (
                               <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-indigo-100 text-indigo-800">
-                                Current Retailer
+                                Current Party
                               </span>
                             )}
                           </div>

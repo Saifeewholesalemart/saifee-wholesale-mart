@@ -1455,12 +1455,12 @@ export default function StaffDashboardPage() {
             <div className="flex items-center gap-2.5">
               <Clock className="w-4 h-4 text-amber-400 shrink-0" />
               <span>
-                <strong>Retailer-Wise Pending Hub:</strong> All unfulfilled order quantities are grouped by Retailer into single cards with source order numbers preserved.
+                <strong>Party-Wise Pending Hub:</strong> All unfulfilled order quantities are grouped by Party into single cards with source order numbers preserved.
                 {terminalRole === 'biller' && ' Pending quantities are strictly Non-Billable.'}
               </span>
             </div>
             <span className="px-3 py-1 bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded-lg shrink-0">
-              {filteredPendingCards.length} Retailer Cards
+              {filteredPendingCards.length} Party Cards
             </span>
           </div>
 
@@ -1508,7 +1508,7 @@ export default function StaffDashboardPage() {
                     <tr>
                       <th className="p-3.5">Invoice #</th>
                       <th className="p-3.5">Date</th>
-                      <th className="p-3.5">Retailer</th>
+                      <th className="p-3.5">Party</th>
                       <th className="p-3.5">Orders</th>
                       <th className="p-3.5 text-right">Taxable</th>
                       <th className="p-3.5 text-right">GST</th>
@@ -1523,7 +1523,7 @@ export default function StaffDashboardPage() {
                         <tr key={inv.id} className="hover:bg-slate-50/70 transition-colors">
                           <td className="p-3.5 font-mono font-black text-indigo-700">{inv.invoice_number}</td>
                           <td className="p-3.5 text-slate-500">{formatOrderDateTime(inv.date)}</td>
-                          <td className="p-3.5 font-bold text-slate-900">{ret?.shop_name || 'Retailer'}</td>
+                          <td className="p-3.5 font-bold text-slate-900">{ret?.shop_name || 'Party'}</td>
                           <td className="p-3.5 font-mono text-slate-600">{(inv.source_order_numbers || [inv.order_ref_id]).join(', ')}</td>
                           <td className="p-3.5 font-mono text-right text-slate-700">₹{Number(inv.taxable_value || 0).toFixed(2)}</td>
                           <td className="p-3.5 font-mono text-right text-slate-700">₹{Number((inv.cgst || 0) + (inv.sgst || 0) + (inv.igst || 0)).toFixed(2)}</td>
@@ -1956,7 +1956,7 @@ export default function StaffDashboardPage() {
                   Aisle Picklist &bull; {selectedRoute === 'ALL' ? 'All Active Beats' : selectedRoute}
                 </h3>
                 <p className="text-[11px] text-slate-400 font-medium">
-                  {consolidatedPicklist.lotsCount} Retailer Lots &bull; {consolidatedPicklist.ordersCount} Orders &bull; {consolidatedPicklist.items.length} SKUs
+                  {consolidatedPicklist.lotsCount} Party Lots &bull; {consolidatedPicklist.ordersCount} Orders &bull; {consolidatedPicklist.items.length} SKUs
                 </p>
               </div>
 

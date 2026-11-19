@@ -261,7 +261,7 @@ export default function AdminPurchases() {
     if (!editPurchaseId) return;
 
     if (!editSupplierId) {
-      alert('Please select a supplier.');
+      alert('Please select a party.');
       return;
     }
     if (!editInvoiceNumber.trim()) {
@@ -332,7 +332,7 @@ export default function AdminPurchases() {
   const handleSaveNewSupplier = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!newSupplierName.trim()) {
-      alert('Please enter a Supplier / Purchaser Name.');
+      alert('Please enter a Party / Purchaser Name.');
       return;
     }
 
@@ -347,7 +347,7 @@ export default function AdminPurchases() {
     setNewSupplierGstin('');
     setNewSupplierAddress('');
     setShowAddSupplierModal(false);
-    setSupplierActionMsg(`Purchaser / Supplier "${created.name}" registered and selected successfully!`);
+    setSupplierActionMsg(`Purchaser / Party "${created.name}" registered and selected successfully!`);
     setTimeout(() => setSupplierActionMsg(''), 4000);
   };
 
@@ -723,7 +723,7 @@ export default function AdminPurchases() {
   const handleConfirmPurchase = (force = false) => {
     // Validations
     if (!supplierId) {
-      alert('Please select a supplier.');
+      alert('Please select a party.');
       return;
     }
     if (!invoiceNumber.trim()) {
@@ -763,7 +763,7 @@ export default function AdminPurchases() {
           p.invoice_date === invoiceDate
       );
       if (potentialDuplicate) {
-        setDuplicateWarning(`Possible duplicate purchase invoice. Invoice #${invoiceNumber} for this supplier on ${invoiceDate} is already seed/recorded.`);
+        setDuplicateWarning(`Possible duplicate purchase invoice. Invoice #${invoiceNumber} for this party on ${invoiceDate} is already seed/recorded.`);
         return;
       }
     }
@@ -847,7 +847,7 @@ export default function AdminPurchases() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-xl font-extrabold text-slate-800">Purchase Inward Ledger</h2>
-          <p className="text-xs text-slate-500 mt-1">Review historical incoming stock purchases, batches received from FMCG suppliers, and purchase rate variances.</p>
+          <p className="text-xs text-slate-500 mt-1">Review historical incoming stock purchases, batches received from FMCG parties, and purchase rate variances.</p>
         </div>
         {!isEnteringNewPurchase ? (
           <div className="flex items-center gap-2 self-start flex-wrap">
@@ -906,7 +906,7 @@ export default function AdminPurchases() {
               className="flex items-center justify-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs transition-colors cursor-pointer"
             >
               <Building2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>+ Add Supplier</span>
+              <span>+ Add Party</span>
             </button>
 
             <button
@@ -1016,7 +1016,7 @@ export default function AdminPurchases() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Select Supplier / Purchaser</label>
+                <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Select Party / Purchaser</label>
                 <button
                   type="button"
                   onClick={() => setShowAddSupplierModal(true)}
@@ -1038,16 +1038,16 @@ export default function AdminPurchases() {
                   }}
                   className="w-full border border-slate-200 rounded-lg p-2.5 text-xs outline-none focus:border-indigo-500 font-semibold text-slate-700 bg-white"
                 >
-                  <option value="">-- Select Supplier / Purchaser --</option>
+                  <option value="">-- Select Party / Purchaser --</option>
                   {suppliers.map(s => (
                     <option key={s.id} value={s.id}>{s.name} ({s.gstin})</option>
                   ))}
-                  <option value="__add_new__" className="text-indigo-600 font-bold bg-indigo-50">+ Add New Purchaser / Supplier...</option>
+                  <option value="__add_new__" className="text-indigo-600 font-bold bg-indigo-50">+ Add New Purchaser / Party...</option>
                 </select>
                 <button
                   type="button"
                   onClick={() => setShowAddSupplierModal(true)}
-                  title="Add New Supplier / Purchaser"
+                  title="Add New Party / Purchaser"
                   className="px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg flex items-center justify-center cursor-pointer transition-colors"
                 >
                   <Building2 className="w-4 h-4" />
@@ -1435,7 +1435,7 @@ export default function AdminPurchases() {
               <SmartSearchBar
                 value={purchaseSearchTerm}
                 onChange={setPurchaseSearchTerm}
-                placeholder="Search supplier, bill #, items..."
+                placeholder="Search party, bill #, items..."
                 entityFilter={['supplier', 'product']}
                 size="sm"
               />
@@ -1472,7 +1472,7 @@ export default function AdminPurchases() {
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-extrabold text-slate-900 text-sm">
-                            {isOpeningStock ? (supplierObj?.name || 'Opening Stock (Initial Inventory Setup)') : (supplierObj?.name || 'Unknown Supplier')}
+                            {isOpeningStock ? (supplierObj?.name || 'Opening Stock (Initial Inventory Setup)') : (supplierObj?.name || 'Unknown Party')}
                           </span>
                           {isOpeningStock && (
                             <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
@@ -1646,7 +1646,7 @@ export default function AdminPurchases() {
                   <Building2 className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-extrabold text-sm text-slate-800">Add New Supplier / Purchaser</h3>
+                  <h3 className="font-extrabold text-sm text-slate-800">Add New Party / Purchaser</h3>
                   <p className="text-xs text-slate-500 font-medium">Register a vendor/purchaser for stock inwards</p>
                 </div>
               </div>
@@ -1662,7 +1662,7 @@ export default function AdminPurchases() {
             <form onSubmit={handleSaveNewSupplier} className="space-y-3.5 text-xs">
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-                  Supplier / Purchaser Company Name <span className="text-red-500">*</span>
+                  Party / Purchaser Company Name <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -2484,13 +2484,13 @@ export default function AdminPurchases() {
               {/* Top Details Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-slate-50/80 rounded-xl border border-slate-200">
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Supplier</label>
+                  <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">Party</label>
                   <select
                     value={editSupplierId}
                     onChange={(e) => setEditSupplierId(e.target.value)}
                     className="w-full border border-slate-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500 font-bold text-slate-800 bg-white"
                   >
-                    <option value="">-- Choose Supplier --</option>
+                    <option value="">-- Choose Party --</option>
                     {suppliers.map(s => (
                       <option key={s.id} value={s.id}>{s.name} ({s.gstin || 'URP'})</option>
                     ))}

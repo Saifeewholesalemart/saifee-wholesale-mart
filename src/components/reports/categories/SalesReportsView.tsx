@@ -193,7 +193,7 @@ export default function SalesReportsView({
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Performance Indicators</h3>
             <div className="space-y-3 text-xs">
               <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 flex justify-between items-center">
-                <span className="text-slate-500 font-medium">Active Retailers Billed</span>
+                <span className="text-slate-500 font-medium">Active Parties Billed</span>
                 <span className="font-extrabold text-slate-800">{summary.retailerCount} stores</span>
               </div>
               <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 flex justify-between items-center">
@@ -287,7 +287,7 @@ export default function SalesReportsView({
           columns={[
             { header: 'Date', key: 'date', render: (r) => <span className="font-bold text-slate-800">{r.date}</span> },
             { header: 'Invoices', key: 'invoiceCount', format: 'number' as const, align: 'center' as const },
-            { header: 'Retailers', key: 'retailerCount', format: 'number' as const, align: 'center' as const },
+            { header: 'Parties', key: 'retailerCount', format: 'number' as const, align: 'center' as const },
             { header: 'Units Sold', key: 'quantitySold', format: 'number' as const, align: 'right' as const },
             { header: 'Gross Sales', key: 'grossSales', format: 'currency' as const, align: 'right' as const },
             { header: 'Discount', key: 'discount', format: 'currency' as const, align: 'right' as const },
@@ -435,7 +435,7 @@ export default function SalesReportsView({
               <span className="font-bold text-indigo-600 hover:underline">{r.invoiceNumber}</span>
             )},
             { header: 'Date', key: 'invoiceDate' },
-            { header: 'Retailer', render: (r) => (
+            { header: 'Party', render: (r) => (
               <div>
                 <span className="font-bold text-slate-800 block">{r.retailerName}</span>
                 <span className="text-xs text-slate-500 font-medium">{r.retailerCode}</span>

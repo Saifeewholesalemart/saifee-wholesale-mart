@@ -246,13 +246,13 @@ export default function AddRetailerModal({
         }
       }
     } catch (err: any) {
-      setErrors(prev => ({ ...prev, form: err.message || 'Failed to save retailer' }));
+      setErrors(prev => ({ ...prev, form: err.message || 'Failed to save party' }));
     } finally {
       setSubmitting(false);
     }
   };
 
-  const modalTitle = title || (isEditing ? 'Edit Retailer Profile' : isQuickAdd ? 'Quick Register Walk-in Customer' : 'Register New Retailer Shop');
+  const modalTitle = title || (isEditing ? 'Edit Party Profile' : isQuickAdd ? 'Quick Register Walk-in Customer' : 'Register New Party Shop');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto">
@@ -277,7 +277,7 @@ export default function AddRetailerModal({
                 )}
               </div>
               <p className="text-xs text-slate-300 font-medium mt-0.5">
-                {isEditing ? `Updating ${initialData?.retailer_code || 'Retailer'}` : `Assigned ID: ${nextCodePreview || 'Auto-generated'}`}
+                {isEditing ? `Updating ${initialData?.retailer_code || 'Party'}` : `Assigned ID: ${nextCodePreview || 'Auto-generated'}`}
               </p>
             </div>
           </div>
@@ -493,7 +493,7 @@ export default function AddRetailerModal({
                   Assigned Product Categories
                 </label>
                 <p className="text-[11px] text-slate-500 font-normal">
-                  Control which product categories this retailer can order from.
+                  Control which product categories this party can order from.
                 </p>
               </div>
 
@@ -615,7 +615,7 @@ export default function AddRetailerModal({
               className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-black rounded-xl text-xs shadow-md shadow-indigo-900/10 transition-all flex items-center gap-1.5 cursor-pointer"
             >
               <Check className="w-4 h-4" />
-              <span>{isEditing ? 'Save Changes' : isQuickAdd ? 'Add & Select Customer' : 'Register Retailer'}</span>
+              <span>{isEditing ? 'Save Changes' : isQuickAdd ? 'Add & Select Customer' : 'Register Party'}</span>
             </button>
           </div>
         </form>

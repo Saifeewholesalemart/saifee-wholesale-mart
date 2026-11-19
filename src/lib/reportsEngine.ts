@@ -1463,7 +1463,7 @@ export function getInvoiceWiseSales(filters: ReportFilterState, db: DbState, use
         invoiceId: inv.id,
         invoiceNumber: inv.invoice_number,
         invoiceDate: inv.date.slice(0, 10),
-        retailerName: ret?.shop_name || 'Retailer',
+        retailerName: ret?.shop_name || 'Party',
         retailerCode: ret?.retailer_code || 'RET',
         salespersonName,
         itemCount: items.length,
@@ -1863,7 +1863,7 @@ export function getInvoiceWiseProfit(filters: ReportFilterState, db: DbState, us
         invoiceNumber: inv.invoice_number,
         invoiceDate: inv.date.slice(0, 10),
         retailerId: inv.retailer_id,
-        retailerName: ret?.shop_name || 'Retailer',
+        retailerName: ret?.shop_name || 'Party',
         retailerCode: ret?.retailer_code || 'RET',
         city: ret?.city || '',
         salespersonName,
@@ -2751,7 +2751,7 @@ export function getPurchaseSummary(filters: ReportFilterState, db: DbState, user
     })
     .map(p => {
       const supp = (db.suppliers || []).find(s => s.id === p.supplier_id || s.name.toLowerCase() === p.supplier_id.toLowerCase());
-      const supplierName = supp?.name || (p as any).supplier_name || p.supplier_id || 'Supplier';
+      const supplierName = supp?.name || (p as any).supplier_name || p.supplier_id || 'Party';
       let totalQty = 0;
       let totalDiscount = 0;
       let purchaseValue = 0;
@@ -2848,7 +2848,7 @@ export function getPurchaseRateHistory(filters: ReportFilterState, db: DbState, 
     if (isPartyFiltered && !isPartyMatchingPurchase(p.supplier_id, selectedPartyId, db.suppliers)) return;
 
     const supp = (db.suppliers || []).find(s => s.id === p.supplier_id || s.name.toLowerCase() === p.supplier_id.toLowerCase());
-    const supplierName = supp?.name || (p as any).supplier_name || p.supplier_id || 'Supplier';
+    const supplierName = supp?.name || (p as any).supplier_name || p.supplier_id || 'Party';
 
     p.items?.forEach(item => {
       const prod = byId(db.products).get(item.product_id);
@@ -3212,7 +3212,7 @@ export function getPaymentCollection(filters: ReportFilterState, db: DbState, us
         paymentId: p.id,
         paymentDate: p.date.slice(0, 10),
         paymentNumber: p.payment_number,
-        retailerName: ret?.shop_name || 'Retailer',
+        retailerName: ret?.shop_name || 'Party',
         retailerCode: ret?.retailer_code || 'RET',
         method: p.method,
         amountReceived: Math.round(p.amount),
@@ -3372,7 +3372,7 @@ export function getOrderSummary(filters: ReportFilterState, db: DbState, user: U
         orderId: o.id,
         orderNumber: o.order_number,
         orderDate: o.order_date.slice(0, 10),
-        retailerName: ret?.shop_name || 'Retailer',
+        retailerName: ret?.shop_name || 'Party',
         salespersonName,
         status: o.status,
         itemCount: o.items?.length || 0,
@@ -4818,7 +4818,7 @@ export function getItemReportByParty(
     }
 
     const retailer = retailerMap.get(inv.retailer_id);
-    const partyName = retailer?.shop_name || retailer?.owner_name || inv.retailer_id || 'Retailer';
+    const partyName = retailer?.shop_name || retailer?.owner_name || inv.retailer_id || 'Party';
 
     (inv.items || []).forEach((item, itemIdx) => {
       const accum = productAccumulators.get(item.product_id);
@@ -4936,7 +4936,7 @@ export function getItemReportByParty(
     }
 
     const supplier = supplierMap.get(pur.supplier_id);
-    const supplierName = supplier?.name || pur.supplier_id || 'Supplier';
+    const supplierName = supplier?.name || pur.supplier_id || 'Party';
 
     (pur.items || []).forEach((pItem, pIdx) => {
       const accum = productAccumulators.get(pItem.product_id);

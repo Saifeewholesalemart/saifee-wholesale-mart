@@ -157,7 +157,7 @@ export default function BillingTerminal() {
   const {
     products, retailers, invoices, batches, activeCompanyId, currentUser, orders,
     postSalesInvoiceAtomic, updateInvoice, payInvoice, createFullProduct, activeCompany,
-    flowBillShopFromTerminal
+    flowBillShopFromTerminal, updateRetailer
   } = useDb() as any;
   const searchParams = useSearchParams();
   const isPhone = useIsPhone();
@@ -724,7 +724,7 @@ export default function BillingTerminal() {
                   <button key={r.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => pickCustomer(r.id)}
                     className="w-full text-left px-3 py-2 border-b border-slate-100 last:border-0 hover:bg-indigo-50">
                     <div className="font-semibold">{r.shop_name}</div>
-                    <div className="text-xs text-slate-600">{[r.city, r.mobile].filter(Boolean).join(' · ')}{Number(r.outstanding) ? ` · ₹${r2(Number(r.outstanding))} Dr` : ''}</div>
+                    <div className="text-xs text-slate-600">{[r.city, r.mobile].filter(Boolean).join(' · ')}{Number(r.outstanding) ? ` · ₹${r2(Math.abs(Number(r.outstanding)))} ${Number(r.outstanding) > 0 ? 'Dr' : 'Cr'}` : ''}</div>
                   </button>
                 ))}
               </div>

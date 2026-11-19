@@ -124,7 +124,7 @@ export default function PendingItemWarningCard({
                 </span>
               </div>
               <p className="text-amber-900 font-medium text-xs mt-0.5">
-                <strong className="font-black text-amber-950">{warning.productName}</strong> already has <strong className="font-black text-amber-950 underline decoration-amber-400">{warning.totalPendingDisplay}</strong> unfulfilled/pending in earlier orders for this retailer.
+                <strong className="font-black text-amber-950">{warning.productName}</strong> already has <strong className="font-black text-amber-950 underline decoration-amber-400">{warning.totalPendingDisplay}</strong> unfulfilled/pending in earlier orders for this party.
               </p>
             </div>
           </div>
@@ -280,7 +280,7 @@ export function CartPendingSummaryBanner({
                 ⚠️ {warnings.length} item{warnings.length > 1 ? 's' : ''} already have pending quantities
               </h4>
               <p className="text-xs text-amber-900 mt-0.5">
-                The selected retailer already has unfulfilled orders for the following items. Please review to avoid unintended duplicate ordering:
+                The selected party already has unfulfilled orders for the following items. Please review to avoid unintended duplicate ordering:
               </p>
             </div>
           </div>

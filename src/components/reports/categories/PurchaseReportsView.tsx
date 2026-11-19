@@ -32,7 +32,7 @@ export default function PurchaseReportsView({
       <div className="erp-card bg-white p-12 text-center space-y-3 border-amber-200">
         <h3 className="text-sm font-bold text-slate-800">Access Restricted</h3>
         <p className="text-xs text-slate-500 max-w-md mx-auto">
-          Distributor supplier procurement data is restricted to distributor management.
+          Distributor party procurement data is restricted to distributor management.
         </p>
       </div>
     );
@@ -74,7 +74,7 @@ export default function PurchaseReportsView({
   const subTabs = [
     { id: 'summary', label: 'Inward Purchase Register', icon: PackageCheck },
     { id: 'rates', label: 'Variant Inward Rate History', icon: History },
-    { id: 'supplier', label: 'Supplier Procurement Summary', icon: Truck }
+    { id: 'supplier', label: 'Party Procurement Summary', icon: Truck }
   ];
 
   return (
@@ -138,7 +138,7 @@ export default function PurchaseReportsView({
       {showCharts && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in-50 duration-200">
           <HorizontalBarChart
-            title="Procurement by Wholesale Supplier"
+            title="Procurement by Wholesale Party"
             subtitle="Total purchase invoice amount"
             items={supplierRows.map(s => ({
               label: s.supplierName,
@@ -149,7 +149,7 @@ export default function PurchaseReportsView({
           />
 
           <HorizontalBarChart
-            title="Inward Units by Supplier"
+            title="Inward Units by Party"
             subtitle="Commercial carton/box counts"
             isCurrency={false}
             items={supplierRows.map(s => ({
@@ -166,8 +166,8 @@ export default function PurchaseReportsView({
         <ReportTable
           columns={[
             { header: 'Inward Date', key: 'purchaseDate' },
-            { header: 'Supplier', render: (r) => <span className="font-bold text-slate-800">{r.supplierName}</span> },
-            { header: 'Supplier Bill #', key: 'invoiceNumber', render: (r) => (
+            { header: 'Party', render: (r) => <span className="font-bold text-slate-800">{r.supplierName}</span> },
+            { header: 'Party Bill #', key: 'invoiceNumber', render: (r) => (
               <span className="font-semibold text-indigo-600">{r.invoiceNumber}</span>
             )},
             { header: 'Items', key: 'itemCount', format: 'number', align: 'center' },
@@ -220,7 +220,7 @@ export default function PurchaseReportsView({
               );
             }},
             { header: 'Inward Date', key: 'purchaseDate' },
-            { header: 'Supplier', key: 'supplierName' },
+            { header: 'Party', key: 'supplierName' },
             { header: 'Bill #', key: 'invoiceNumber' },
             { header: 'Batch #', key: 'batchNumber', render: (r) => (
               <span className="font-mono text-xs font-bold text-indigo-700">{r.batchNumber}</span>
@@ -249,7 +249,7 @@ export default function PurchaseReportsView({
       {subTab === 'supplier' && (
         <ReportTable
           columns={[
-            { header: 'Supplier Vendor', render: (r) => <span className="font-bold text-slate-800">{r.supplierName}</span> },
+            { header: 'Party', render: (r) => <span className="font-bold text-slate-800">{r.supplierName}</span> },
             { header: 'Inward Invoices', key: 'invoiceCount', format: 'number', align: 'center' },
             { header: 'Units Procured', key: 'quantity', format: 'number', align: 'right' },
             { header: 'Taxable Goods Value', key: 'purchaseValue', format: 'currency', align: 'right' },

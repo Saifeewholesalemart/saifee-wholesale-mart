@@ -81,7 +81,7 @@ export default function OutstandingReportsView({
         <div className="erp-card bg-white p-4 space-y-1 bg-red-50/30 border-red-200">
           <span className="text-xs font-bold text-red-600 uppercase tracking-wider block">Total Outstanding Balance</span>
           <p className="text-base sm:text-lg font-black text-red-600">{formatINR(totalOutstanding)}</p>
-          <span className="text-xs text-red-600 font-semibold">{retailersWithOutstanding} Retailers pending</span>
+          <span className="text-xs text-red-600 font-semibold">{retailersWithOutstanding} Parties pending</span>
         </div>
 
         <div className="erp-card bg-white p-4 space-y-1">
@@ -123,7 +123,7 @@ export default function OutstandingReportsView({
       {subTab === 'overall' && (
         <ReportTable
           columns={[
-            { header: 'Retailer Store', render: (r) => (
+            { header: 'Party Store', render: (r) => (
               <div>
                 <span className="font-bold text-slate-800 block">{r.retailerName}</span>
                 <span className="text-xs text-slate-500 font-medium">{r.retailerCode} &bull; {r.city}</span>
@@ -169,7 +169,7 @@ export default function OutstandingReportsView({
               <span className="font-bold text-indigo-600 hover:underline">{r.invoiceNumber}</span>
             )},
             { header: 'Date', key: 'invoiceDate' },
-            { header: 'Retailer', render: (r) => (
+            { header: 'Party', render: (r) => (
               <div>
                 <span className="font-bold text-slate-800 block">{r.retailerName}</span>
                 <span className="text-xs text-slate-500 font-medium">{r.retailerCode}</span>
@@ -254,7 +254,7 @@ export default function OutstandingReportsView({
             { header: 'Receipt #', key: 'paymentNumber', render: (r) => (
               <span className="font-mono text-xs font-bold text-slate-800">{r.paymentNumber}</span>
             )},
-            { header: 'Retailer', render: (r) => (
+            { header: 'Party', render: (r) => (
               <div>
                 <span className="font-bold text-slate-800 block">{r.retailerName}</span>
                 <span className="text-xs text-slate-500 font-medium">{r.retailerCode}</span>

@@ -157,6 +157,30 @@ export interface Supplier {
   address: string;
   active: boolean;
   business_id?: string;
+  /** the party (in the parties list) this supplier belongs to */
+  party_id?: string;
+  mobile?: string;
+  city?: string;
+  state_code?: string;
+}
+
+/**
+ * Old party type field. Parties now work like Vyapar: there is no customer / supplier type and
+ * every party can be used for sales, orders, purchases and debit notes. Kept so old records load.
+ */
+export type PartyType = 'customer' | 'supplier' | 'both';
+
+/** Party type of a record in the parties (retailers) list; old records are customers. */
+export function partyTypeOf(r?: { party_type?: PartyType } | null): PartyType {
+  return r?.party_type === 'supplier' || r?.party_type === 'both' ? r.party_type : 'customer';
+}
+/** Every party can be sold to (Vyapar style). */
+export function isCustomerParty(_r?: { party_type?: PartyType } | null): boolean {
+  return true;
+}
+/** Every party can be bought from (Vyapar style). */
+export function isSupplierParty(_r?: { party_type?: PartyType } | null): boolean {
+  return true;
 }
 
 export interface Retailer {
@@ -187,6 +211,13 @@ export interface Retailer {
   registered_by?: string; // 'self' or the salesman's profile id
   approved_by?: string;
   approved_at?: string;
+  /** Parties: customer (default), supplier or both */
+  party_type?: PartyType;
+  /** the supplier record (used by purchases) that belongs to this party */
+  linked_supplier_id?: string;
+  /** opening balance: positive = we will receive, negative = we will pay */
+  opening_balance?: number;
+  email?: string;
 }
 
 export interface Category {
@@ -1009,6 +1040,13 @@ export interface CompanyOpeningBalance {
   updated_at?: string;
 }
 
+/** Name shown on screen for a cash flow category (old saved names stay the same in the data). */
+export function cashFlowCategoryLabel(category?: string | null): string {
+  if (category === 'Retailer Payment') return 'Party Payment Received';
+  if (category === 'Supplier Payment') return 'Party Payment Made';
+  return category || '';
+}
+
 export const DEFAULT_CASH_IN_CATEGORIES = [
   'Retailer Payment',
   'Invoice Payment',
@@ -1103,8 +1141,23 @@ export interface PurchaseReturnItem {
   base_unit?: string;
   units_per_trading_unit?: number;
   rate: number;
+  /** debit note line (filled by createDebitNote) */
+  product_name?: string;
+  hsn?: string;
+  mrp?: number;
+  gst_percent?: number;
+  taxable_value?: number;
+  gst_amount?: number;
+  total_amount?: number;
+  discount_amount?: number;
+  batch_number?: string;
+  mfg_date?: string;
+  expiry_date?: string;
+  /** taken from good stock or from damaged stock */
+  condition?: 'Sellable' | 'Damaged';
 }
 
+/** A debit note: goods sent back to a supplier (purchase return), or only an amount. */
 export interface PurchaseReturn {
   id: string;
   purchase_id: string;
@@ -1113,6 +1166,24 @@ export interface PurchaseReturn {
   status: string;
   business_id?: string;
   items?: PurchaseReturnItem[];
+  debit_note_number?: string;
+  supplier_id?: string;
+  party_id?: string;
+  /** 'items' = goods go back item by item; 'general' = only an amount, no items */
+  note_type?: 'items' | 'general';
+  taxable_amount?: number;
+  gst_amount?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
+  round_off?: number;
+  total_amount?: number;
+  gross_taxable?: number;
+  discount_amount?: number;
+  discount_percent?: number;
+  gst_percent?: number;
+  description?: string;
+  created_at?: string;
 }
 
 export interface ProductAlias {
@@ -4790,7 +4861,221 @@ class FMCGDatabase {
     };
     suppliers.push(newSupplier);
     this.saveSuppliers(suppliers);
-    return newSupplier;
+    this.syncSupplierParties();
+    return this.getSuppliers().find(s => s.id === newSupplier.id) || newSupplier;
+  }
+
+  /** Next free party code, e.g. RET-00131 (customers) or SUP-00004 (suppliers). */
+  private nextPartyCode(retailers: Retailer[], prefix: 'RET' | 'SUP'): string {
+    const used = new Set(retailers.map(r => (r.retailer_code || '').trim().toUpperCase()).filter(Boolean));
+    let n = prefix === 'RET' ? 124 : 0;
+    retailers.forEach(r => {
+      const m = (r.retailer_code || '').match(new RegExp(`^${prefix}-0*(\\d+)$`, 'i'));
+      if (m) n = Math.max(n, parseInt(m[1], 10));
+    });
+    let code = '';
+    do { n += 1; code = `${prefix}-${String(n).padStart(5, '0')}`; } while (used.has(code));
+    return code;
+  }
+
+  /**
+   * Every supplier also gets a party (supplier type) in the parties list, so all parties are
+   * in one list. Safe to run again: the party id comes from the supplier id.
+   * Returns how many parties were added.
+   */
+  syncSupplierParties(targetBusinessId?: string): number {
+    const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
+    const suppliers = this.getSuppliers(activeBiz);
+    const retailers = this.getRetailers(activeBiz);
+    let added = 0;
+    let suppliersChanged = false;
+    for (const sup of suppliers) {
+      let party = retailers.find(r => r.id === sup.party_id)
+        || retailers.find(r => r.linked_supplier_id === sup.id)
+        || retailers.find(r => r.id === `pty-${sup.id}`);
+      if (!party) {
+        party = {
+          id: `pty-${sup.id}`,
+          business_id: activeBiz,
+          retailer_code: this.nextPartyCode(retailers, 'SUP'),
+          shop_name: (sup.name || 'Party').trim(),
+          owner_name: '',
+          address: sup.address || '',
+          city: sup.city || '',
+          state_code: sup.state_code || extractStateCode(sup.gstin) || getHomeStateCode(),
+          gstin: sup.gstin?.trim() ? sup.gstin.trim().toUpperCase() : undefined,
+          mobile: sup.mobile || '',
+          credit_limit: 0,
+          outstanding: 0,
+          active: sup.active !== false,
+          approval_status: 'approved',
+          party_type: 'supplier',
+          linked_supplier_id: sup.id,
+          created_at: new Date().toISOString()
+        };
+        retailers.push(party);
+        added++;
+      } else if (party.linked_supplier_id !== sup.id || partyTypeOf(party) === 'customer') {
+        party.linked_supplier_id = sup.id;
+        if (partyTypeOf(party) === 'customer') party.party_type = 'both';
+        party.updated_at = new Date().toISOString();
+        added++;
+      }
+      if (sup.party_id !== party.id) { sup.party_id = party.id; (sup as any).updated_at = new Date().toISOString(); suppliersChanged = true; }
+    }
+    if (added > 0) this.saveRetailers(retailers, activeBiz);
+    if (suppliersChanged) this.saveSuppliers(suppliers, activeBiz);
+    return added;
+  }
+
+  /**
+   * Add or change a party from the Parties form. A supplier (or both) party keeps a supplier
+   * record in step, so it can be picked in purchases.
+   */
+  saveParty(data: {
+    id?: string;
+    name: string;
+    /** ignored: kept for old callers */
+    party_type?: PartyType;
+    contact_name?: string;
+    mobile?: string;
+    email?: string;
+    gstin?: string;
+    address?: string;
+    city?: string;
+    state_code?: string;
+    opening_balance?: number;
+    credit_limit?: number;
+    active?: boolean;
+  }): Retailer {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const retailers = this.getRetailers(activeBiz);
+    const name = (data.name || '').trim();
+    if (!name) throw new Error('Enter the party name.');
+    const gstin = data.gstin?.trim() ? data.gstin.trim().toUpperCase() : undefined;
+    if (gstin && !/^[0-9]{2}[A-Z0-9]{13}$/.test(gstin)) throw new Error('The GSTIN should be 15 letters and numbers, for example 23ABCDE1234F1Z5.');
+    const mobile = (data.mobile || '').trim();
+    if (mobile && !/^[0-9+ -]{10,15}$/.test(mobile)) throw new Error('Enter a valid mobile number.');
+    const dupe = retailers.find(r => r.id !== data.id && r.shop_name.trim().toLowerCase() === name.toLowerCase() && (r.mobile || '') === mobile && !isWalkInRetailerId(r.id));
+    if (dupe) throw new Error(`A party named ${dupe.shop_name}${mobile ? ' with this mobile' : ''} already exists.`);
+    const stateCode = extractStateCode(data.state_code) || extractStateCode(gstin) || getHomeStateCode();
+    const now = new Date().toISOString();
+
+    let party = data.id ? retailers.find(r => r.id === data.id) : undefined;
+    if (data.id && !party) throw new Error('Party not found.');
+    if (!party) {
+      party = {
+        id: `ret-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        business_id: activeBiz,
+        retailer_code: this.nextPartyCode(retailers, 'RET'),
+        shop_name: name,
+        owner_name: (data.contact_name || '').trim(),
+        address: (data.address || '').trim(),
+        city: (data.city || '').trim(),
+        state_code: stateCode,
+        gstin,
+        mobile,
+        credit_limit: Math.max(0, Number(data.credit_limit) || 0),
+        outstanding: 0,
+        active: data.active !== false,
+        approval_status: 'approved',
+        opening_balance: Math.round((Number(data.opening_balance) || 0) * 100) / 100,
+        email: data.email?.trim() || undefined,
+        created_at: now
+      };
+      retailers.unshift(party);
+    } else {
+      party.shop_name = name;
+      party.owner_name = (data.contact_name ?? party.owner_name ?? '').trim();
+      party.address = (data.address ?? party.address ?? '').trim();
+      party.city = (data.city ?? party.city ?? '').trim();
+      party.state_code = stateCode;
+      party.gstin = gstin;
+      party.mobile = mobile;
+      party.email = data.email?.trim() || undefined;
+      if (data.credit_limit !== undefined) party.credit_limit = Math.max(0, Number(data.credit_limit) || 0);
+      if (data.opening_balance !== undefined) party.opening_balance = Math.round((Number(data.opening_balance) || 0) * 100) / 100;
+      if (data.active !== undefined) party.active = data.active;
+      party.updated_at = now;
+    }
+
+    // Keep the supplier record (used by purchases) in step
+    const suppliers = this.getSuppliers(activeBiz);
+    let sup = suppliers.find(x => x.id === party!.linked_supplier_id) || suppliers.find(x => x.party_id === party!.id);
+    {
+      if (!sup) {
+        sup = { id: `s-${party.id}`, business_id: activeBiz, name, gstin: gstin || '', address: party.address, active: true };
+        suppliers.push(sup);
+      }
+      sup.name = name;
+      sup.gstin = gstin || '';
+      sup.address = party.address;
+      sup.mobile = mobile || undefined;
+      sup.city = party.city || undefined;
+      sup.state_code = party.state_code;
+      sup.active = party.active !== false;
+      sup.party_id = party.id;
+      (sup as any).updated_at = now;
+      party.linked_supplier_id = sup.id;
+      this.saveSuppliers(suppliers, activeBiz);
+    }
+    this.saveRetailers(retailers, activeBiz);
+    return party;
+  }
+
+  /**
+   * Vyapar style: every party can be picked in purchases. Purchases still store a supplier id,
+   * so each party gets a linked supplier record (id `s-<party id>`, same on every device), and
+   * the supplier's name, GSTIN, address and state follow the party. Safe to run again.
+   * Returns how many supplier records were added or changed.
+   */
+  syncPartySuppliers(targetBusinessId?: string, onlyPartyId?: string): number {
+    const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
+    const retailers = this.getRetailers(activeBiz);
+    const suppliers = this.getSuppliers(activeBiz);
+    const byId = new Map(suppliers.map(x => [x.id, x]));
+    const now = new Date().toISOString();
+    let changed = 0;
+    let partiesChanged = false;
+    for (const party of retailers) {
+      if (onlyPartyId && party.id !== onlyPartyId) continue;
+      if (isWalkInRetailerId(party.id) || (party as any).approval_status === 'rejected') continue;
+      let sup = (party.linked_supplier_id && byId.get(party.linked_supplier_id))
+        || suppliers.find(x => x.party_id === party.id)
+        || byId.get(`s-${party.id}`);
+      const want = {
+        name: (party.shop_name || '').trim() || 'Party',
+        gstin: party.gstin || '',
+        address: party.address || '',
+        mobile: party.mobile || undefined,
+        city: party.city || undefined,
+        state_code: party.state_code,
+        active: party.active !== false
+      };
+      if (!sup) {
+        sup = { id: `s-${party.id}`, business_id: activeBiz, ...want, party_id: party.id };
+        (sup as any).updated_at = now;
+        suppliers.push(sup);
+        byId.set(sup.id, sup);
+        changed++;
+      } else {
+        const diff = sup.party_id !== party.id || sup.name !== want.name || (sup.gstin || '') !== want.gstin
+          || (sup.address || '') !== want.address || sup.state_code !== want.state_code || (sup.active !== false) !== want.active;
+        if (diff) {
+          Object.assign(sup, want, { party_id: party.id });
+          (sup as any).updated_at = now;
+          changed++;
+        }
+      }
+      if (party.linked_supplier_id !== sup.id) {
+        party.linked_supplier_id = sup.id;
+        party.updated_at = now;
+        partiesChanged = true;
+      }
+    }
+    if (changed > 0) this.saveSuppliers(suppliers, activeBiz);
+    if (partiesChanged) this.saveRetailers(retailers, activeBiz);
+    return changed + (partiesChanged ? 1 : 0);
   }
 
   getRetailers(targetBusinessId?: string): Retailer[] {
@@ -4865,7 +5150,7 @@ class FMCGDatabase {
     const usedCodes = new Set(retailers.map(r => (r.retailer_code || '').trim().toUpperCase()).filter(Boolean));
     if (usedCodes.has(code)) {
       if (data.retailer_code && data.retailer_code.trim()) {
-        throw new Error(`Retailer code ${code} is already used by another shop.`);
+        throw new Error(`Party code ${code} is already used by another shop.`);
       }
       const m = code.match(/RET-0*(\d+)/i);
       let n = m ? parseInt(m[1], 10) : 124;
@@ -7643,6 +7928,197 @@ class FMCGDatabase {
     return all.filter(pr => (pr.business_id || 'biz-saifee') === activeBiz);
   }
 
+  /**
+   * Debit note to a supplier.
+   * Item-wise: the goods leave our stock (good or damaged stock), at the purchase rate.
+   * General: only an amount (rate difference, short supply, scheme...), no items and no stock change.
+   * A discount (% or ₹) can be given on an item-wise note; GST is worked on the value after it.
+   */
+  createDebitNote(data: {
+    partyId: string;
+    purchaseId?: string;
+    returnDate?: string;
+    reason: string;
+    noteType: 'items' | 'general';
+    description?: string;
+    generalAmount?: number;
+    generalGstPercent?: number;
+    discount?: { mode: 'pct' | 'amt'; value: number };
+    items?: {
+      productId: string;
+      quantity: number;      // pieces
+      rate: number;          // per piece, before GST
+      gstPercent?: number;
+      condition?: 'Sellable' | 'Damaged';
+      batchNumber?: string;
+      mfgDate?: string;
+      expiryDate?: string;
+      mrp?: number;
+    }[];
+  }, user?: { id: string; name: string }): PurchaseReturn {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    let party = this.getRetailers(activeBiz).find(r => r.id === data.partyId);
+    if (!party) throw new Error('Choose the party.');
+    if (!String(data.reason || '').trim()) throw new Error('Enter the reason.');
+    // any party can get a debit note (Vyapar style): make sure it has a supplier record
+    if (!party.linked_supplier_id) {
+      this.syncPartySuppliers(activeBiz, party.id);
+      party = this.getRetailers(activeBiz).find(r => r.id === data.partyId) || party;
+    }
+    const purchases = this.getPurchases(activeBiz);
+    const purchase = data.purchaseId ? purchases.find(p => p.id === data.purchaseId) : undefined;
+    if (data.purchaseId && !purchase) throw new Error('Purchase bill not found.');
+    if (purchase && party.linked_supplier_id && purchase.supplier_id !== party.linked_supplier_id) {
+      throw new Error('This purchase bill is from another party.');
+    }
+    const products = this.getProducts(activeBiz);
+    const notes = this.getPurchaseReturns(activeBiz);
+    const number = nextDocNumber(`DN-${new Date().getFullYear()}-`, notes.map(n => n.debit_note_number));
+    const id = `dn-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const inter = !isIntraStateSupply(party.state_code || getHomeStateCode());
+    const r2 = (x: number) => Math.round(x * 100) / 100;
+    const now = new Date().toISOString();
+
+    let taxable = 0; let gst = 0; let gross = 0; let discountTotal = 0;
+    const lines: PurchaseReturnItem[] = [];
+
+    if (data.noteType === 'general') {
+      const amount = r2(Number(data.generalAmount) || 0);
+      if (!(amount > 0)) throw new Error('Enter the amount of the debit note.');
+      taxable = amount;
+      gross = amount;
+      gst = r2(amount * Math.max(0, Number(data.generalGstPercent) || 0) / 100);
+    } else {
+      const items = (data.items || []).filter(i => i.productId && Number(i.quantity) > 0);
+      if (items.length === 0) throw new Error('Add at least one item with a quantity.');
+      if (items.some(i => !Number.isInteger(Number(i.quantity)))) throw new Error('Quantity must be a whole number.');
+      if (items.some(i => Number(i.rate) < 0)) throw new Error('A rate cannot be negative.');
+      if (items.some(i => i.mfgDate && i.expiryDate && i.mfgDate > i.expiryDate)) throw new Error('The expiry date cannot be before the manufacturing date.');
+      const values = items.map(i => r2(Number(i.quantity) * Number(i.rate)));
+      gross = r2(values.reduce((a, b) => a + b, 0));
+      const dv = Math.max(0, Number(data.discount?.value) || 0);
+      discountTotal = r2(Math.min(gross, data.discount?.mode === 'pct' ? gross * Math.min(100, dv) / 100 : dv));
+      let given = 0;
+      const lastIdx = values.reduce((last, v, i) => (v > 0 ? i : last), -1);
+
+      const batches = this.getBatches(activeBiz);
+      const inventory = this.getInventory(activeBiz);
+      const ledgers = this.getLedger(activeBiz);
+
+      items.forEach((it, idx) => {
+        const prod = products.find(p => p.id === it.productId);
+        const qty = Number(it.quantity);
+        const share = discountTotal > 0 && gross > 0
+          ? (idx === lastIdx ? r2(discountTotal - given) : r2(discountTotal * values[idx] / gross))
+          : 0;
+        given = r2(given + share);
+        const lineTaxable = r2(Math.max(0, values[idx] - share));
+        const gstPct = it.gstPercent !== undefined && it.gstPercent !== null ? Math.max(0, Number(it.gstPercent) || 0) : (Number(prod?.gst_percent) || 0);
+        const lineGst = r2(lineTaxable * gstPct / 100);
+        taxable += lineTaxable;
+        gst += lineGst;
+        const condition = it.condition === 'Damaged' ? 'Damaged' : 'Sellable';
+        lines.push({
+          id: `dn-item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          purchase_return_id: id,
+          product_id: it.productId,
+          product_name: prod?.name,
+          quantity: qty,
+          base_qty: qty,
+          carton_qty: 0,
+          loose_qty: qty,
+          trading_unit: 'Piece',
+          base_unit: 'Piece',
+          units_per_trading_unit: 1,
+          rate: r2(Number(it.rate)),
+          hsn: prod?.hsn,
+          mrp: Number(it.mrp) > 0 ? r2(Number(it.mrp)) : prod?.mrp,
+          gst_percent: gstPct,
+          taxable_value: lineTaxable,
+          gst_amount: lineGst,
+          total_amount: r2(lineTaxable + lineGst),
+          discount_amount: share || undefined,
+          batch_number: it.batchNumber?.trim() || undefined,
+          mfg_date: it.mfgDate || undefined,
+          expiry_date: it.expiryDate || undefined,
+          condition
+        });
+
+        // Goods leave our stock
+        if (condition === 'Damaged') {
+          const row = this.inventoryRowFor(inventory, it.productId, activeBiz);
+          row.damaged_qty = Math.max(0, (Number(row.damaged_qty) || 0) - qty);
+          row.updated_at = now;
+        } else {
+          let rem = qty;
+          const named = it.batchNumber?.trim()
+            ? batches.find(b => b.product_id === it.productId && String(b.batch_number || '').trim().toLowerCase() === it.batchNumber!.trim().toLowerCase())
+            : undefined;
+          if (named && named.quantity > 0) {
+            const take = Math.min(named.quantity, rem);
+            named.quantity -= take;
+            rem -= take;
+            const row = this.inventoryRowFor(inventory, it.productId, activeBiz);
+            row.physical_qty = (Number(row.physical_qty) || 0) - take;
+            row.available_qty = row.physical_qty - (Number(row.reserved_qty) || 0);
+            row.updated_at = now;
+          }
+          if (rem > 0) this.moveStockAllowNegative(batches, inventory, it.productId, rem, activeBiz);
+        }
+        ledgers.push({
+          id: `led-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          product_id: it.productId,
+          change_qty: -qty,
+          direction: 'OUT',
+          reason: `Debit note ${number} (${condition === 'Damaged' ? 'damaged stock' : 'returned to party'}) - ${party.shop_name}`,
+          reference_id: number,
+          user_id: user?.id || this.currentUserId,
+          business_id: activeBiz,
+          created_at: data.returnDate || now
+        } as any);
+      });
+      this.saveBatches(batches, activeBiz);
+      this.saveInventory(inventory, activeBiz);
+      this.saveLedger(ledgers, activeBiz);
+    }
+
+    taxable = r2(taxable);
+    gst = r2(gst);
+    const cgst = inter ? 0 : r2(gst / 2);
+    const sgst = inter ? 0 : r2(gst - cgst);
+    const igst = inter ? gst : 0;
+    const exact = taxable + gst;
+    const total = Math.round(exact);
+
+    const note: PurchaseReturn = {
+      id,
+      debit_note_number: number,
+      purchase_id: purchase?.id || '',
+      supplier_id: party.linked_supplier_id || purchase?.supplier_id,
+      party_id: party.id,
+      return_date: data.returnDate || now,
+      reason: data.reason.trim(),
+      status: 'Confirmed',
+      business_id: activeBiz,
+      note_type: data.noteType,
+      items: lines,
+      taxable_amount: taxable,
+      gst_amount: gst,
+      cgst, sgst, igst,
+      round_off: r2(total - exact),
+      total_amount: total,
+      gross_taxable: gross,
+      discount_amount: discountTotal || undefined,
+      discount_percent: data.noteType === 'items' && data.discount?.mode === 'pct' && discountTotal > 0 ? Number(data.discount.value) : undefined,
+      gst_percent: data.noteType === 'general' ? Math.max(0, Number(data.generalGstPercent) || 0) : undefined,
+      description: data.description?.trim() || undefined,
+      created_at: now
+    };
+    notes.push(note);
+    this.savePurchaseReturns(notes, activeBiz);
+    return note;
+  }
+
   savePurchaseReturns(returns: PurchaseReturn[], targetBusinessId?: string): void {
     const activeBiz = targetBusinessId || this.getActiveBusinessCompanyId();
     const all = this.getStore<PurchaseReturn>('fmcg_purchase_returns', []);
@@ -7694,12 +8170,12 @@ class FMCGDatabase {
         category: 'Retailer Payment',
         party_type: 'retailer',
         party_id: pay.retailer_id,
-        party_name: ret?.shop_name || 'Retailer',
+        party_name: ret?.shop_name || 'Party',
         reference_number: pay.reference_number || pay.payment_number,
         source_type: 'Retailer Payment',
         source_id: pay.id,
         linked_retailer_id: pay.retailer_id,
-        remarks: pay.notes || `Payment received from ${ret?.shop_name || 'Retailer'} (Ref: ${pay.payment_number})`,
+        remarks: pay.notes || `Payment received from ${ret?.shop_name || 'Party'} (Ref: ${pay.payment_number})`,
         status: 'Active',
         created_by: 'System (Payment Sync)',
         created_at: pay.date || new Date().toISOString(),
@@ -8594,7 +9070,7 @@ class FMCGDatabase {
             invoice_number: inv.invoice_number,
             invoice_id: inv.id,
             retailer_id: inv.retailer_id,
-            retailer_name: targetRetailer?.shop_name || targetRetailer?.owner_name || 'Retailer Customer',
+            retailer_name: targetRetailer?.shop_name || targetRetailer?.owner_name || 'Party',
             retailer_city: targetRetailer?.city || 'Nagpur',
             date: inv.date || (inv as any).created_at,
             quantity: item.quantity,
@@ -8733,7 +9209,7 @@ class FMCGDatabase {
             invoice_number: inv.invoice_number,
             invoice_id: inv.id,
             retailer_id: inv.retailer_id,
-            retailer_name: retailer?.shop_name || retailer?.owner_name || 'Retailer Customer',
+            retailer_name: retailer?.shop_name || retailer?.owner_name || 'Party',
             retailer_city: retailer?.city || 'Nagpur',
             date: inv.date || (inv as any).created_at,
             quantity: item.quantity,
@@ -9119,7 +9595,7 @@ class FMCGDatabase {
           category: 'Retailer Payment',
           party_type: 'retailer',
           party_id: ret.id,
-          party_name: ret.shop_name || 'Retailer',
+          party_name: ret.shop_name || 'Party',
           reference_number: payNum,
           source_type: 'Retailer Payment',
           source_id: payId,
@@ -9695,7 +10171,7 @@ class FMCGDatabase {
         invoice_id: oldInvoice.id,
         invoice_number: oldInvoice.invoice_number,
         retailer_id: ret?.id || '',
-        retailer_name: ret?.shop_name || 'Retailer',
+        retailer_name: ret?.shop_name || 'Party',
         admin_id: editorId,
         admin_name: editorName,
         timestamp: new Date().toISOString(),
@@ -10828,7 +11304,7 @@ class FMCGDatabase {
     this.addItemActivityLog({
       product_id: targetOrders[0]?.items?.[0]?.product_id || '',
       action: 'Consolidated Packing Completed',
-      details: `Consolidated packing completed for retailer (${targetOrders.length} orders packed, ${fulfilledBackorders.length} backorders fulfilled). ${newBackorder ? `Shortage rolled into Backorder ${newBackorder.order_number} (${shortageBackorderItems.length} SKUs).` : '100% full supply achieved.'}`,
+      details: `Consolidated packing completed for party (${targetOrders.length} orders packed, ${fulfilledBackorders.length} backorders fulfilled). ${newBackorder ? `Shortage rolled into Backorder ${newBackorder.order_number} (${shortageBackorderItems.length} SKUs).` : '100% full supply achieved.'}`,
       reference_id: targetOrders[0]?.id || retailerId,
       user_id: adminUser?.id || this.currentUserId,
       user_name: adminUser?.name || 'Admin User'
@@ -12288,12 +12764,12 @@ class FMCGDatabase {
         category: 'Retailer Payment',
         party_type: 'retailer',
         party_id: retailerId,
-        party_name: ret?.shop_name || 'Retailer',
+        party_name: ret?.shop_name || 'Party',
         reference_number: newPayment.reference_number || newPayment.payment_number,
         source_type: 'Retailer Payment',
         source_id: newPayment.id,
         linked_retailer_id: retailerId,
-        remarks: newPayment.notes || `Payment received from ${ret?.shop_name || 'Retailer'} (Ref: ${newPayment.payment_number})`,
+        remarks: newPayment.notes || `Payment received from ${ret?.shop_name || 'Party'} (Ref: ${newPayment.payment_number})`,
         created_by: 'System (Payment Sync)'
       });
     } catch (e) {
@@ -14579,7 +15055,7 @@ class FMCGDatabase {
         transport_mode: dispatchInfo.transportMode || 'Distributor Delivery Van',
         vehicle_number: dispatchInfo.vehicleNumber || 'MH-04-AZ-4592',
         delivery_person: dispatchInfo.deliveryPerson || 'Delivery Staff',
-        notes: dispatchInfo.notes || 'Dispatched from Retailer Packing Lot',
+        notes: dispatchInfo.notes || 'Dispatched from Party Packing Lot',
         total_quantity: totalDispatchedUnits,
         items: challanItems,
         business_id: activeBiz,
@@ -14670,7 +15146,7 @@ class FMCGDatabase {
     // Audit Log
     this.addItemActivityLog({
       product_id: activePackedItems[0]?.productId || '',
-      action: '1-Bill Retailer Lot Dispatched & Invoiced',
+      action: '1-Bill Party Lot Dispatched & Invoiced',
       details: `Generated single Tax Invoice ${invoiceNumber} for ${ret.shop_name} (Total: ₹${grandTotal}). Payment: ${paymentMode}, Paid: ₹${amountReceived}, Outstanding: ₹${outstanding}, Status: ${paymentStatus}. Merged orders: ${sourceOrders.map(o => o.order_number).join(', ')}.`,
       reference_id: newInvoice.id,
       user_id: adminUser?.id || this.currentUserId,
@@ -14745,7 +15221,7 @@ class FMCGDatabase {
       this.addItemActivityLog({
         product_id: order?.items?.[0]?.product_id || '',
         action: 'Invoice Settled on Credit Terms',
-        details: `Invoice ${inv.invoice_number} (Order ${order?.order_number || ''}): Confirmed on Credit / Pay Later terms for ₹${inv.outstanding_amount}. No payment receipt generated. Retailer ledger balance remains due: ₹${ret?.outstanding || 0}.`,
+        details: `Invoice ${inv.invoice_number} (Order ${order?.order_number || ''}): Confirmed on Credit / Pay Later terms for ₹${inv.outstanding_amount}. No payment receipt generated. Party ledger balance remains due: ₹${ret?.outstanding || 0}.`,
         reference_id: inv.id,
         user_id: adminUser?.id || this.currentUserId,
         user_name: adminUser?.name || 'Admin User'

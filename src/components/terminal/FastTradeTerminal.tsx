@@ -631,7 +631,7 @@ export default function FastTradeTerminal() {
                       setShowCustomerDropdown(true);
                     }}
                     onFocus={() => setShowCustomerDropdown(true)}
-                    placeholder="[F2] Search Retailer / Customer (Name, Shop, Code)..."
+                    placeholder="[F2] Search Party (Name, Shop, Code)..."
                     className="w-full bg-slate-950 border border-slate-700 focus:border-amber-400 text-white rounded-lg px-3 py-1.5 text-xs font-bold outline-none"
                   />
                   {customerSearchQuery && (

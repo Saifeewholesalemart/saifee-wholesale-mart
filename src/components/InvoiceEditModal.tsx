@@ -417,7 +417,7 @@ export default function InvoiceEditModal({
               <span className="text-slate-500 font-bold hidden sm:inline">&bull;</span>
               <div className="flex items-center gap-1.5 text-xs text-amber-200 font-bold">
                 <Store className="w-4 h-4 text-amber-300" />
-                <span>RETAILER: {retailer.shop_name}</span>
+                <span>PARTY: {retailer.shop_name}</span>
                 <span className="text-slate-300 font-normal text-xs">({retailer.owner_name}, {retailer.city || '-'})</span>
               </div>
             </div>
@@ -683,7 +683,7 @@ export default function InvoiceEditModal({
               {/* Retailer Outstanding Impact Box */}
               <div className="p-3.5 bg-white border border-slate-200 rounded-xl space-y-2">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500 font-medium">Retailer Current Outstanding:</span>
+                  <span className="text-slate-500 font-medium">Party Current Outstanding:</span>
                   <span className="font-bold text-slate-800">₹{computedSummary.currentRetailerOutstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
@@ -693,7 +693,7 @@ export default function InvoiceEditModal({
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100 font-black">
-                  <span className="text-indigo-900">Projected New Retailer Outstanding:</span>
+                  <span className="text-indigo-900">Projected New Party Outstanding:</span>
                   <span className="text-sm text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
                     ₹{computedSummary.projectedRetailerOutstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </span>

@@ -62,7 +62,7 @@ export default function GSTReportsView({
         invoiceId: inv.id,
         invoiceNumber: inv.invoice_number,
         invoiceDate: inv.date.slice(0, 10),
-        retailerName: ret?.shop_name || 'Retailer',
+        retailerName: ret?.shop_name || 'Party',
         retailerGstin: ret?.gstin || 'URP (Unregistered)',
         taxableValue: Math.round(inv.taxable_value),
         cgst: Math.round(inv.cgst),
@@ -175,7 +175,7 @@ export default function GSTReportsView({
               <span className="font-bold text-indigo-600 hover:underline">{r.invoiceNumber}</span>
             )},
             { header: 'Date', key: 'invoiceDate' },
-            { header: 'Retailer', key: 'retailerName' },
+            { header: 'Party', key: 'retailerName' },
             { header: 'GSTIN', key: 'retailerGstin', render: (r) => (
               <span className="font-mono text-xs font-semibold text-slate-700">{r.retailerGstin}</span>
             )},

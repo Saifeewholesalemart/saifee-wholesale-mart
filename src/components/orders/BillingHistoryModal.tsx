@@ -188,7 +188,7 @@ export default function BillingHistoryModal({
               <div className="flex items-center gap-2.5 text-xs text-slate-300 flex-wrap font-medium">
                 <span>Product: <strong className="text-amber-300 font-bold">{displayProductName}</strong></span>
                 <span>&bull;</span>
-                <span>Retailer: <strong className="text-emerald-300 font-bold">{targetRetailer?.shop_name || 'All Retailers'}</strong></span>
+                <span>Party: <strong className="text-emerald-300 font-bold">{targetRetailer?.shop_name || 'All Parties'}</strong></span>
                 <span>&bull;</span>
                 <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 text-[11px] font-mono font-black">
                   MRP ₹{Number(displayMrp).toFixed(2)}
@@ -253,7 +253,7 @@ export default function BillingHistoryModal({
                 }`}
               >
                 <Store className="w-3.5 h-3.5" />
-                <span>This Retailer ({targetRetailer?.shop_name || 'Selected'})</span>
+                <span>This Party ({targetRetailer?.shop_name || 'Selected'})</span>
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-black ${
                   activeTab === 'same_retailer' ? 'bg-white text-indigo-900' : 'bg-slate-100 text-slate-700'
                 }`}>
@@ -272,7 +272,7 @@ export default function BillingHistoryModal({
               }`}
             >
               <Globe className="w-3.5 h-3.5" />
-              <span>All Retailers (Market-Wide)</span>
+              <span>All Parties (Market-Wide)</span>
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-black ${
                 activeTab === 'all_retailers' ? 'bg-white text-indigo-900' : 'bg-slate-100 text-slate-700'
               }`}>
@@ -304,7 +304,7 @@ export default function BillingHistoryModal({
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
               <input
                 type="text"
-                placeholder="Filter by invoice #, retailer, salesperson..."
+                placeholder="Filter by invoice #, party, salesperson..."
                 value={filterSearch}
                 onChange={(e) => setFilterSearch(e.target.value)}
                 className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
@@ -337,7 +337,7 @@ export default function BillingHistoryModal({
                   </div>
                   <div>
                     <h4 className="text-sm font-black text-slate-900 uppercase">
-                      Last 5 Billing Details &mdash; This Retailer
+                      Last 5 Billing Details &mdash; This Party
                     </h4>
                     <p className="text-xs text-slate-500 font-medium">
                       Previous actual billings to <strong>{targetRetailer?.shop_name}</strong> for {displayProductName}
@@ -480,7 +480,7 @@ export default function BillingHistoryModal({
                   </div>
                   <div>
                     <h4 className="text-sm font-black text-slate-900 uppercase">
-                      Last 5 Billing Details &mdash; All Retailers
+                      Last 5 Billing Details &mdash; All Parties
                     </h4>
                     <p className="text-xs text-slate-500 font-medium">
                       Market-wide recent billings of {displayProductName} across all customers in {activeCompany?.name || 'Company'}
@@ -495,7 +495,7 @@ export default function BillingHistoryModal({
 
               {filteredAllRetailers.length === 0 ? (
                 <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs text-slate-400 font-medium">
-                  No historical billings recorded for this product variant across any retailers.
+                  No historical billings recorded for this product variant across any parties.
                 </div>
               ) : (
                 <>
@@ -505,7 +505,7 @@ export default function BillingHistoryModal({
                       <thead>
                         <tr className="border-b border-slate-200 text-[11px] font-black text-slate-600 uppercase bg-slate-50/80">
                           <th className="p-2.5">Invoice</th>
-                          <th className="p-2.5">Retailer</th>
+                          <th className="p-2.5">Party</th>
                           <th className="p-2.5">Date</th>
                           <th className="p-2.5 text-center">Qty</th>
                           <th className="p-2.5 text-right text-slate-700">Purchase Rate</th>
@@ -658,7 +658,7 @@ export default function BillingHistoryModal({
 
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/70">
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Retailer</span>
+                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Party</span>
                   <span className="font-bold text-slate-900">{inspectRecord.retailer_name}</span>
                   {inspectRecord.retailer_city && <span className="text-[11px] text-slate-500 block">{inspectRecord.retailer_city}</span>}
                 </div>

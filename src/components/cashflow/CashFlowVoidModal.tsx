@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { X, Ban, AlertTriangle, ShieldAlert, CheckCircle2 } from 'lucide-react';
-import { CashFlowTransaction } from '@/lib/db';
+import { CashFlowTransaction, cashFlowCategoryLabel } from '@/lib/db';
 import { useDb } from '@/context/DbContext';
 
 function formatINR(val?: number) {
@@ -101,7 +101,7 @@ export default function CashFlowVoidModal({
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-500 font-medium">Payment Mode &amp; Category:</span>
-              <span className="font-semibold text-slate-700">{transaction.payment_mode} &bull; {transaction.category}</span>
+              <span className="font-semibold text-slate-700">{transaction.payment_mode} &bull; {cashFlowCategoryLabel(transaction.category)}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-500 font-medium">Date:</span>

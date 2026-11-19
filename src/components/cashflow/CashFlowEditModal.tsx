@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { 
   CashFlowTransaction, CashFlowPaymentMode,
-  DEFAULT_CASH_IN_CATEGORIES, DEFAULT_CASH_OUT_CATEGORIES 
+  DEFAULT_CASH_IN_CATEGORIES, DEFAULT_CASH_OUT_CATEGORIES, cashFlowCategoryLabel
 } from '@/lib/db';
 import { useDb } from '@/context/DbContext';
 
@@ -199,7 +199,7 @@ export default function CashFlowEditModal({
                 className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-slate-800 font-semibold focus:border-indigo-500 outline-none"
               >
                 {categories.map((c) => (
-                  <option key={c} value={c}>{c}</option>
+                  <option key={c} value={c}>{cashFlowCategoryLabel(c)}</option>
                 ))}
               </select>
             </div>

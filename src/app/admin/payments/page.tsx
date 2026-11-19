@@ -13,7 +13,7 @@ import {
   Wallet, RefreshCw, AlertCircle, Sparkles, Building2, User, Phone,
   Layers, ChevronDown, Check, ArrowRight
 } from 'lucide-react';
-import { Retailer, Payment, Invoice, formatQuantityDisplay } from '@/lib/db';
+import { Retailer, Payment, Invoice, formatQuantityDisplay, isCustomerParty } from '@/lib/db';
 import DateRangeFilterBar, { 
   DateRange, DatePreset, computeDateRange, formatDateToDisplay 
 } from '@/components/payments/DateRangeFilterBar';
@@ -71,7 +71,9 @@ interface LedgerRow {
 }
 
 function AdminPaymentsContent() {
-  const { retailers, payments, invoices, salesReturns, products, payInvoice, activeCompany } = useDb();
+  const { retailers: allParties, payments, invoices, salesReturns, products, payInvoice, activeCompany } = useDb();
+  // money received from customers (supplier-only parties have no sale bills)
+  const retailers = useMemo(() => allParties.filter(isCustomerParty), [allParties]);
   const router = useRouter();
   const searchParams = useSearchParams();
   
@@ -131,7 +133,7 @@ function AdminPaymentsContent() {
     e.preventDefault();
     const targetRetailerId = recordRetailerId || selectedRetailerId;
     if (!targetRetailerId) {
-      alert('Please select a retailer.');
+      alert('Please select a party.');
       return;
     }
     const amt = parseFloat(payAmount);
@@ -142,7 +144,7 @@ function AdminPaymentsContent() {
 
     const pay = payInvoice(targetRetailerId, amt, payMethod, payRef, payNotes);
     const ret = retailers.find(r => r.id === targetRetailerId);
-    setSuccessMsg(`Payment of ₹${amt.toLocaleString('en-IN')} recorded successfully for ${ret?.shop_name || 'Retailer'} (Voucher #${pay.payment_number}).`);
+    setSuccessMsg(`Payment of ₹${amt.toLocaleString('en-IN')} recorded successfully for ${ret?.shop_name || 'Party'} (Voucher #${pay.payment_number}).`);
     setPayAmount('');
     setPayRef('');
     setPayNotes('');
@@ -397,8 +399,8 @@ function AdminPaymentsContent() {
     if (!chosenRetailer) return;
     const headers = ['Date', 'Document Type', 'Document Number', 'Narration / Description', 'Debit (Rs)', 'Credit (Rs)', 'Running Balance (Rs)'];
     const rows = [
-      [`SAIFEE GENERAL STORES - RETAILER ACCOUNT LEDGER STATEMENT`],
-      [`Retailer: ${chosenRetailer.shop_name} (${chosenRetailer.retailer_code})`],
+      [`SAIFEE GENERAL STORES - PARTY ACCOUNT LEDGER STATEMENT`],
+      [`Party: ${chosenRetailer.shop_name} (${chosenRetailer.retailer_code})`],
       [`Address: ${chosenRetailer.address}, ${chosenRetailer.city}`],
       [`GSTIN: ${chosenRetailer.gstin || 'Unregistered'} | Phone: ${chosenRetailer.mobile}`],
       [`Statement Period: ${formatDateToDisplay(dateRange.startDate)} to ${formatDateToDisplay(dateRange.endDate)} (${dateRange.label})`],
@@ -441,7 +443,7 @@ function AdminPaymentsContent() {
 
   // Export Payments Register to CSV Handler
   const handleExportPaymentsCSV = () => {
-    const headers = ['Date', 'Voucher Number', 'Retailer Code', 'Retailer Name', 'City', 'Payment Method', 'Reference Number', 'Amount (Rs)', 'Notes'];
+    const headers = ['Date', 'Voucher Number', 'Party Code', 'Party Name', 'City', 'Payment Method', 'Reference Number', 'Amount (Rs)', 'Notes'];
     const rows = [
       ['SAIFEE GENERAL STORES - PAYMENTS RECEIVED REGISTER'],
       [`Filter Period: ${formatDateToDisplay(dateRange.startDate)} to ${formatDateToDisplay(dateRange.endDate)} (${dateRange.label})`],
@@ -489,7 +491,7 @@ function AdminPaymentsContent() {
               <DollarSign className="w-5 h-5 stroke-[2.5]" />
             </div>
             <div>
-              <h2 className="text-xl font-black text-slate-900 tracking-tight">Payments &amp; Retailer Ledger Hub</h2>
+              <h2 className="text-xl font-black text-slate-900 tracking-tight">Payments &amp; Party Ledger Hub</h2>
               <p className="text-xs text-slate-500 font-medium">Real-time debtor accounts, date-filtered audit statements, and collection vouchers.</p>
             </div>
           </div>
@@ -509,7 +511,7 @@ function AdminPaymentsContent() {
               }`}
             >
               <FileText className="w-3.5 h-3.5" />
-              <span>Retailer Ledger Statement</span>
+              <span>Party Ledger Statement</span>
             </button>
             <button
               type="button"
@@ -581,7 +583,7 @@ function AdminPaymentsContent() {
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                 <span className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
                   <Store className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>1. Select Retailer Account</span>
+                  <span>1. Select Party Account</span>
                 </span>
                 <span className="text-[10px] font-mono text-slate-500 font-bold">
                   {retailers.length} Customers
@@ -596,7 +598,7 @@ function AdminPaymentsContent() {
                     onChange={(e) => setSelectedRetailerId(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-extrabold text-slate-900 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer shadow-2xs"
                   >
-                    <option value="">-- Choose Retailer Customer --</option>
+                    <option value="">-- Choose Party --</option>
                     {retailers.map(r => (
                       <option key={r.id} value={r.id}>
                         {r.shop_name} ({r.retailer_code || 'RET'}) &bull; {r.city || 'Local'} &bull; Bal: ₹{Number(r.outstanding || 0).toLocaleString('en-IN')}
@@ -684,7 +686,7 @@ function AdminPaymentsContent() {
                   </div>
                 ) : (
                   <div className="text-center py-6 text-slate-400 text-xs font-semibold">
-                    Please select a retailer above to view balance metrics.
+                    Please select a party above to view balance metrics.
                   </div>
                 )}
               </div>
@@ -1027,7 +1029,7 @@ function AdminPaymentsContent() {
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3" />
                 <input
                   type="text"
-                  placeholder="Search voucher, retailer, ref..."
+                  placeholder="Search voucher, party, ref..."
                   value={paymentsSearchTerm}
                   onChange={(e) => setPaymentsSearchTerm(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-2 text-xs font-semibold text-slate-800 focus:bg-white focus:border-indigo-500 focus:outline-none"
@@ -1054,7 +1056,7 @@ function AdminPaymentsContent() {
                 onChange={(e) => setPaymentsRetailerFilter(e.target.value)}
                 className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:bg-white focus:border-indigo-500 focus:outline-none cursor-pointer max-w-xs truncate"
               >
-                <option value="ALL">All Retailers</option>
+                <option value="ALL">All Parties</option>
                 {retailers.map(r => (
                   <option key={r.id} value={r.id}>{r.shop_name} ({r.retailer_code})</option>
                 ))}
@@ -1084,7 +1086,7 @@ function AdminPaymentsContent() {
                     <th className="p-3.5 w-12 text-center">#</th>
                     <th className="p-3.5 w-28">Date</th>
                     <th className="p-3.5 w-32">Voucher #</th>
-                    <th className="p-3.5">Retailer Customer</th>
+                    <th className="p-3.5">Party</th>
                     <th className="p-3.5 w-32">Method &amp; Ref</th>
                     <th className="p-3.5">Internal Notes</th>
                     <th className="p-3.5 text-right w-36">Amount Received</th>
@@ -1122,7 +1124,7 @@ function AdminPaymentsContent() {
 
                           {/* Retailer Customer */}
                           <td className="p-3.5 space-y-0.5">
-                            <span className="font-extrabold text-slate-900 block">{ret?.shop_name || 'Retailer Shop'}</span>
+                            <span className="font-extrabold text-slate-900 block">{ret?.shop_name || 'Party Shop'}</span>
                             <div className="text-[10px] text-slate-500 flex items-center gap-1.5 font-medium">
                               <span className="font-mono text-indigo-700">{ret?.retailer_code}</span>
                               <span>&bull;</span>
@@ -1170,7 +1172,7 @@ function AdminPaymentsContent() {
                                   setActiveTab('ledger');
                                 }}
                                 className="px-2 py-1 bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white rounded-lg text-[10px] font-bold transition-all cursor-pointer inline-flex items-center gap-0.5"
-                                title="Open this retailer's account ledger"
+                                title="Open this party's account ledger"
                               >
                                 <span>Ledger</span>
                                 <ArrowRight className="w-2.5 h-2.5" />
@@ -1211,14 +1213,14 @@ function AdminPaymentsContent() {
             <form onSubmit={handleRecordPayment} className="space-y-4 text-xs">
               {/* Select Retailer */}
               <div className="space-y-1">
-                <label className="font-bold text-slate-700 block">Retailer Customer <span className="text-red-500">*</span></label>
+                <label className="font-bold text-slate-700 block">Party <span className="text-red-500">*</span></label>
                 <select
                   value={recordRetailerId}
                   onChange={(e) => setRecordRetailerId(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
                   required
                 >
-                  <option value="">-- Choose Retailer --</option>
+                  <option value="">-- Choose Party --</option>
                   {retailers.map(r => (
                     <option key={r.id} value={r.id}>
                       {r.shop_name} ({r.retailer_code}) &bull; Outstanding: ₹{r.outstanding.toLocaleString('en-IN')}
@@ -1342,7 +1344,7 @@ function AdminPaymentsContent() {
 
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Received From:</span>
-                    <h4 className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] tracking-tight uppercase">{ret?.shop_name || 'Retailer Shop'}</h4>
+                    <h4 className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] tracking-tight uppercase">{ret?.shop_name || 'Party Shop'}</h4>
                     <p className="text-slate-600 font-medium">{ret?.owner_name} &bull; {ret?.address}, {ret?.city}</p>
                     <p className="text-slate-500">Mobile: {ret?.mobile} &bull; Code: <strong className="font-mono text-slate-700">{ret?.retailer_code}</strong></p>
                   </div>
@@ -1460,12 +1462,12 @@ function AdminPaymentsContent() {
               {/* Top Business & Retailer Header */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
                 <div className="space-y-1">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Billed To (Retailer)</span>
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Billed To (Party)</span>
                   {(() => {
                     const ret = retailers.find(r => r.id === activeInvoiceModal.retailer_id);
                     return (
                       <div>
-                        <h4 className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] tracking-tight uppercase">{ret?.shop_name || 'Retailer Shop'}</h4>
+                        <h4 className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] tracking-tight uppercase">{ret?.shop_name || 'Party Shop'}</h4>
                         <p className="text-slate-600 mt-0.5">{ret?.owner_name} &bull; {ret?.address}, {ret?.city}</p>
                         <p className="text-slate-500 mt-0.5">Mobile: <strong className="text-slate-700">{ret?.mobile}</strong> &bull; GSTIN: <strong className="text-slate-700">{ret?.gstin || 'Unregistered'}</strong></p>
                       </div>
@@ -1473,7 +1475,7 @@ function AdminPaymentsContent() {
                   })()}
                 </div>
                 <div className="space-y-1 md:text-right">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Distributor (Supplier)</span>
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Distributor</span>
                   <h4 className="font-extrabold text-slate-900 text-sm">{getSellerDetails(activeCompany).name}</h4>
                   <p className="text-slate-600 mt-0.5">{getSellerDetails(activeCompany).address ? `${getSellerDetails(activeCompany).address} • ` : ''}<strong className="text-slate-700">{getSellerDetails(activeCompany).gstinLabel}</strong></p>
                   <p className="text-slate-500 mt-0.5">Invoice Date: <strong className="text-slate-700">{new Date(activeInvoiceModal.date).toLocaleDateString('en-IN', { dateStyle: 'medium' })}</strong> &bull; POS: <strong>{activeInvoiceModal.place_of_supply}</strong></p>

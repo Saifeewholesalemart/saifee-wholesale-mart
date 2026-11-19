@@ -6,7 +6,7 @@ import {
   TrendingUp, DollarSign, Store, Building2, Users, 
   PackageCheck, Package, CreditCard, FileSpreadsheet, 
   ShoppingCart, Calendar, Warehouse, Shield, CheckCircle2,
-  Printer, ArrowLeft, X
+  Printer, ArrowLeft, X, RotateCcw
 } from 'lucide-react';
 import { 
   ReportFilterState, UserContext, prepareReportState,
@@ -23,6 +23,7 @@ import FilterDiagnosticsBar from '@/components/reports/FilterDiagnosticsBar';
 // Category Views
 import SalesReportsView from '@/components/reports/categories/SalesReportsView';
 import PartyItemVyaparReport from '@/components/reports/categories/PartyItemVyaparReport';
+import ReturnReportsView from '@/components/returns/ReturnReportsView';
 import ProfitLossReportsView from '@/components/reports/categories/ProfitLossReportsView';
 import RetailerReportsView from '@/components/reports/categories/RetailerReportsView';
 import CompanyBrandReportsView from '@/components/reports/categories/CompanyBrandReportsView';
@@ -49,7 +50,8 @@ export type ReportCategory =
   | 'gst' 
   | 'orders' 
   | 'batch_expiry' 
-  | 'godown';
+  | 'godown'
+  | 'returns';
 
 export default function AdminReports() {
   const db = useDb();
@@ -57,7 +59,7 @@ export default function AdminReports() {
 
   // Active Category State
   const [activeCategory, setActiveCategory] = useState<ReportCategory>('sales');
-  const vyaparStyleReport = activeCategory === 'item_party' || activeCategory === 'party_item';
+  const vyaparStyleReport = activeCategory === 'item_party' || activeCategory === 'party_item' || activeCategory === 'returns';
 
   // Shared Global Filter State across reports
   const [filters, setFilters] = useState<ReportFilterState>({
@@ -103,7 +105,7 @@ export default function AdminReports() {
     { id: 'item_party', name: 'B1. Item Report By Party', shortName: 'Item by Party', icon: Package },
     { id: 'party_item', name: 'B2. Party Report By Item', shortName: 'Party by Item', icon: Users },
     { id: 'profit_loss', name: 'C. Profit & Loss', shortName: 'P&L / Margin', icon: DollarSign, badge: 'Admin' },
-    { id: 'retailer', name: 'D. Retailer Reports', shortName: 'Retailers', icon: Store },
+    { id: 'retailer', name: 'D. Party Reports', shortName: 'Parties', icon: Store },
     { id: 'company_brand', name: 'E. Company & Brand', shortName: 'Companies', icon: Building2 },
     { id: 'salesperson', name: 'F. Salesperson Reports', shortName: 'Sales Reps', icon: Users },
     { id: 'purchase', name: 'G. Purchase Reports', shortName: 'Purchases', icon: PackageCheck },
@@ -112,7 +114,8 @@ export default function AdminReports() {
     { id: 'gst', name: 'J. GST Reports', shortName: 'GST Returns', icon: FileSpreadsheet },
     { id: 'orders', name: 'K. Order Reports', shortName: 'Orders', icon: ShoppingCart },
     { id: 'batch_expiry', name: 'L. Batch & Expiry', shortName: 'Batch/Expiry', icon: Calendar },
-    { id: 'godown', name: 'M. Godown Reports', shortName: 'Godown', icon: Warehouse }
+    { id: 'godown', name: 'M. Godown Reports', shortName: 'Godown', icon: Warehouse },
+    { id: 'returns', name: 'N. Return Reports', shortName: 'Returns', icon: RotateCcw }
   ];
 
   // Selected Invoice for inspection modal
@@ -128,8 +131,8 @@ export default function AdminReports() {
         const columns = [
           { header: 'Invoice #', key: 'invoiceNumber' },
           { header: 'Date', key: 'invoiceDate' },
-          { header: 'Retailer', key: 'retailerName' },
-          { header: 'Retailer Code', key: 'retailerCode' },
+          { header: 'Party', key: 'retailerName' },
+          { header: 'Party Code', key: 'retailerCode' },
           { header: 'Salesperson', key: 'salespersonName' },
           { header: 'Items Count', key: 'itemCount', format: 'number' as const },
           { header: 'Quantity Sold', key: 'totalQuantity', format: 'number' as const },
@@ -182,7 +185,7 @@ export default function AdminReports() {
         const isItemFiltered = !!(filters.productId && filters.productId !== 'all');
         const columns = isItemFiltered ? [
           { header: '#', key: 'srNo' },
-          { header: 'Retailer / Party', key: 'partyName' },
+          { header: 'Party', key: 'partyName' },
           { header: 'City', key: 'city' },
           { header: 'Quantity Sold', key: 'saleQty', format: 'number' as const },
           { header: 'Avg Billing Rate', key: 'avgBillingRate', format: 'currency' as const },
@@ -192,8 +195,8 @@ export default function AdminReports() {
           { header: 'Purchase Amount', key: 'purchaseAmount', format: 'currency' as const }
         ] : [
           { header: '#', key: 'srNo' },
-          { header: 'Retailer / Party', key: 'partyName' },
-          { header: 'Retailer Code', key: 'retailerCode' },
+          { header: 'Party', key: 'partyName' },
+          { header: 'Party Code', key: 'retailerCode' },
           { header: 'City', key: 'city' },
           { header: 'Sale Quantity', key: 'saleQty', format: 'number' as const },
           { header: 'Sale Amount', key: 'saleAmount', format: 'currency' as const },
@@ -228,8 +231,8 @@ export default function AdminReports() {
       case 'retailer': {
         const data = getRetailerSalesSummary(filters, dbState, userContext);
         const columns = [
-          { header: 'Retailer Name', key: 'retailerName' },
-          { header: 'Retailer Code', key: 'retailerCode' },
+          { header: 'Party Name', key: 'retailerName' },
+          { header: 'Party Code', key: 'retailerCode' },
           { header: 'City', key: 'city' },
           { header: 'Orders', key: 'orderCount', format: 'number' as const },
           { header: 'Invoices', key: 'invoiceCount', format: 'number' as const },
@@ -282,7 +285,7 @@ export default function AdminReports() {
         const columns = [
           { header: 'Order #', key: 'orderNumber' },
           { header: 'Date', key: 'orderDate' },
-          { header: 'Retailer', key: 'retailerName' },
+          { header: 'Party', key: 'retailerName' },
           { header: 'Salesperson', key: 'salespersonName' },
           { header: 'Status', key: 'status' },
           { header: 'Items', key: 'itemCount', format: 'number' as const },
@@ -314,7 +317,7 @@ export default function AdminReports() {
         const columns = [
           { header: 'Invoice #', key: 'invoiceNumber' },
           { header: 'Date', key: 'invoiceDate' },
-          { header: 'Retailer', key: 'retailerName' },
+          { header: 'Party', key: 'retailerName' },
           { header: 'Salesperson', key: 'salespersonName' },
           { header: 'Grand Total', key: 'finalInvoiceAmount', format: 'currency' as const },
           { header: 'Payment Status', key: 'paymentStatus' }
@@ -439,6 +442,8 @@ export default function AdminReports() {
         {activeCategory === 'party_item' && (
           <PartyItemVyaparReport mode="party_by_item" dbState={dbState} />
         )}
+
+        {activeCategory === 'returns' && <ReturnReportsView />}
 
         {activeCategory === 'profit_loss' && (
           <ProfitLossReportsView

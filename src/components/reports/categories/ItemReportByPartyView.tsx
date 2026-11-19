@@ -521,7 +521,7 @@ export default function ItemReportByPartyView({
           {/* 6. Retailer / Party Filter */}
           <div className="relative">
             <label className="block text-[11px] font-bold text-slate-600 mb-1">
-              Filter by Party / Retailer
+              Filter by Party
             </label>
             <div className="relative">
               <button
@@ -544,7 +544,7 @@ export default function ItemReportByPartyView({
                     <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
                     <input
                       type="text"
-                      placeholder="Search retailer or supplier..."
+                      placeholder="Search party..."
                       value={partySearchText}
                       onChange={(e) => setPartySearchText(e.target.value)}
                       className="w-full text-xs pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
@@ -556,7 +556,7 @@ export default function ItemReportByPartyView({
                       onClick={() => { setSelectedParty('all'); setPartyDropdownOpen(false); }}
                       className={`p-2 hover:bg-indigo-50 cursor-pointer rounded-lg font-bold ${selectedParty === 'all' ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-700'}`}
                     >
-                      All Parties (Retailers & Suppliers)
+                      All Parties
                     </div>
                     {filteredParties.map(p => (
                       <div
@@ -841,7 +841,7 @@ export default function ItemReportByPartyView({
                 }`}
               >
                 <Store className="w-3.5 h-3.5" />
-                <span>Retailer Sales ({drilldownItem.partySalesBreakdown.length})</span>
+                <span>Party Sales ({drilldownItem.partySalesBreakdown.length})</span>
               </button>
 
               <button
@@ -853,7 +853,7 @@ export default function ItemReportByPartyView({
                 }`}
               >
                 <Truck className="w-3.5 h-3.5" />
-                <span>Supplier Purchases ({drilldownItem.partyPurchaseBreakdown.length})</span>
+                <span>Party Purchases ({drilldownItem.partyPurchaseBreakdown.length})</span>
               </button>
 
               <button
@@ -963,21 +963,21 @@ export default function ItemReportByPartyView({
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
-                      Retailers who bought this product
+                      Parties who bought this product
                     </h4>
-                    <span className="text-xs font-bold text-slate-500">{drilldownItem.partySalesBreakdown.length} Retailers</span>
+                    <span className="text-xs font-bold text-slate-500">{drilldownItem.partySalesBreakdown.length} Parties</span>
                   </div>
 
                   {drilldownItem.partySalesBreakdown.length === 0 ? (
                     <div className="p-8 text-center text-slate-400 bg-slate-50 rounded-xl border border-slate-200 text-xs font-bold">
-                      No retailer sales for this item in selected date range.
+                      No party sales for this item in selected date range.
                     </div>
                   ) : (
                     <div className="border border-slate-200 rounded-xl overflow-hidden">
                       <table className="w-full text-xs text-left">
                         <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                           <tr>
-                            <th className="p-3">Retailer / Party</th>
+                            <th className="p-3">Party</th>
                             <th className="p-3 text-center">Invoices</th>
                             <th className="p-3 text-right">Quantity Sold</th>
                             <th className="p-3 text-right">Total Net Amount</th>
@@ -1004,21 +1004,21 @@ export default function ItemReportByPartyView({
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
-                      Suppliers who supplied this product
+                      Parties who supplied this product
                     </h4>
-                    <span className="text-xs font-bold text-slate-500">{drilldownItem.partyPurchaseBreakdown.length} Suppliers</span>
+                    <span className="text-xs font-bold text-slate-500">{drilldownItem.partyPurchaseBreakdown.length} Parties</span>
                   </div>
 
                   {drilldownItem.partyPurchaseBreakdown.length === 0 ? (
                     <div className="p-8 text-center text-slate-400 bg-slate-50 rounded-xl border border-slate-200 text-xs font-bold">
-                      No supplier purchases recorded for this item in selected period.
+                      No party purchases recorded for this item in selected period.
                     </div>
                   ) : (
                     <div className="border border-slate-200 rounded-xl overflow-hidden">
                       <table className="w-full text-xs text-left">
                         <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                           <tr>
-                            <th className="p-3">Supplier Name</th>
+                            <th className="p-3">Party Name</th>
                             <th className="p-3 text-center">Bills</th>
                             <th className="p-3 text-right">Quantity Inward</th>
                             <th className="p-3 text-right">Total Inward Cost</th>

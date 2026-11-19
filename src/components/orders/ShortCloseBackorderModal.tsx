@@ -13,12 +13,12 @@ interface ShortCloseBackorderModalProps {
 }
 
 const SHORT_CLOSE_REASONS = [
-  'Retailer procured locally / Urgent requirement met elsewhere',
+  'Party procured locally / Urgent requirement met elsewhere',
   'Batch discontinued / Stock unavailable from manufacturer',
   'Customer requested line item cancellation',
   'Substituted with alternative product/variant on next order',
   'Price fluctuation / Commercial disagreement',
-  'Expired / Damaged lot at supplier end',
+  'Expired / Damaged lot at party end',
   'Other (Specify in notes below)'
 ];
 
@@ -111,7 +111,7 @@ export default function ShortCloseBackorderModal({
 
             <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600 pt-1 border-t border-slate-200">
               <div>
-                <span>Retailer:</span> <strong className="text-slate-900">{item.retailerName}</strong>
+                <span>Party:</span> <strong className="text-slate-900">{item.retailerName}</strong>
               </div>
               <div>
                 <span>Parent Order:</span> <strong className="font-mono text-indigo-700">{item.orderNumber}</strong>

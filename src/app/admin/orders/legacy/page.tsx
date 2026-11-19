@@ -656,7 +656,7 @@ function AdminOrdersContent() {
       groups.push({
         retailerId,
         retailer,
-        retailerName: retailer?.shop_name || 'Retailer Customer',
+        retailerName: retailer?.shop_name || 'Party',
         ownerName: retailer?.owner_name || 'N/A',
         phone: retailer?.phone || retailer?.mobile || 'N/A',
         city: retailer?.city || '',
@@ -1249,7 +1249,7 @@ function AdminOrdersContent() {
             </span>
           </div>
           <span className={`text-[10px] mt-2 block ${activeStageTab === 'PARTIAL_PENDING' ? 'text-purple-200' : 'text-slate-400'}`}>
-            Shortage queue by retailer
+            Shortage queue by party
           </span>
         </button>
 
@@ -1484,7 +1484,7 @@ function AdminOrdersContent() {
       {/* ========================================================================= */}
       <div className="flex items-center justify-between text-xs text-slate-500 px-1">
         <div>
-          Showing <strong className="text-slate-900 font-bold">{filteredAndGroupedRetailers.length}</strong> Retailer Accounts ({totalFilteredOrdersCount} orders) &bull; Total Filtered Value: <strong className="text-indigo-700 font-extrabold">{formatINR(totalFilteredValueSum)}</strong>
+          Showing <strong className="text-slate-900 font-bold">{filteredAndGroupedRetailers.length}</strong> Party Accounts ({totalFilteredOrdersCount} orders) &bull; Total Filtered Value: <strong className="text-indigo-700 font-extrabold">{formatINR(totalFilteredValueSum)}</strong>
         </div>
         <div className="flex items-center gap-2">
           <span>Page {validCurrentPage} of {totalRetailerPages}</span>

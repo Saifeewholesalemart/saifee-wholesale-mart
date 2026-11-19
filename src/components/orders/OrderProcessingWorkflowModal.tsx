@@ -553,12 +553,12 @@ export default function OrderProcessingWorkflowModal({
       if (paymentMethod === 'Credit') {
         setFeedbackMsg({ 
           type: 'success', 
-          text: `Credit terms of ${formatINR(effectiveAmount)} confirmed for ${retailer.shop_name}! Booked to retailer account (Pay Later).` 
+          text: `Credit terms of ${formatINR(effectiveAmount)} confirmed for ${retailer.shop_name}! Booked to party account (Pay Later).` 
         });
       } else {
         setFeedbackMsg({ 
           type: 'success', 
-          text: `Payment of ${formatINR(effectiveAmount)} recorded successfully via ${paymentMethod}! Retailer outstanding reduced.` 
+          text: `Payment of ${formatINR(effectiveAmount)} recorded successfully via ${paymentMethod}! Party outstanding reduced.` 
         });
       }
       setPaymentAmount(0);
@@ -736,7 +736,7 @@ export default function OrderProcessingWorkflowModal({
                     </span>
                   </h4>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    {retailer?.shop_name || 'This retailer'} has <strong className="text-purple-700 font-bold">{otherOrdersForRetailer.length} other pending order(s)</strong> across different channels ({otherOrdersForRetailer.map(o => o.order_number).join(', ')}). Combine them into 1 GST Tax Invoice instead of generating multiple separate bills.
+                    {retailer?.shop_name || 'This party'} has <strong className="text-purple-700 font-bold">{otherOrdersForRetailer.length} other pending order(s)</strong> across different channels ({otherOrdersForRetailer.map(o => o.order_number).join(', ')}). Combine them into 1 GST Tax Invoice instead of generating multiple separate bills.
                   </p>
                 </div>
               </div>
@@ -834,7 +834,7 @@ export default function OrderProcessingWorkflowModal({
               {/* Retailer Profile Details */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
                 <div className="space-y-1">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Retailer Profile</span>
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Party Profile</span>
                   <p className="font-extrabold text-slate-800 text-sm leading-tight">{retailer.shop_name}</p>
                   <p className="text-xs text-slate-600 font-medium">Owner: {retailer.owner_name}</p>
                   <p className="text-xs text-slate-600 flex items-center gap-1 font-medium">
@@ -1302,7 +1302,7 @@ export default function OrderProcessingWorkflowModal({
                                 <option value="Stock Unavailable">Stock Unavailable</option>
                                 <option value="Partial Stock Available">Partial Stock Available</option>
                                 <option value="Awaiting Purchase">Awaiting Purchase</option>
-                                <option value="Retailer Requested Later">Retailer Requested Later</option>
+                                <option value="Retailer Requested Later">Party Requested Later</option>
                                 <option value="Delivery Issue">Delivery Issue</option>
                               </select>
                             ) : (
@@ -1801,13 +1801,13 @@ export default function OrderProcessingWorkflowModal({
                   {/* Bill To Info */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl text-xs">
                     <div>
-                      <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Billed To / Retailer</span>
+                      <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Billed To / Party</span>
                       <p className="retailer-name-print font-black text-slate-950 text-sm sm:text-base print:text-[11pt] tracking-tight uppercase mt-1">{retailer.shop_name}</p>
                       <p className="text-slate-600">{retailer.address}, {retailer.city}</p>
                       <p className="text-slate-500 mt-0.5">GSTIN: <span className="font-semibold text-slate-700">{retailer.gstin || 'Unregistered'}</span></p>
                     </div>
                     <div>
-                      <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Distributor (Supplier)</span>
+                      <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">Distributor</span>
                       <p className="font-extrabold text-slate-800 mt-1">{getSellerDetails(activeCompany).name}</p>
                       {getSellerDetails(activeCompany).address && <p className="text-slate-600">{getSellerDetails(activeCompany).address}</p>}
                       <p className="text-slate-500 mt-0.5"><span className="font-semibold text-slate-700">{getSellerDetails(activeCompany).gstinLabel}</span> | {getSellerDetails(activeCompany).stateLabel}</p>
@@ -1957,7 +1957,7 @@ export default function OrderProcessingWorkflowModal({
                     <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                       <div>
                         <h4 className="font-extrabold text-slate-800 text-sm">Record Payment &amp; Account Settlement</h4>
-                        <p className="text-xs text-slate-500 mt-0.5">Settle invoice against cash/bank collections or book to retailer credit ledger</p>
+                        <p className="text-xs text-slate-500 mt-0.5">Settle invoice against cash/bank collections or book to party credit ledger</p>
                       </div>
                       <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold">
                         {linkedInvoice.invoice_number}
@@ -2032,7 +2032,7 @@ export default function OrderProcessingWorkflowModal({
 
                           <div className="grid grid-cols-2 gap-3 text-xs bg-white/80 p-3 rounded-lg border border-purple-100">
                             <div>
-                              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Retailer Shop</span>
+                              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Party Shop</span>
                               <p className="font-extrabold text-slate-800 truncate text-xs">{retailer.shop_name}</p>
                               <p className="text-xs text-slate-500">Code: {retailer.retailer_code}</p>
                             </div>
@@ -2046,13 +2046,13 @@ export default function OrderProcessingWorkflowModal({
                           {retailer.credit_limit && retailer.outstanding > retailer.credit_limit && (
                             <div className="flex items-center gap-2 p-2.5 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-800 font-semibold">
                               <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-600" />
-                              <span>Retailer total outstanding exceeds approved credit limit of {formatINR(retailer.credit_limit)}.</span>
+                              <span>Party total outstanding exceeds approved credit limit of {formatINR(retailer.credit_limit)}.</span>
                             </div>
                           )}
 
                           <div className="text-xs text-purple-800 bg-purple-100/50 p-3 rounded-lg border border-purple-200/60 leading-relaxed font-medium">
                             <span className="font-bold">Accounting Note: </span>
-                            Choosing <strong>Credit / Pay Later</strong> settles this invoice on account. The balance of <strong>{formatINR(linkedInvoice.outstanding_amount)}</strong> remains active on the retailer's ledger to be paid later. No immediate cash/bank inflow is collected.
+                            Choosing <strong>Credit / Pay Later</strong> settles this invoice on account. The balance of <strong>{formatINR(linkedInvoice.outstanding_amount)}</strong> remains active on the party's ledger to be paid later. No immediate cash/bank inflow is collected.
                           </div>
                         </div>
 
@@ -2236,9 +2236,9 @@ export default function OrderProcessingWorkflowModal({
 
                       {/* Retailer Account Summary */}
                       <div className="p-4 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-2 text-xs">
-                        <span className="text-xs font-bold text-indigo-700 uppercase tracking-wider block">Retailer Ledger Overview</span>
+                        <span className="text-xs font-bold text-indigo-700 uppercase tracking-wider block">Party Ledger Overview</span>
                         <div className="flex justify-between text-slate-700">
-                          <span>Retailer Name:</span>
+                          <span>Party Name:</span>
                           <span className="font-bold text-slate-900">{retailer.shop_name}</span>
                         </div>
                         <div className="flex justify-between text-slate-700">
@@ -2501,7 +2501,7 @@ export default function OrderProcessingWorkflowModal({
                   type="text"
                   value={rateEditTarget.reason}
                   onChange={(e) => setRateEditTarget({ ...rateEditTarget, reason: e.target.value })}
-                  placeholder="e.g. Bulk deal discount, Retailer loyalty adjustment"
+                  placeholder="e.g. Bulk deal discount, Party loyalty adjustment"
                   className="w-full border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500"
                 />
               </div>

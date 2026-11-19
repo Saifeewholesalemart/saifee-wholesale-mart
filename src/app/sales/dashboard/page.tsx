@@ -11,7 +11,7 @@ import {
   Eye, FileText, Lock, ShieldCheck, Layers, Building, Tag, ChevronRight, ChevronLeft,
   Info, ExternalLink, Calendar, MapPin, AlertCircle, ArrowLeft, Clock
 } from 'lucide-react';
-import { Product, Retailer, Order, formatQuantityDisplay, splitBaseQuantity, calculateItemAmounts, PendingOrderItemWarning, getProductTradeMode, isWalkInRetailerId, computeFreeStockByProduct, flowCustomerStatus } from '@/lib/db';
+import { Product, Retailer, Order, formatQuantityDisplay, splitBaseQuantity, calculateItemAmounts, PendingOrderItemWarning, getProductTradeMode, isWalkInRetailerId, computeFreeStockByProduct, flowCustomerStatus, isCustomerParty } from '@/lib/db';
 import LastBillingRatesModal from '@/components/LastBillingRatesModal';
 import SmartSearchBar from '@/components/SmartSearchBar';
 import AddRetailerModal from '@/components/AddRetailerModal';
@@ -23,7 +23,7 @@ import { recordOrderLocation } from '@/lib/salesTracking';
 
 export default function SalesDashboard() {
   const { 
-    currentUser, setCurrentUser, logout, products, batches, retailers, orders, placeOrder, inventory, profiles,
+    currentUser, setCurrentUser, logout, products, batches, retailers: allParties, orders, placeOrder, inventory, profiles,
     companies, categories, productCategories,
     salespersonCart: cart, setSalespersonCart: setCart,
     getAssignedCategoriesForSalesperson, getAssignedCategoriesForRetailer,
@@ -31,6 +31,8 @@ export default function SalesDashboard() {
     getScopedOrdersForSalesperson, getScopedOrderByIdForSalesperson,
     getPendingItemsForRetailer, logPendingOrderProceedActivity
   } = useDb();
+  // supplier-only parties are not shops for the salesman
+  const retailers = useMemo(() => allParties.filter(isCustomerParty), [allParties]);
   
   const router = useRouter();
 
@@ -622,7 +624,7 @@ export default function SalesDashboard() {
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                       <User className="w-4 h-4 text-cyan-600" />
-                      <span>Select Retailer Shop</span>
+                      <span>Select Party Shop</span>
                     </h3>
                     <button
                       type="button"
@@ -1179,7 +1181,7 @@ export default function SalesDashboard() {
                 onChange={(e) => setHistoryFilterRetailer(e.target.value)}
                 className="bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-700 focus:outline-none cursor-pointer max-w-[140px] truncate shadow-2xs"
               >
-                <option value="ALL">All Retailers</option>
+                <option value="ALL">All Parties</option>
                 {retailers.filter(r => !isWalkInRetailerId(r.id)).map(r => (
                   <option key={r.id} value={r.id}>{r.shop_name}</option>
                 ))}
@@ -1218,7 +1220,7 @@ export default function SalesDashboard() {
                         <div>
                           <span className="font-black text-slate-900 text-sm block group-hover:text-cyan-700 transition-colors">{ord.order_number}</span>
                           <span className="text-[11px] text-slate-500 font-medium block mt-0.5">
-                            Shop: <strong className="text-slate-800 font-bold">{retObj?.shop_name || 'Retailer'}</strong> &bull; {retObj?.city || ''}
+                            Shop: <strong className="text-slate-800 font-bold">{retObj?.shop_name || 'Party'}</strong> &bull; {retObj?.city || ''}
                           </span>
                         </div>
                         <span className={`px-2 py-0.5 rounded-[4px] text-[10px] font-black uppercase tracking-wider shrink-0 ${
@@ -1444,7 +1446,7 @@ export default function SalesDashboard() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-black text-slate-900">{targetRet?.shop_name || 'Retailer Orders'}</h3>
+                          <h3 className="text-sm font-black text-slate-900">{targetRet?.shop_name || 'Party Orders'}</h3>
                           {targetRet?.retailer_code && (
                             <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 font-mono text-[10px] font-bold rounded">
                               {targetRet.retailer_code}
@@ -1479,7 +1481,7 @@ export default function SalesDashboard() {
                       <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center gap-2">
                         <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
                         <span className="text-[11px]">
-                          <strong>Full Access:</strong> Showing all past orders for this retailer across all brands.
+                          <strong>Full Access:</strong> Showing all past orders for this party across all brands.
                         </span>
                       </div>
                     )}
@@ -1491,8 +1493,8 @@ export default function SalesDashboard() {
                         <p className="font-bold text-slate-600">No past orders in your brand scope</p>
                         <p className="text-[11px]">
                           {isCompanySalesperson
-                            ? `This retailer has no past orders containing items from ${assignedCompanies.join(', ') || 'your brand'}.`
-                            : 'This retailer has no booked orders yet.'}
+                            ? `This party has no past orders containing items from ${assignedCompanies.join(', ') || 'your brand'}.`
+                            : 'This party has no booked orders yet.'}
                         </p>
                       </div>
                     ) : (
@@ -1627,7 +1629,7 @@ export default function SalesDashboard() {
                     type="button"
                     onClick={() => setSelectedOrderForModal(null)}
                     className="px-2.5 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors mr-1 shadow-2xs"
-                    title="Return to Retailer Orders List"
+                    title="Return to Party Orders List"
                   >
                     <ArrowLeft className="w-3.5 h-3.5 text-slate-600" />
                     <span>Back</span>
@@ -1675,7 +1677,7 @@ export default function SalesDashboard() {
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs">
                     <div>
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Customer / Shop</span>
-                      <strong className="text-slate-900 text-sm">{ret?.shop_name || 'Retailer'}</strong>
+                      <strong className="text-slate-900 text-sm">{ret?.shop_name || 'Party'}</strong>
                       <span className="text-slate-500 block text-[11px] mt-0.5">{ret?.owner_name} &bull; {ret?.city || ''} {ret?.mobile ? `(${ret.mobile})` : ''}</span>
                     </div>
                     {ret?.retailer_code && (

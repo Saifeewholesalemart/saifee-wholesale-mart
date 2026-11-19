@@ -83,7 +83,7 @@ export default function InvoiceAuditTrailModal({
               <span className="text-slate-500 font-bold hidden sm:inline">&bull;</span>
               <div className="flex items-center gap-1.5 text-xs text-amber-200 font-bold">
                 <Store className="w-4 h-4 text-amber-300" />
-                <span>RETAILER: {retailer?.shop_name || invoice.retailer_id}</span>
+                <span>PARTY: {retailer?.shop_name || invoice.retailer_id}</span>
                 {retailer?.city && <span className="text-slate-300 font-medium text-xs">({retailer.city})</span>}
               </div>
             </div>
@@ -165,7 +165,7 @@ export default function InvoiceAuditTrailModal({
                         </span>
                       </div>
                       <div>
-                        <span className="text-slate-500 block text-xs uppercase font-bold">Retailer Balance Impact</span>
+                        <span className="text-slate-500 block text-xs uppercase font-bold">Party Balance Impact</span>
                         <span className={`font-black ${log.retailer_outstanding_delta > 0 ? 'text-red-600' : log.retailer_outstanding_delta < 0 ? 'text-emerald-700' : 'text-slate-700'}`}>
                           {log.retailer_outstanding_delta > 0 ? `+₹${log.retailer_outstanding_delta.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : log.retailer_outstanding_delta < 0 ? `-₹${Math.abs(log.retailer_outstanding_delta).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'No change'}
                         </span>

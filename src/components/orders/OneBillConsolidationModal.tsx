@@ -451,7 +451,7 @@ export default function OneBillConsolidationModal({
             {retailerOrders.length === 0 ? (
               <div className="text-center py-12 px-4 border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50">
                 <AlertCircle className="w-8 h-8 mx-auto text-slate-400 mb-2" />
-                <p className="text-sm font-bold text-slate-700">No open orders found for this retailer.</p>
+                <p className="text-sm font-bold text-slate-700">No open orders found for this party.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -709,7 +709,7 @@ export default function OneBillConsolidationModal({
             {/* Financial Summary Strip */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
               <div className="p-4 bg-purple-50/60 rounded-xl border border-purple-100 space-y-1.5 text-xs">
-                <span className="text-purple-900 font-bold uppercase tracking-wide block">Retailer Credit Limit Audit</span>
+                <span className="text-purple-900 font-bold uppercase tracking-wide block">Party Credit Limit Audit</span>
                 <div className="flex justify-between text-slate-600">
                   <span>Current Outstanding:</span>
                   <span className="font-bold text-slate-900">{formatINR(financialSummary.currentOutstanding)}</span>

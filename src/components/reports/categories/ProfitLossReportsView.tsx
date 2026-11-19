@@ -58,7 +58,7 @@ export default function ProfitLossReportsView({
     { id: 'total', label: 'Executive Profit Summary', icon: Layers },
     { id: 'invoice', label: 'Invoice-wise Profit & Loss', icon: FileText },
     { id: 'product', label: 'Product-wise Profit', icon: Package },
-    { id: 'retailer', label: 'Retailer-wise Profit', icon: Store },
+    { id: 'retailer', label: 'Party-wise Profit', icon: Store },
     { id: 'company', label: 'Company-wise Profit', icon: Building2 },
     { id: 'monthly', label: 'Monthly Profit Ledger', icon: TrendingUp },
     { id: 'quarterly', label: 'Quarterly Profit & Growth', icon: ArrowUpRight }
@@ -218,7 +218,7 @@ export default function ProfitLossReportsView({
               )
             },
             { 
-              header: 'Retailer Store', 
+              header: 'Party Store', 
               render: (r: InvoiceWiseProfitRow) => (
                 <div>
                   <span className="font-bold text-slate-800 block">{r.retailerName}</span>
@@ -373,7 +373,7 @@ export default function ProfitLossReportsView({
       {subTab === 'retailer' && (
         <ReportTable
           columns={[
-            { header: 'Retailer Store', render: (r) => (
+            { header: 'Party Store', render: (r) => (
               <div>
                 <span className="font-bold text-slate-800 block">{r.name}</span>
                 <span className="text-xs text-slate-500 font-medium">{r.subName}</span>

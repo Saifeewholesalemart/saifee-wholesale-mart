@@ -18,7 +18,7 @@ import { exportToExcel } from '@/lib/exportUtils';
 import ReportTable from '@/components/reports/ReportTable';
 import {
   PERIOD_OPTIONS, ReportPeriod, SortBy, PartyItemRow,
-  periodRange, partyReportByItem, itemReportByParty, categoryOptions
+  periodRange, partyReportByItem, itemReportByParty, categoryOptions, linkedSupplierIds
 } from '@/lib/partyItemReports';
 
 type Mode = 'party_by_item' | 'item_by_party';
@@ -137,10 +137,14 @@ export default function PartyItemVyaparReport({ mode, dbState }: Props) {
     .map(p => ({ id: p.id, name: p.name, hint: p.mrp ? `MRP ₹${p.mrp}` : undefined }))
     .sort((a, b) => a.name.localeCompare(b.name)), [dbState.products, category]);
 
-  const partyOptions = useMemo(() => [
-    ...(dbState.retailers || []).map(r => ({ id: `Retailer:${r.id}`, name: r.shop_name || r.owner_name || 'Party', hint: r.city || 'Customer' })),
-    ...(dbState.suppliers || []).map(s => ({ id: `Supplier:${s.id}`, name: s.name || 'Supplier', hint: 'Supplier' }))
-  ].sort((a, b) => a.name.localeCompare(b.name)), [dbState.retailers, dbState.suppliers]);
+  const partyOptions = useMemo(() => {
+    const linked = linkedSupplierIds(dbState);
+    return [
+    ...(dbState.retailers || []).map(r => ({ id: `Retailer:${r.id}`, name: r.shop_name || r.owner_name || 'Party', hint: r.city || '' })),
+    ...(dbState.suppliers || []).filter(s => !linked.has(s.id)).map(s => ({ id: `Supplier:${s.id}`, name: s.name || 'Party', hint: 'Party' }))
+  ].sort((a, b) => a.name.localeCompare(b.name));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dbState.retailers, dbState.suppliers]);
 
   const result = useMemo(() => {
     const opts = { period, customFrom: from, customTo: to, category, sortBy };

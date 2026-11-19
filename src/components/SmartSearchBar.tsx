@@ -150,7 +150,7 @@ export default function SmartSearchBar({
             title: ret.shop_name,
             subtitle: `${ret.owner_name} • ${ret.city || '-'} • Mob: ${ret.mobile}`,
             category: 'retailer',
-            badge: 'Retailer',
+            badge: 'Party',
             data: ret,
             searchValue: ret.shop_name
           });
@@ -169,7 +169,7 @@ export default function SmartSearchBar({
           results.push({
             id: `inv-${inv.id}`,
             title: inv.invoice_number,
-            subtitle: `${ret?.shop_name || 'Retailer'} • ₹${inv.grand_total.toLocaleString('en-IN')} • ${inv.outstanding_amount <= 0 ? 'Paid' : 'Unpaid'}`,
+            subtitle: `${ret?.shop_name || 'Party'} • ₹${inv.grand_total.toLocaleString('en-IN')} • ${inv.outstanding_amount <= 0 ? 'Paid' : 'Unpaid'}`,
             category: 'invoice',
             badge: 'Invoice',
             data: inv,
@@ -190,7 +190,7 @@ export default function SmartSearchBar({
           results.push({
             id: `ord-${ord.id}`,
             title: ord.order_number,
-            subtitle: `${ret?.shop_name || 'Retailer'} • ${ord.status} • ₹${ord.total_amount.toLocaleString('en-IN')}`,
+            subtitle: `${ret?.shop_name || 'Party'} • ${ord.status} • ₹${ord.total_amount.toLocaleString('en-IN')}`,
             category: 'order',
             badge: 'Order',
             data: ord,
@@ -230,9 +230,9 @@ export default function SmartSearchBar({
           results.push({
             id: `sup-${sup.id}`,
             title: sup.name,
-            subtitle: `GSTIN: ${sup.gstin || 'N/A'} • ${sup.address || 'Supplier'}`,
+            subtitle: `GSTIN: ${sup.gstin || 'N/A'} • ${sup.address || 'Party'}`,
             category: 'supplier',
-            badge: 'Supplier',
+            badge: 'Party',
             data: sup,
             searchValue: sup.name
           });
@@ -316,7 +316,7 @@ export default function SmartSearchBar({
         return {
           icon: Store,
           bgColor: 'bg-amber-50 text-amber-700 border-amber-200',
-          label: 'Retailer'
+          label: 'Party'
         };
       case 'invoice':
         return {
@@ -340,7 +340,7 @@ export default function SmartSearchBar({
         return {
           icon: Store,
           bgColor: 'bg-slate-100 text-slate-700 border-slate-200',
-          label: 'Supplier'
+          label: 'Party'
         };
       default:
         return {
