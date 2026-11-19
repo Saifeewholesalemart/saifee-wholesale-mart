@@ -196,7 +196,7 @@ export function getDatabasePool(): Pool {
     connectionString,
     max: Number(process.env.PG_POOL_MAX || 10),
     idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 30000),
-    connectionTimeoutMillis: Number(process.env.PG_CONN_TIMEOUT_MS || 5000),
+    connectionTimeoutMillis: Number(process.env.PG_CONN_TIMEOUT_MS || 15000),
     ssl: process.env.PG_DISABLE_SSL === 'true' ? false : { rejectUnauthorized: false }
   });
 

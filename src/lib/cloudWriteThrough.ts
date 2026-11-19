@@ -422,7 +422,9 @@ export async function flushOutbox(): Promise<boolean> {
       (res.skipped || []).forEach(s => skippedReasons.push(`${s.store}/${s.id}: ${s.reason}`));
       persistOutboxSoon();
 
-      void mirrorMastersToNormalizedTables(chunk);
+      // One chunk at a time: running the extra copy in the background while the next chunk is
+      // being written filled the database connections on big saves (for example a party import).
+      await mirrorMastersToNormalizedTables(chunk);
     }
 
     retryDelayMs = 2000;
