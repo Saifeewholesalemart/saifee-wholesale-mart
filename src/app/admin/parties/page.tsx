@@ -66,7 +66,7 @@ const blankForm = (): FormState => ({
 });
 
 export default function PartiesPage() {
-  const { retailers, saveParty } = useDb() as any;
+  const { retailers, saveParty, importParties } = useDb() as any;
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
   const [form, setForm] = useState<FormState | null>(null);
@@ -178,39 +178,17 @@ export default function PartiesPage() {
       const cityKey = pickImportKey(keys, 'city');
       const addressKey = pickImportKey(keys, 'address');
 
-      const existingNames = new Set(
-        (retailers as Retailer[]).filter(r => !isWalkInRetailerId(r.id)).map(r => r.shop_name.trim().toLowerCase())
-      );
-      const seenInFile = new Set<string>();
-      let blank = 0, duplicateInFile = 0, alreadyExists = 0, added = 0;
+      const list = rows.map(row => ({
+        name: nameKey ? String(row[nameKey] ?? '').trim() : '',
+        mobile: mobileKey ? String(row[mobileKey] ?? '').trim() : '',
+        gstin: gstinKey ? String(row[gstinKey] ?? '').trim() : '',
+        city: cityKey ? String(row[cityKey] ?? '').trim() : '',
+        address: addressKey ? String(row[addressKey] ?? '').trim() : ''
+      }));
+      // One bulk save for the whole file (saving row by row froze the page on big files)
+      const res = importParties(list);
       const failed: { name: string; error: string }[] = [];
-
-      for (const row of rows) {
-        const rawName = nameKey ? String(row[nameKey] ?? '').trim() : '';
-        if (!rawName) { blank++; continue; }
-        const key = rawName.toLowerCase();
-        if (seenInFile.has(key)) { duplicateInFile++; continue; }
-        seenInFile.add(key);
-        if (existingNames.has(key)) { alreadyExists++; continue; }
-        const mobile = mobileKey ? String(row[mobileKey] ?? '').trim() : '';
-        const gstin = gstinKey ? String(row[gstinKey] ?? '').trim() : '';
-        const city = cityKey ? String(row[cityKey] ?? '').trim() : '';
-        const address = addressKey ? String(row[addressKey] ?? '').trim() : '';
-        try {
-          saveParty({ name: rawName, mobile, gstin, city, address });
-          existingNames.add(key);
-          added++;
-        } catch {
-          // The row's mobile/GSTIN may not be valid — retry with just the name.
-          try {
-            saveParty({ name: rawName });
-            existingNames.add(key);
-            added++;
-          } catch (e2: any) {
-            failed.push({ name: rawName, error: e2?.message || 'Could not be saved.' });
-          }
-        }
-      }
+      const { blank, duplicateInFile, alreadyExists, added } = res;
       setImportResult({ total: rows.length, blank, duplicateInFile, alreadyExists, added, failed });
     } catch (e: any) {
       setImportResult({ total: 0, blank: 0, duplicateInFile: 0, alreadyExists: 0, added: 0, failed: [{ name: '(file)', error: e?.message || 'Could not read the file.' }] });

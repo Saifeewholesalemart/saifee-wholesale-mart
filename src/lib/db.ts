@@ -5024,6 +5024,68 @@ class FMCGDatabase {
   }
 
   /**
+   * Bulk add parties (Excel import). Reads and writes the party and supplier stores once for the
+   * whole list, so thousands of rows do not freeze the browser. Names already in the list, and
+   * repeated names in the file, are skipped. Bad mobile / GSTIN values are dropped, not fatal.
+   */
+  importParties(rows: { name: string; mobile?: string; gstin?: string; city?: string; address?: string }[]): {
+    added: number; alreadyExists: number; duplicateInFile: number; blank: number;
+  } {
+    const activeBiz = this.getActiveBusinessCompanyId();
+    const retailers = this.getRetailers(activeBiz);
+    const suppliers = this.getSuppliers(activeBiz);
+    const existing = new Set(retailers.filter(r => !isWalkInRetailerId(r.id)).map(r => (r.shop_name || '').trim().toLowerCase()));
+    const seen = new Set<string>();
+    const used = new Set(retailers.map(r => (r.retailer_code || '').trim().toUpperCase()).filter(Boolean));
+    let n = 124;
+    retailers.forEach(r => {
+      const m = (r.retailer_code || '').match(/^RET-0*(\d+)$/i);
+      if (m) n = Math.max(n, parseInt(m[1], 10));
+    });
+    const home = getHomeStateCode();
+    const now = new Date().toISOString();
+    const stamp = Date.now();
+    let added = 0, alreadyExists = 0, duplicateInFile = 0, blank = 0;
+    for (const row of rows) {
+      const name = String(row.name ?? '').trim();
+      if (!name) { blank++; continue; }
+      const key = name.toLowerCase();
+      if (seen.has(key)) { duplicateInFile++; continue; }
+      seen.add(key);
+      if (existing.has(key)) { alreadyExists++; continue; }
+      existing.add(key);
+      let mobile = String(row.mobile ?? '').trim();
+      if (mobile && !/^[0-9+ -]{10,15}$/.test(mobile)) mobile = '';
+      let gstin: string | undefined = String(row.gstin ?? '').trim().toUpperCase();
+      if (!gstin || !/^[0-9]{2}[A-Z0-9]{13}$/.test(gstin)) gstin = undefined;
+      let code = '';
+      do { n += 1; code = `RET-${String(n).padStart(5, '0')}`; } while (used.has(code));
+      used.add(code);
+      const id = `ret-${stamp}-${added.toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
+      const address = String(row.address ?? '').trim();
+      const city = String(row.city ?? '').trim();
+      const stateCode = extractStateCode(gstin) || home;
+      retailers.unshift({
+        id, business_id: activeBiz, retailer_code: code, shop_name: name, owner_name: '',
+        address, city, state_code: stateCode, gstin, mobile,
+        credit_limit: 0, outstanding: 0, active: true, approval_status: 'approved',
+        opening_balance: 0, linked_supplier_id: `s-${id}`, created_at: now
+      } as Retailer);
+      suppliers.push({
+        id: `s-${id}`, business_id: activeBiz, name, gstin: gstin || '', address,
+        mobile: mobile || undefined, city: city || undefined, state_code: stateCode,
+        active: true, party_id: id, updated_at: now
+      } as any);
+      added++;
+    }
+    if (added > 0) {
+      this.saveSuppliers(suppliers, activeBiz);
+      this.saveRetailers(retailers, activeBiz);
+    }
+    return { added, alreadyExists, duplicateInFile, blank };
+  }
+
+  /**
    * Vyapar style: every party can be picked in purchases. Purchases still store a supplier id,
    * so each party gets a linked supplier record (id `s-<party id>`, same on every device), and
    * the supplier's name, GSTIN, address and state follow the party. Safe to run again.

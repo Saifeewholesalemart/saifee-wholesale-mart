@@ -480,6 +480,7 @@ interface DbContextType {
   createSupplier: (name: string, gstin: string, address: string) => Supplier;
   /** Parties (customers and suppliers in one list): add or change one */
   saveParty: (data: Parameters<typeof db.saveParty>[0]) => Retailer;
+  importParties: (rows: Parameters<typeof db.importParties>[0]) => ReturnType<typeof db.importParties>;
   createCompany: (name: string, code?: string) => Company;
   deleteCompany: (id: string, options?: { handleLinkedProducts?: 'unlink' | 'cascade' | 'error' }) => { success: boolean; message?: string; affectedProducts?: number };
   createRetailer: (data: Parameters<typeof db.createRetailer>[0]) => Retailer;
@@ -1774,6 +1775,12 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     return res;
   };
 
+  const importParties = (rows: Parameters<typeof db.importParties>[0]) => {
+    const res = db.importParties(rows);
+    if (res.added > 0) refreshState();
+    return res;
+  };
+
   // Old suppliers become parties (once, when the cloud data is loaded; safe to repeat)
   const partySyncTried = React.useRef('');
   useEffect(() => {
@@ -2378,6 +2385,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         payInvoice,
         createDirectSalesReturn,
         saveParty,
+        importParties,
         returnSales,
         createSupplier,
         createCompany,
