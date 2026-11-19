@@ -5207,7 +5207,11 @@ class FMCGDatabase {
       outstanding: updates.outstanding !== undefined ? Number(updates.outstanding) || 0 : current.outstanding,
       active: updates.active !== undefined ? Boolean(updates.active) : current.active,
       category_access_mode: updates.category_access_mode !== undefined ? updates.category_access_mode : current.category_access_mode,
-      assigned_category_ids: updates.assigned_category_ids !== undefined ? updates.assigned_category_ids : current.assigned_category_ids
+      assigned_category_ids: updates.assigned_category_ids !== undefined ? updates.assigned_category_ids : current.assigned_category_ids,
+      // Always bump updated_at so the cloud sync engine picks this change up — a change that
+      // doesn't touch updated_at never gets pushed, and a later pull from another device/session
+      // then overwrites it back with the old value (this bit the Active toggle on Manage Profiles).
+      updated_at: updates.updated_at || new Date().toISOString()
     };
 
     retailers[index] = updatedRetailer;

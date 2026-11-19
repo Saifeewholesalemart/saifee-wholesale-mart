@@ -1841,6 +1841,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
     const ret = rets.find(r => r.id === id);
     if (ret) {
       ret.credit_limit = limit;
+      ret.updated_at = new Date().toISOString();
       db.saveRetailers(rets);
       refreshState();
     }
