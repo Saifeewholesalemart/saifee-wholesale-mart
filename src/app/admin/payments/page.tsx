@@ -18,6 +18,7 @@ import DateRangeFilterBar, {
   DateRange, DatePreset, computeDateRange, formatDateToDisplay 
 } from '@/components/payments/DateRangeFilterBar';
 import { printInvoiceDocument } from '@/lib/printInvoice';
+import PartyPicker from '@/components/PartyPicker';
 
 // Helper: Convert number to Indian Rupees in words
 function numberToWords(num: number): string {
@@ -586,25 +587,20 @@ function AdminPaymentsContent() {
                   <span>1. Select Party Account</span>
                 </span>
                 <span className="text-[10px] font-mono text-slate-500 font-bold">
-                  {retailers.length} Customers
+                  {retailers.length} Parties
                 </span>
               </div>
 
               {/* Retailer Search Dropdown */}
               <div className="space-y-2">
                 <div className="relative">
-                  <select
+                  <PartyPicker
+                    parties={retailers}
                     value={selectedRetailerId}
-                    onChange={(e) => setSelectedRetailerId(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-extrabold text-slate-900 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer shadow-2xs"
-                  >
-                    <option value="">-- Choose Party --</option>
-                    {retailers.map(r => (
-                      <option key={r.id} value={r.id}>
-                        {r.shop_name} ({r.retailer_code || 'RET'}) &bull; {r.city || 'Local'} &bull; Bal: ₹{Number(r.outstanding || 0).toLocaleString('en-IN')}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setSelectedRetailerId}
+                    placeholder="Search party name, code, city or mobile"
+                    showBalance
+                  />
                 </div>
 
                 {chosenRetailer && (
@@ -1051,16 +1047,15 @@ function AdminPaymentsContent() {
               </select>
 
               {/* Retailer Filter */}
-              <select
+              <PartyPicker
+                parties={retailers}
                 value={paymentsRetailerFilter}
-                onChange={(e) => setPaymentsRetailerFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:bg-white focus:border-indigo-500 focus:outline-none cursor-pointer max-w-xs truncate"
-              >
-                <option value="ALL">All Parties</option>
-                {retailers.map(r => (
-                  <option key={r.id} value={r.id}>{r.shop_name} ({r.retailer_code})</option>
-                ))}
-              </select>
+                onChange={setPaymentsRetailerFilter}
+                placeholder="All Parties"
+                allLabel="All Parties"
+                allValue="ALL"
+                className="w-56"
+              />
             </div>
 
             {/* Export & Actions */}
@@ -1214,19 +1209,13 @@ function AdminPaymentsContent() {
               {/* Select Retailer */}
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 block">Party <span className="text-red-500">*</span></label>
-                <select
+                <PartyPicker
+                  parties={retailers}
                   value={recordRetailerId}
-                  onChange={(e) => setRecordRetailerId(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
-                  required
-                >
-                  <option value="">-- Choose Party --</option>
-                  {retailers.map(r => (
-                    <option key={r.id} value={r.id}>
-                      {r.shop_name} ({r.retailer_code}) &bull; Outstanding: ₹{r.outstanding.toLocaleString('en-IN')}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setRecordRetailerId}
+                  placeholder="Search party to record payment"
+                  showBalance
+                />
               </div>
 
               {/* Amount */}
