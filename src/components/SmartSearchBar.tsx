@@ -66,7 +66,11 @@ export default function SmartSearchBar({
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside as any);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside as any);
+    };
   }, []);
 
   // Generate matching suggestions
@@ -352,8 +356,8 @@ export default function SmartSearchBar({
   };
 
   const sizeClasses = {
-    sm: 'py-1.5 pl-8 pr-7 text-xs',
-    md: 'py-2 pl-9 pr-8 text-xs',
+    sm: 'py-2 sm:py-1.5 pl-8 pr-8 text-base sm:text-xs',
+    md: 'py-3 sm:py-2 pl-9 pr-9 text-base sm:text-xs',
     lg: 'py-2.5 pl-10 pr-9 text-sm'
   };
 
@@ -384,6 +388,8 @@ export default function SmartSearchBar({
           placeholder={placeholder}
           disabled={disabled}
           autoFocus={autoFocus}
+          enterKeyHint="search"
+          autoComplete="off"
           className={`w-full bg-slate-50/80 hover:bg-slate-100/70 focus:bg-white border border-slate-250 focus:border-indigo-500 rounded-xl text-slate-800 placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 shadow-2xs transition-all ${sizeClasses[size]} ${inputClassName}`}
         />
 
@@ -414,7 +420,7 @@ export default function SmartSearchBar({
               <Sparkles className="w-3.5 h-3.5" />
               Live Suggestions ({suggestions.length})
             </span>
-            <span className="text-xs text-slate-500 font-semibold lowercase">
+            <span className="hidden sm:inline text-xs text-slate-500 font-semibold lowercase">
               press <kbd className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200">↑</kbd> <kbd className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200">↓</kbd> or click to fill
             </span>
           </div>
@@ -426,7 +432,7 @@ export default function SmartSearchBar({
               <p className="text-xs text-slate-400">Keep typing to refine your search</p>
             </div>
           ) : (
-            <div className="max-h-[320px] overflow-y-auto divide-y divide-slate-100 p-1">
+            <div className="max-h-[50vh] sm:max-h-[320px] overflow-y-auto overscroll-contain divide-y divide-slate-100 p-1">
               {suggestions.map((item, index) => {
                 const badgeInfo = getCategoryBadge(item.category);
                 const IconComponent = badgeInfo.icon;
@@ -438,23 +444,23 @@ export default function SmartSearchBar({
                     type="button"
                     onClick={() => handleSelect(item)}
                     onMouseEnter={() => setSelectedIndex(index)}
-                    className={`w-full text-left p-2.5 rounded-xl flex items-center justify-between gap-3 transition-colors cursor-pointer ${
+                    className={`w-full text-left p-3 sm:p-2.5 min-h-[48px] rounded-xl flex items-center justify-between gap-3 transition-colors cursor-pointer ${
                       isSelected 
                         ? 'bg-indigo-50/90 text-indigo-950 ring-1 ring-indigo-200 font-bold' 
                         : 'hover:bg-slate-50 text-slate-800'
                     }`}
                   >
-                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
                       <div className={`p-1.5 rounded-lg border shrink-0 ${badgeInfo.bgColor}`}>
                         <IconComponent className="w-4 h-4" />
                       </div>
 
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm font-bold leading-snug truncate">
+                        <div className="text-sm font-bold leading-snug break-words">
                           {highlightMatch(item.title, value)}
                         </div>
                         {item.subtitle && (
-                          <div className="text-xs text-slate-500 font-medium truncate mt-0.5">
+                          <div className="text-xs text-slate-500 font-medium break-words mt-0.5">
                             {item.subtitle}
                           </div>
                         )}
@@ -464,7 +470,7 @@ export default function SmartSearchBar({
                     {/* Right Tag & Enter Indicator */}
                     <div className="flex items-center gap-1.5 shrink-0">
                       {showCategoryBadges && (
-                        <span className={`text-xs font-bold uppercase px-2 py-0.5 rounded border ${badgeInfo.bgColor}`}>
+                        <span className={`hidden sm:inline text-xs font-bold uppercase px-2 py-0.5 rounded border ${badgeInfo.bgColor}`}>
                           {item.badge || badgeInfo.label}
                         </span>
                       )}
@@ -478,7 +484,7 @@ export default function SmartSearchBar({
 
           {/* Footer Bar */}
           <div className="px-3.5 py-2 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 font-medium">
-            <span>Tip: Click any suggestion to instantly filter the view</span>
+            <span className="hidden sm:inline">Tip: Click any suggestion to instantly filter the view</span>
             <button
               type="button"
               onClick={() => setIsOpen(false)}

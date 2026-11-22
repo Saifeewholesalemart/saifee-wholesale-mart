@@ -633,7 +633,7 @@ export default function SpotOrderModal({
                                 </div>
                                 <div className="min-w-0">
                                   <div className="flex items-center gap-2">
-                                    <span className="font-black text-xs text-slate-900 truncate">
+                                    <span className="font-black text-xs text-slate-900 break-words">
                                       {ret.shop_name}
                                     </span>
                                     {isSelected && (
@@ -828,7 +828,7 @@ export default function SpotOrderModal({
                         }`}
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="font-black text-xs text-slate-900 truncate">{p.name}</span>
+                          <span className="font-black text-xs text-slate-900 break-words">{p.name}</span>
                           {p.brand && (
                             <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 text-[10px] font-bold">
                               {p.brand}
@@ -930,7 +930,7 @@ export default function SpotOrderModal({
 
                               {/* Autocomplete Dropdown List */}
                               {isDropdownOpen && (
-                                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl z-50 max-h-64 overflow-y-auto divide-y divide-slate-100 animate-in fade-in duration-100 min-w-[320px]">
+                                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-2xl shadow-2xl z-50 max-h-64 overflow-y-auto divide-y divide-slate-100 animate-in fade-in duration-100 min-w-[min(320px,calc(100vw-2rem))]">
                                   {rowFilteredProducts.length === 0 ? (
                                     <div className="p-3 text-center text-xs text-slate-500 font-medium">
                                       No products match &quot;{searchQuery}&quot;

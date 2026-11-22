@@ -901,7 +901,7 @@ export default function SalesDashboard() {
                                     <button
                                       type="button"
                                       onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
-                                      className="w-6 h-6 bg-slate-100 hover:bg-slate-200 rounded flex items-center justify-center text-slate-700 font-bold cursor-pointer"
+                                      className="w-9 h-9 sm:w-6 sm:h-6 bg-slate-100 hover:bg-slate-200 rounded flex items-center justify-center text-slate-700 font-bold cursor-pointer"
                                       title="Decrease 1 carton"
                                     >
                                       <Minus className="w-3.5 h-3.5" />
@@ -918,7 +918,7 @@ export default function SalesDashboard() {
                                     <button
                                       type="button"
                                       onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
-                                      className="w-6 h-6 bg-cyan-600 text-white hover:bg-cyan-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                      className="w-9 h-9 sm:w-6 sm:h-6 bg-cyan-600 text-white hover:bg-cyan-700 rounded flex items-center justify-center font-bold cursor-pointer"
                                       title="Increase 1 carton"
                                     >
                                       <Plus className="w-3.5 h-3.5" />
@@ -934,7 +934,7 @@ export default function SalesDashboard() {
                                     <button
                                       type="button"
                                       onClick={() => handleUpdateQty(cartKey, 'loose', -1)}
-                                      className="w-6 h-6 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded flex items-center justify-center font-bold cursor-pointer"
+                                      className="w-9 h-9 sm:w-6 sm:h-6 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded flex items-center justify-center font-bold cursor-pointer"
                                       title="Decrease 1 loose unit"
                                     >
                                       <Minus className="w-3.5 h-3.5" />
@@ -951,7 +951,7 @@ export default function SalesDashboard() {
                                     <button
                                       type="button"
                                       onClick={() => handleUpdateQty(cartKey, 'loose', 1)}
-                                      className="w-6 h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                      className="w-9 h-9 sm:w-6 sm:h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
                                       title="Increase 1 loose unit"
                                     >
                                       <Plus className="w-3.5 h-3.5" />
@@ -1268,7 +1268,7 @@ export default function SalesDashboard() {
                             const totalBase = it.base_qty || it.quantity || 0;
                             return (
                               <div key={idx} className="flex justify-between text-[11px] text-slate-600">
-                                <span className="truncate pr-2">
+                                <span className="break-words min-w-0 pr-2">
                                   &bull; {p?.name || it.product_name || 'Product'} ({formatQuantityDisplay(totalBase, unitsPerPack, it.trading_unit || p?.trading_unit, it.base_unit || p?.base_unit)})
                                 </span>
                                 <span className="font-bold text-slate-800 shrink-0">₹{it.total_amount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
@@ -1895,7 +1895,7 @@ export default function SalesDashboard() {
 
       {/* Toast Notification */}
       {salesToast && (
-        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-900 text-white border border-slate-700 shadow-2xl text-xs font-bold animate-in slide-in-from-bottom-3 duration-200 max-w-sm">
+        <div className="fixed bottom-24 left-3 right-3 sm:left-auto sm:bottom-6 sm:right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-900 text-white border border-slate-700 shadow-2xl text-xs font-bold animate-in slide-in-from-bottom-3 duration-200 sm:max-w-sm">
           <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 flex-shrink-0" />
           <span className="flex-1">{salesToast.message}</span>
           <button onClick={() => setSalesToast(null)} className="text-slate-400 hover:text-white p-1">
@@ -1972,7 +1972,7 @@ const SalesProductCard = React.memo(function SalesProductCard({
                               )}
                             </div>
                             <div className="flex items-center gap-1.5 flex-wrap mt-1">
-                              <h4 className="font-extrabold text-slate-900 text-sm block leading-tight truncate">{p.name}</h4>
+                              <h4 className="font-extrabold text-slate-900 text-sm block leading-snug break-words">{p.name}</h4>
                               <span className="px-2 py-0.5 rounded text-xs font-black bg-emerald-50 text-emerald-800 border border-emerald-300">
                                 MRP ₹{activeMrp || p.mrp}
                               </span>
@@ -2055,7 +2055,7 @@ const SalesProductCard = React.memo(function SalesProductCard({
                                   <button
                                     type="button"
                                     onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
-                                    className="w-6 h-6 bg-white hover:bg-slate-200 border border-slate-200 rounded flex items-center justify-center text-slate-700 font-bold cursor-pointer"
+                                    className="w-9 h-9 sm:w-6 sm:h-6 bg-white hover:bg-slate-200 border border-slate-200 rounded flex items-center justify-center text-slate-700 font-bold cursor-pointer"
                                     title="Decrease 1 carton"
                                   >
                                     <Minus className="w-3.5 h-3.5" />
@@ -2072,7 +2072,7 @@ const SalesProductCard = React.memo(function SalesProductCard({
                                   <button
                                     type="button"
                                     onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
-                                    className="w-6 h-6 bg-cyan-600 text-white hover:bg-cyan-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                    className="w-9 h-9 sm:w-6 sm:h-6 bg-cyan-600 text-white hover:bg-cyan-700 rounded flex items-center justify-center font-bold cursor-pointer"
                                     title="Increase 1 carton"
                                   >
                                     <Plus className="w-3.5 h-3.5" />
@@ -2105,7 +2105,7 @@ const SalesProductCard = React.memo(function SalesProductCard({
                                   <button
                                     type="button"
                                     onClick={() => handleUpdateQty(cartKey, 'loose', -1)}
-                                    className="w-6 h-6 bg-white hover:bg-emerald-100 border border-emerald-200 text-emerald-800 rounded flex items-center justify-center font-bold cursor-pointer"
+                                    className="w-9 h-9 sm:w-6 sm:h-6 bg-white hover:bg-emerald-100 border border-emerald-200 text-emerald-800 rounded flex items-center justify-center font-bold cursor-pointer"
                                     title="Decrease 1 loose unit"
                                   >
                                     <Minus className="w-3.5 h-3.5" />
@@ -2122,7 +2122,7 @@ const SalesProductCard = React.memo(function SalesProductCard({
                                   <button
                                     type="button"
                                     onClick={() => handleUpdateQty(cartKey, 'loose', 1)}
-                                    className="w-6 h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                    className="w-9 h-9 sm:w-6 sm:h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
                                     title="Increase 1 loose unit"
                                   >
                                     <Plus className="w-3.5 h-3.5" />

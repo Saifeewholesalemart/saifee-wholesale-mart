@@ -382,11 +382,11 @@ export default function RetailerEcommerce() {
   return (
     <div className="flex-1 flex flex-col min-h-screen bg-slate-50 relative pb-24">
       {/* Navbar Banner */}
-      <header className="sticky top-0 z-30 flex items-center justify-between px-4 py-3.5 bg-slate-900 text-white shadow-md">
-        <div className="flex items-center gap-2">
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-2 px-3 sm:px-4 py-3 bg-slate-900 text-white shadow-md">
+        <div className="flex items-center gap-2 min-w-0">
           <Store className="w-5 h-5 text-emerald-500" />
           <div>
-            <h1 className="text-sm font-black leading-tight">
+            <h1 className="text-sm font-black leading-tight break-words">
               {isRetailerLoggedIn ? retailerProfile?.shop_name : 'Guest Retailer Storefront'}
             </h1>
             <span className="text-xs text-slate-300 block mt-0.5 uppercase font-bold tracking-wider">
@@ -415,7 +415,7 @@ export default function RetailerEcommerce() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-4xl mx-auto w-full p-4 space-y-6">
+      <main className="max-w-4xl mx-auto w-full p-3 sm:p-4 space-y-6">
         
         {/* VIEW 1: PRODUCT CATALOG */}
         {activeView === 'catalog' && (
@@ -423,7 +423,7 @@ export default function RetailerEcommerce() {
             
             {/* Shopping Welcome banner if logged in */}
             {isRetailerLoggedIn && retailerProfile && (
-              <div className="p-4 bg-gradient-to-r from-emerald-900 to-slate-900 text-white rounded-2xl shadow-sm flex items-center justify-between">
+              <div className="p-4 bg-gradient-to-r from-emerald-900 to-slate-900 text-white rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest block">Logged In Shop Portal</span>
                   <h3 className="text-base font-black">{retailerProfile.shop_name}</h3>
@@ -454,7 +454,7 @@ export default function RetailerEcommerce() {
                 <select
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="flex-1 border border-slate-200 bg-white rounded-xl px-2 py-2 text-xs font-semibold text-slate-600 outline-none"
+                  className="flex-1 min-w-0 border border-slate-200 bg-white rounded-xl px-2 py-3 sm:py-2 text-sm sm:text-xs font-semibold text-slate-600 outline-none"
                 >
                   <option value="All">All Categories</option>
                   {categoriesList.filter(c => c !== 'All').map(c => (
@@ -465,7 +465,7 @@ export default function RetailerEcommerce() {
                 <select
                   value={selectedBrand}
                   onChange={(e) => setSelectedBrand(e.target.value)}
-                  className="flex-1 border border-slate-200 bg-white rounded-xl px-2 py-2 text-xs font-semibold text-slate-600 outline-none"
+                  className="flex-1 min-w-0 border border-slate-200 bg-white rounded-xl px-2 py-3 sm:py-2 text-sm sm:text-xs font-semibold text-slate-600 outline-none"
                 >
                   <option value="All">All Brands</option>
                   {brandsList.filter(b => b !== 'All').map(b => (
@@ -476,7 +476,7 @@ export default function RetailerEcommerce() {
             </div>
 
             {/* Products grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
               {filteredProducts.length === 0 ? (
                 <div className="col-span-full text-center py-16 text-xs text-slate-400 font-semibold bg-white border border-slate-100 rounded-xl">
                   No products match your search or filter.
@@ -516,7 +516,7 @@ export default function RetailerEcommerce() {
 
         {/* VIEW 2: CART DRAWER VIEW */}
         {activeView === 'cart' && (
-          <div className="erp-card bg-white p-6 space-y-6 max-w-2xl mx-auto border-slate-100">
+          <div className="erp-card bg-white p-3 sm:p-6 space-y-5 sm:space-y-6 max-w-2xl mx-auto border-slate-100">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
                 <ShoppingCart className="w-5 h-5 text-emerald-600" />
@@ -607,14 +607,14 @@ export default function RetailerEcommerce() {
                               <div className="flex items-center gap-1.5">
                                 <button
                                   onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
-                                  className="w-6 h-6 bg-slate-100 hover:bg-slate-200 rounded flex items-center justify-center text-slate-700 font-bold cursor-pointer"
+                                  className="w-9 h-9 sm:w-6 sm:h-6 bg-slate-100 hover:bg-slate-200 rounded flex items-center justify-center text-slate-700 font-bold cursor-pointer"
                                 >
                                   <Minus className="w-3.5 h-3.5" />
                                 </button>
                                 <span className="text-sm font-black text-indigo-700 w-6 text-center">{cartonQty}</span>
                                 <button
                                   onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
-                                  className="w-6 h-6 bg-indigo-600 text-white hover:bg-indigo-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                  className="w-9 h-9 sm:w-6 sm:h-6 bg-indigo-600 text-white hover:bg-indigo-700 rounded flex items-center justify-center font-bold cursor-pointer"
                                 >
                                   <Plus className="w-3.5 h-3.5" />
                                 </button>
@@ -629,14 +629,14 @@ export default function RetailerEcommerce() {
                               <div className="flex items-center gap-1.5">
                                 <button
                                   onClick={() => handleUpdateQty(cartKey, 'loose', -1)}
-                                  className="w-6 h-6 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                  className="w-9 h-9 sm:w-6 sm:h-6 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
                                 >
                                   <Minus className="w-3.5 h-3.5" />
                                 </button>
                                 <span className="text-sm font-black text-emerald-700 w-6 text-center">{looseQty}</span>
                                 <button
                                   onClick={() => handleUpdateQty(cartKey, 'loose', 1)}
-                                  className="w-6 h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                  className="w-9 h-9 sm:w-6 sm:h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
                                 >
                                   <Plus className="w-3.5 h-3.5" />
                                 </button>
@@ -696,7 +696,7 @@ export default function RetailerEcommerce() {
 
         {/* VIEW 3: CHECKOUT SCREEN */}
         {activeView === 'checkout' && isRetailerLoggedIn && retailerProfile && (
-          <div className="erp-card bg-white p-6 space-y-6 max-w-2xl mx-auto border-slate-100">
+          <div className="erp-card bg-white p-3 sm:p-6 space-y-5 sm:space-y-6 max-w-2xl mx-auto border-slate-100">
             <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-3">Checkout Confirmation</h3>
             
             {/* Pre-submit Multi-item Pending Order Warning Banner */}
@@ -910,7 +910,7 @@ export default function RetailerEcommerce() {
                     onClick={() => handleLoginAsRetailer(p.id)}
                     className="w-full text-left flex items-start gap-2.5 p-2.5 rounded-lg border border-slate-100 hover:border-emerald-100 hover:bg-emerald-50/20 text-xs font-semibold text-slate-700 transition-all cursor-pointer"
                   >
-                    <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
+                    <div className="w-9 h-9 sm:w-6 sm:h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
                       {retObj?.city.slice(0, 2).toUpperCase()}
                     </div>
                     <div>
@@ -1112,7 +1112,7 @@ const ProductCard = React.memo(function ProductCard({
                                   <button
                                     type="button"
                                     onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
-                                    className="w-6 h-6 bg-white hover:bg-slate-200 border border-slate-200 rounded-md flex items-center justify-center text-slate-700 font-bold shadow-2xs cursor-pointer"
+                                    className="w-9 h-9 sm:w-6 sm:h-6 bg-white hover:bg-slate-200 border border-slate-200 rounded-md flex items-center justify-center text-slate-700 font-bold shadow-2xs cursor-pointer"
                                   >
                                     <Minus className="w-3.5 h-3.5" />
                                   </button>
@@ -1123,7 +1123,7 @@ const ProductCard = React.memo(function ProductCard({
                                 <button
                                   type="button"
                                   onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
-                                  className="w-6 h-6 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md flex items-center justify-center font-bold shadow-2xs cursor-pointer"
+                                  className="w-9 h-9 sm:w-6 sm:h-6 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md flex items-center justify-center font-bold shadow-2xs cursor-pointer"
                                 >
                                   <Plus className="w-3.5 h-3.5" />
                                 </button>
@@ -1142,7 +1142,7 @@ const ProductCard = React.memo(function ProductCard({
                                   <button
                                     type="button"
                                     onClick={() => handleUpdateQty(cartKey, 'loose', -1)}
-                                    className="w-6 h-6 bg-white hover:bg-emerald-100 border border-emerald-200 rounded-md flex items-center justify-center text-emerald-800 font-bold shadow-2xs cursor-pointer"
+                                    className="w-9 h-9 sm:w-6 sm:h-6 bg-white hover:bg-emerald-100 border border-emerald-200 rounded-md flex items-center justify-center text-emerald-800 font-bold shadow-2xs cursor-pointer"
                                   >
                                     <Minus className="w-3.5 h-3.5" />
                                   </button>
@@ -1153,7 +1153,7 @@ const ProductCard = React.memo(function ProductCard({
                                 <button
                                   type="button"
                                   onClick={() => handleUpdateQty(cartKey, 'loose', 1)}
-                                  className="w-6 h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded-md flex items-center justify-center font-bold shadow-2xs cursor-pointer"
+                                  className="w-9 h-9 sm:w-6 sm:h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded-md flex items-center justify-center font-bold shadow-2xs cursor-pointer"
                                 >
                                   <Plus className="w-3.5 h-3.5" />
                                 </button>

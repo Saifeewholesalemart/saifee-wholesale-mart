@@ -682,7 +682,7 @@ export default function RetailerDashboard() {
                                     <button
                                       type="button"
                                       onClick={() => handleUpdateQty(cartKey, 'carton', -1)}
-                                      className="w-6 h-6 bg-slate-100 hover:bg-slate-200 rounded flex items-center justify-center text-slate-700 font-bold cursor-pointer"
+                                      className="w-9 h-9 sm:w-6 sm:h-6 bg-slate-100 hover:bg-slate-200 rounded flex items-center justify-center text-slate-700 font-bold cursor-pointer"
                                       title="Decrease 1 carton"
                                     >
                                       <Minus className="w-3.5 h-3.5" />
@@ -699,7 +699,7 @@ export default function RetailerDashboard() {
                                     <button
                                       type="button"
                                       onClick={() => handleUpdateQty(cartKey, 'carton', 1)}
-                                      className="w-6 h-6 bg-indigo-600 text-white hover:bg-indigo-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                      className="w-9 h-9 sm:w-6 sm:h-6 bg-indigo-600 text-white hover:bg-indigo-700 rounded flex items-center justify-center font-bold cursor-pointer"
                                       title="Increase 1 carton"
                                     >
                                       <Plus className="w-3.5 h-3.5" />
@@ -715,7 +715,7 @@ export default function RetailerDashboard() {
                                     <button
                                       type="button"
                                       onClick={() => handleUpdateQty(cartKey, 'loose', -1)}
-                                      className="w-6 h-6 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded flex items-center justify-center font-bold cursor-pointer"
+                                      className="w-9 h-9 sm:w-6 sm:h-6 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded flex items-center justify-center font-bold cursor-pointer"
                                       title="Decrease 1 loose unit"
                                     >
                                       <Minus className="w-3.5 h-3.5" />
@@ -732,7 +732,7 @@ export default function RetailerDashboard() {
                                     <button
                                       type="button"
                                       onClick={() => handleUpdateQty(cartKey, 'loose', 1)}
-                                      className="w-6 h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
+                                      className="w-9 h-9 sm:w-6 sm:h-6 bg-emerald-600 text-white hover:bg-emerald-700 rounded flex items-center justify-center font-bold cursor-pointer"
                                       title="Increase 1 loose unit"
                                     >
                                       <Plus className="w-3.5 h-3.5" />
