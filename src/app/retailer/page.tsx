@@ -71,6 +71,19 @@ export default function RetailerEcommerce() {
 
   // 2. Filter products based on active categories/brand/search
   // PERFORMANCE: lookups built once per data change (not once per product card)
+  const [loginSearch, setLoginSearch] = useState('');
+  const loginProfiles = useMemo(() => {
+    const q = loginSearch.trim();
+    const retById = new Map(retailers.map(r => [r.id, r]));
+    return profiles
+      .filter(p => p.role === 'retailer')
+      .filter(p => {
+        if (!q) return true;
+        const r = retById.get(p.retailer_id as any);
+        return matchWords(q, r?.shop_name, r?.city, r?.retailer_code, r?.owner_name);
+      })
+      .slice(0, 30);
+  }, [profiles, retailers, loginSearch]);
   const productById = useMemo(() => new Map(products.map(p => [p.id, p])), [products]);
   const batchesByProduct = useMemo(() => {
     const m = new Map<string, typeof batches>();
@@ -900,9 +913,17 @@ export default function RetailerEcommerce() {
               <p className="text-xs text-slate-500 leading-normal">Choose a retailer account to sign in.</p>
             </div>
 
-            {/* List of profiles belonging to role retailer */}
+            <input
+              value={loginSearch}
+              onChange={e => setLoginSearch(e.target.value)}
+              placeholder="Search shop name, city or code..."
+              className="w-full border border-slate-200 rounded-xl px-3 py-3 sm:py-2 text-base sm:text-xs outline-none focus:border-emerald-500"
+              autoComplete="off"
+            />
+
+            {/* List of profiles belonging to role retailer (first 30 matches only, so a long list stays fast) */}
             <div className="space-y-1.5 max-h-[250px] overflow-y-auto pr-1">
-              {profiles.filter(p => p.role === 'retailer').map(p => {
+              {loginProfiles.map(p => {
                 const retObj = retailers.find(r => r.id === p.retailer_id);
                 return (
                   <button
@@ -910,7 +931,7 @@ export default function RetailerEcommerce() {
                     onClick={() => handleLoginAsRetailer(p.id)}
                     className="w-full text-left flex items-start gap-2.5 p-2.5 rounded-lg border border-slate-100 hover:border-emerald-100 hover:bg-emerald-50/20 text-xs font-semibold text-slate-700 transition-all cursor-pointer"
                   >
-                    <div className="w-9 h-9 sm:w-6 sm:h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
+                    <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
                       {retObj?.city.slice(0, 2).toUpperCase()}
                     </div>
                     <div>

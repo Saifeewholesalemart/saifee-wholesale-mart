@@ -87,10 +87,21 @@ export default function SalesDashboard() {
 
   // 2. Filter Retailers based on search
   // The shop counter's walk-in record is not a real shop: salesmen never order for it
-  const filteredRetailers = retailers.filter(r => !isWalkInRetailerId(r.id) && r.active !== false).filter(r =>
-    retailerSearch.trim() === '' ||
-    matchWords(retailerSearch, (r.shop_name || ''), (r.owner_name || ''), (r.retailer_code || ''), (r.city || ''))
-  );
+  // With over a thousand parties, drawing every card on each keystroke made typing and selecting slow.
+  // So: search a deferred copy of the text, show name matches first, and draw at most 40 cards.
+  const RETAILER_CARDS_MAX = 40;
+  const deferredRetailerSearch = useDeferredValue(retailerSearch);
+  const retailerMatches = useMemo(() => {
+    const q = deferredRetailerSearch.trim();
+    const active = retailers.filter(r => !isWalkInRetailerId(r.id) && r.active !== false);
+    if (!q) return active;
+    const found = active.filter(r =>
+      matchWords(q, (r.shop_name || ''), (r.owner_name || ''), (r.retailer_code || ''), (r.city || ''))
+    );
+    const byName = found.filter(r => matchWords(q, r.shop_name || ''));
+    return byName.length === found.length ? found : [...byName, ...found.filter(r => !matchWords(q, r.shop_name || ''))];
+  }, [retailers, deferredRetailerSearch]);
+  const filteredRetailers = retailerMatches.slice(0, RETAILER_CARDS_MAX);
 
   // 3. Filter products & categories based on salesperson category assignment
   const isCompanySalesperson = currentUser?.role === 'sales_co' || currentUser?.sales_role_type === 'COMPANY' || currentUser?.trade_scope === 'RESTRICTED';
@@ -717,6 +728,11 @@ export default function SalesDashboard() {
                         </div>
                       );
                     })
+                  )}
+                  {retailerMatches.length > RETAILER_CARDS_MAX && (
+                    <p className="text-center text-[11px] font-semibold text-slate-500 py-2">
+                      Showing {RETAILER_CARDS_MAX} of {retailerMatches.length} shops. Type more of the name to narrow down.
+                    </p>
                   )}
                 </div>
               </div>

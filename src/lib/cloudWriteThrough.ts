@@ -49,6 +49,8 @@ export interface CloudStatus {
   message: string;
   error?: string;
   businessId: string | null;
+  /** Time taken by each start-up step, e.g. "Connection 0.8s · Products 6.2s" (shown on the loading screen) */
+  loadTimings?: string;
 }
 
 type Listener = (s: CloudStatus) => void;
@@ -870,7 +872,13 @@ export async function startCloudSession(options: {
     pollTimer = null;
   }
 
-  setStatus({ state: 'connecting', message: 'Loading data from the cloud...', businessId: options.businessId, error: undefined });
+  const loadT0 = Date.now();
+  const marks: string[] = [];
+  const mark = (label: string, message?: string) => {
+    marks.push(`${label} ${((Date.now() - loadT0) / 1000).toFixed(1)}s`);
+    setStatus({ loadTimings: marks.join(' · '), ...(message ? { message } : {}) });
+  };
+  setStatus({ state: 'connecting', message: 'Checking the connection...', businessId: options.businessId, error: undefined, loadTimings: '' });
 
   // Retry until cloud reachable (app is online-only)
   for (let attempt = 0; ; attempt++) {
@@ -891,6 +899,7 @@ export async function startCloudSession(options: {
         setStatus({ state: 'setup_required', message: 'Cloud setup is incomplete. Run supabase/010_cloud_records.sql in Supabase.' });
         return false;
       }
+      mark('Connection', 'Loading products and parties...');
       break;
     } catch (err: any) {
       const d = describeError(err);
@@ -965,6 +974,7 @@ export async function startCloudSession(options: {
       }
     }
     if (token !== startToken) return false;
+    mark('Products & parties', 'Loading orders and bills...');
 
     // B. app_records (sab transactions + full master copies) — already downloading
     const loaded = await recordsPromise;
@@ -972,6 +982,7 @@ export async function startCloudSession(options: {
     const { records, maxUpdatedAt } = loaded.value as { records: LoadedRecord[]; maxUpdatedAt: string | null };
     if (token !== startToken) return false;
 
+    mark(`Orders & bills (${records.length} records)`, 'Opening the app...');
     applyRemoteRecords(records);
 
     // C. Ab se har change upload hoga
@@ -993,6 +1004,8 @@ export async function startCloudSession(options: {
       }
     }
     await setIdbItem(cpKey, maxUpdatedAt || cp || new Date(0).toISOString());
+    mark('Applying');
+    try { console.info('[CloudLoad] Start-up timings:', marks.join(' · ')); } catch { /* ignore */ }
     ready = true;
 
     setStatus({
