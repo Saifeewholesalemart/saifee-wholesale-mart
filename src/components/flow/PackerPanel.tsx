@@ -1,5 +1,7 @@
 'use client';
 
+import { useOrderFrom } from './flowUi';
+
 /**
  * Packer screen (simple flow).
  * Orders "To Pack" are grouped by shop: orders of one retailer from any channel
@@ -40,6 +42,7 @@ function freeStockExcluding(batches: { product_id: string; quantity: number }[],
 export default function PackerPanel({ compact = false, filter, sort = 'oldest', onOpenOrder }: { compact?: boolean; filter?: (o: Order) => boolean; sort?: OrderSort; onOpenOrder?: (orderId: string) => void }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const { orders, products, batches, retailers, flowPackOrders } = useDb();
+  const { fromOf, byOf, nameOf } = useOrderFrom();
   // Packing screen is kept in the URL (?pack=...) so the phone Back button goes one screen back
   const [packParam, setPackParam] = useUrlStep<string>('pack', '', null);
   const step: Step = !packParam ? 'list' : packParam === 'done' ? 'done' : packParam.startsWith('confirm:') ? 'confirm' : 'pack';
@@ -220,7 +223,7 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
           const pcs = items.reduce((s, x) => s + flowShortQty(x.o, x.it), 0);
           const carried = g.orders.length > 1 && g.orders.some(o => o.flow_ready_to_bill || !!o.flow_pack_attempted_at);
           const backorderBack = g.orders.some(o => !!o.flow_pack_attempted_at || (o.items || []).some(it => (it.fulfilled_qty ?? 0) > 0));
-          const channels = Array.from(new Set(g.orders.map(o => flowChannelLabel(o))));
+          const channels = Array.from(new Set(g.orders.map(o => fromOf(o))));
           return (
             <div key={g.key} className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col gap-3">
               <div className="flex justify-between gap-2 items-start">
@@ -254,7 +257,7 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
                         ) : (
                           <span className="font-mono font-bold text-slate-800">{o.order_number}</span>
                         )}
-                        <span className="font-semibold text-indigo-800 bg-indigo-50 rounded px-1.5 py-0.5">{flowChannelLabel(o)}</span>
+                        <span className="font-semibold text-indigo-800 bg-indigo-50 rounded px-1.5 py-0.5">{fromOf(o)}</span>
                         <span>{formatWhen(o.order_date || o.created_at)}</span>
                         {(o.flow_ready_to_bill || (!!o.flow_pack_attempted_at && !o.flow_repack)) && <span className="font-semibold text-amber-900 bg-amber-100 rounded px-1.5 py-0.5">Backorder</span>}
                       </div>
@@ -320,8 +323,8 @@ export default function PackerPanel({ compact = false, filter, sort = 'oldest', 
   const orderHeading = (o: Order) => (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600 mt-1">
       <span className="font-mono font-bold text-slate-800">{o.order_number}</span>
-      <span className="font-semibold text-indigo-800 bg-indigo-50 rounded px-1.5 py-0.5">{flowChannelLabel(o)}</span>
-      {o.created_by && <span>by {o.created_by}</span>}
+      <span className="font-semibold text-indigo-800 bg-indigo-50 rounded px-1.5 py-0.5">{fromOf(o)}</span>
+      {byOf(o) && <span>by {byOf(o)}</span>}
       <span>· {formatWhen(o.order_date || o.created_at)}</span>
       {(o.flow_ready_to_bill || !!o.flow_pack_attempted_at) && <span className="font-semibold text-amber-900 bg-amber-100 rounded px-1.5 py-0.5">Backorder from earlier packing</span>}
     </div>

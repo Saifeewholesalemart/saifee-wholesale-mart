@@ -1,5 +1,7 @@
 'use client';
 
+import { useOrderFrom } from './flowUi';
+
 /**
  * Biller screen (simple flow).
  * Packed orders are grouped by shop: all packed orders of one retailer (any channel)
@@ -27,6 +29,7 @@ type Mode = 'Cash' | 'UPI' | 'Credit';
 
 export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { filter?: (o: Order) => boolean; sort?: OrderSort; onOpenOrder?: (orderId: string) => void }) {
   const { orders, products, batches, retailers, invoices, activeCompany, flowBillShop } = useDb();
+  const { fromOf, byOf, nameOf } = useOrderFrom();
   const [selKey, setSelKey] = useState<string | null>(null);
   const [rates, setRates] = useState<Record<string, string>>({});
   const [mode, setMode] = useState<Mode>('Credit');
@@ -187,7 +190,7 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
                       {onOpenOrder ? (
                         <button type="button" onClick={() => onOpenOrder(o.id)} className="font-semibold text-indigo-800 underline">{o.order_number}</button>
                       ) : o.order_number}
-                      {` (${flowChannelLabel(o)})`}
+                      {` (${fromOf(o)})`}
                     </React.Fragment>
                   ))}
                   {retailer?.city ? ` · ${retailer.city}` : ''}
@@ -200,7 +203,7 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
             <OrderNotes orders={current.orders} className="mx-5 mt-3" />
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[620px] text-sm border-collapse">
+              <table className="m-cards w-full min-w-[620px] text-sm border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-left text-slate-600">
                     <th className="px-5 py-2.5 font-semibold">Product</th>
@@ -213,10 +216,10 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
                 <tbody>
                   {lines.map(l => (
                     <tr key={l.id} className="border-t border-slate-100">
-                      <td className="px-5 py-3">
+                      <td data-label="" className="px-5 py-3">
                         <div className="font-semibold text-slate-900">{l.name}</div>
                         {current.orders.length > 1 && (
-                          <div className="text-xs text-slate-600">{l.order.order_number} · {flowChannelLabel(l.order)}</div>
+                          <div className="text-xs text-slate-600">{l.order.order_number} · {fromOf(l.order)}</div>
                         )}
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                           <span className="text-slate-700">
@@ -233,8 +236,8 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
                           </button>
                         </div>
                       </td>
-                      <td className="px-3 py-3 text-right font-bold">{l.qty}</td>
-                      <td className="px-3 py-3 text-right">
+                      <td data-label="Packed" className="px-3 py-3 text-right font-bold">{l.qty}</td>
+                      <td data-label="Rate (₹)" className="px-3 py-3 text-right">
                         <label htmlFor={`rate-${l.id}`} className="sr-only">Rate for {l.name}</label>
                         <input
                           id={`rate-${l.id}`}
@@ -246,8 +249,8 @@ export default function BillerPanel({ filter, sort = 'oldest', onOpenOrder }: { 
                           className="w-24 min-h-10 text-right border border-slate-300 rounded-lg px-2 focus:border-indigo-600 outline-none"
                         />
                       </td>
-                      <td className="px-3 py-3 text-right text-slate-600">{l.amt.gstPercent}%</td>
-                      <td className="px-5 py-3 text-right font-semibold">{formatINR(l.amt.taxable)}</td>
+                      <td data-label="GST" className="px-3 py-3 text-right text-slate-600">{l.amt.gstPercent}%</td>
+                      <td data-label="Amount" className="px-5 py-3 text-right font-semibold">{formatINR(l.amt.taxable)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -1,6 +1,8 @@
 import { hasWords } from '@/lib/searchWords';
 import type { Invoice, Order, Product, Retailer } from '@/lib/db';
-import { isWalkInRetailerId } from '@/lib/db';
+import { isWalkInRetailerId, flowChannelLabel } from '@/lib/db';
+import { useCallback } from 'react';
+import { useDb } from '@/context/DbContext';
 
 /** "Parle-G 100g (MRP ₹10)" — MRP is part of how the team identifies a product. */
 export function productLabel(product?: Partial<Product> | null, fallback = 'Item'): string {
@@ -203,4 +205,47 @@ export function purchaseRateOf(
 
 export function marginPercent(rate: number, purchase: number): number | null {
   return purchase > 0 && rate > 0 ? ((rate - purchase) / rate) * 100 : null;
+}
+
+
+// ---------------------------------------------------------------------------
+// Who placed the order: salesman orders show the salesman's name, not just "Salesman"
+// ---------------------------------------------------------------------------
+type PersonLike = { id: string; name?: string; full_name?: string };
+const LOOKS_LIKE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-|^(u|usr|prof|profile|sp|staff)[-_][a-z0-9]/i;
+
+/** Name for a stored user id (older orders keep the id). Names stored directly are returned as they are. */
+export function personName(value: string | undefined, profiles: PersonLike[]): string {
+  if (!value) return '';
+  const p = profiles.find(x => x.id === value);
+  if (p) return (p.name || p.full_name || '').trim();
+  return LOOKS_LIKE_ID.test(value) ? '' : value;
+}
+
+export function isSalesmanOrder(o: Pick<Order, 'source'>): boolean {
+  return o.source === 'distributor_salesperson' || o.source === 'company_salesperson';
+}
+
+/** "Ramesh Kumar" for a salesman order, "Retailer app" / "Counter" for the others */
+export function orderFromLabel(o: Order, profiles: PersonLike[]): string {
+  if (isSalesmanOrder(o)) {
+    const n = personName(o.created_by, profiles);
+    if (n) return o.source === 'company_salesperson' ? `${n} (Company salesman)` : n;
+  }
+  return flowChannelLabel(o);
+}
+
+/** Extra "by ..." name for non-salesman orders (salesman names are already in orderFromLabel) */
+export function orderByLabel(o: Order, profiles: PersonLike[]): string {
+  if (isSalesmanOrder(o) || o.source === 'retailer_direct') return '';
+  return personName(o.created_by, profiles);
+}
+
+export function useOrderFrom() {
+  const { profiles } = useDb();
+  const list = (profiles || []) as PersonLike[];
+  const fromOf = useCallback((o: Order) => orderFromLabel(o, list), [list]);
+  const byOf = useCallback((o: Order) => orderByLabel(o, list), [list]);
+  const nameOf = useCallback((v?: string) => personName(v, list) || v || '', [list]);
+  return { fromOf, byOf, nameOf };
 }

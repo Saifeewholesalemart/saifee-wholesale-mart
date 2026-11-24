@@ -279,3 +279,47 @@ input[type=number] {
 @media print {
   .report-grid-table .rg-th, .report-grid-table .rg-tf, .report-grid-table .rg-td { position: static !important; }
 }
+
+/* ------------------------------------------------------------------
+   Phone: tables marked "m-cards" turn into one card per row, so nothing
+   needs a sideways swipe. Each cell shows its column name (data-label);
+   a cell with an empty label takes the full width (name, buttons...).
+   ------------------------------------------------------------------ */
+@media (max-width: 767px) {
+  table.m-cards { display: block; min-width: 0 !important; width: 100%; }
+  table.m-cards thead { display: none; }
+  table.m-cards tbody { display: block; padding: 8px 10px; }
+  table.m-cards tr {
+    display: block;
+    background: #ffffff;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
+  table.m-cards td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 3px 0 !important;
+    text-align: right !important;
+    border: 0 !important;
+    max-width: none !important;
+  }
+  table.m-cards td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 600;
+    color: #64748b;
+  }
+  table.m-cards td[data-label=""] { display: block; text-align: left !important; }
+  table.m-cards td[data-label=""]::before { display: none; }
+  table.m-cards td.m-actions { padding-top: 8px !important; }
+  table.m-cards td.m-actions > *, table.m-cards td.m-actions > div { justify-content: flex-start; }
+  table.m-cards td.m-actions button, table.m-cards td.m-actions a { flex: 1 1 auto; justify-content: center; }
+  table.m-cards td.m-actions > button, table.m-cards td.m-actions > a { width: 100%; margin: 0 0 6px 0 !important; display: flex; align-items: center; }
+  table.m-cards tr.m-empty { border: 0 !important; background: transparent; }
+}

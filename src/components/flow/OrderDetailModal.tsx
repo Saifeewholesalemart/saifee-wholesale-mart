@@ -1,4 +1,6 @@
 'use client';
+
+import { useOrderFrom } from './flowUi';
 import { hasWords } from '@/lib/searchWords';
 
 /**
@@ -64,7 +66,7 @@ function LineEditor({
   return (
     <div className="flex flex-col gap-3">
       <div className="overflow-x-auto border border-slate-200 rounded-lg">
-        <table className="w-full min-w-[560px] text-sm border-collapse">
+        <table className="m-cards w-full min-w-[560px] text-sm border-collapse">
           <thead>
             <tr className="bg-slate-50 text-left text-slate-600">
               <th className="px-3 py-2 font-semibold">Product</th>
@@ -75,11 +77,11 @@ function LineEditor({
           </thead>
           <tbody>
             {lines.length === 0 && (
-              <tr><td colSpan={4} className="px-3 py-4 text-center text-slate-600">No items. Add one below.</td></tr>
+              <tr><td data-label="" colSpan={4} className="px-3 py-4 text-center text-slate-600">No items. Add one below.</td></tr>
             )}
             {lines.map(l => (
               <tr key={l.key} className="border-t border-slate-100">
-                <td className="px-3 py-2">
+                <td data-label="" className="px-3 py-2">
                   <div className="font-semibold text-slate-900">{l.name}</div>
                   {l.note && <div className="text-xs text-slate-600">{l.note}</div>}
                   {(() => {
@@ -99,19 +101,19 @@ function LineEditor({
                     );
                   })()}
                 </td>
-                <td className="px-3 py-2 text-right">
+                <td data-label="Qty" className="px-3 py-2 text-right">
                   <label className="sr-only" htmlFor={`q-${l.key}`}>Quantity for {l.name}</label>
                   <input id={`q-${l.key}`} type="number" min={0} inputMode="numeric" value={l.qty}
                     onChange={e => update(l.key, 'qty', e.target.value)}
                     className="w-20 min-h-10 text-right border border-slate-300 rounded-lg px-2 focus:border-indigo-600 outline-none" />
                 </td>
-                <td className="px-3 py-2 text-right">
+                <td data-label="Rate (₹)" className="px-3 py-2 text-right">
                   <label className="sr-only" htmlFor={`r-${l.key}`}>Rate for {l.name}</label>
                   <input id={`r-${l.key}`} type="number" min={0} step="0.01" value={l.rate}
                     onChange={e => update(l.key, 'rate', e.target.value)}
                     className="w-24 min-h-10 text-right border border-slate-300 rounded-lg px-2 focus:border-indigo-600 outline-none" />
                 </td>
-                <td className="px-3 py-2 text-right">
+                <td data-label="" className="m-actions px-3 py-2 text-right">
                   <button type="button" onClick={() => setLines(prev => prev.filter(x => x.key !== l.key))}
                     className="min-h-10 px-3 rounded-lg border border-red-200 text-red-800 text-sm font-semibold hover:bg-red-50">
                     Remove
@@ -169,6 +171,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
     orders, products, batches, retailers, invoices, itemActivityLogs, activeCompany,
     flowEditOrder, flowReviseInvoice, flowCancelRemaining
   } = useDb();
+  const { fromOf, byOf, nameOf } = useOrderFrom();
   const order = orders.find(o => o.id === orderId) || null;
   const [mode, setMode] = useState<'view' | 'edit-order' | 'edit-bill' | 'confirm-cancel'>('view');
   const [editInvoiceId, setEditInvoiceId] = useState<string | null>(null);
@@ -250,8 +253,8 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
               <StageBadge stage={stage} />
             </div>
             <p className="text-sm text-slate-600">
-              <span className="font-mono font-semibold text-slate-800">{order.order_number}</span> · {flowChannelLabel(order)}
-              {order.created_by ? ` · by ${order.created_by}` : ''} · {formatWhen(order.order_date || order.created_at)}
+              <span className="font-mono font-semibold text-slate-800">{order.order_number}</span> · {fromOf(order)}
+              {byOf(order) ? ` · by ${byOf(order)}` : ''} · {formatWhen(order.order_date || order.created_at)}
               {retailer?.city ? ` · ${retailer.city}` : ''}
             </p>
           </div>
@@ -339,7 +342,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
           <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
             <h3 className="px-4 py-3 border-b border-slate-200 font-bold text-slate-900">Items</h3>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[620px] text-sm border-collapse">
+              <table className="m-cards w-full min-w-[620px] text-sm border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-left text-slate-600">
                     <th className="px-4 py-2 font-semibold">Product</th>
@@ -356,12 +359,12 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
                     const pending = flowRemainingQty(it);
                     return (
                       <tr key={it.id} className="border-t border-slate-100">
-                        <td className="px-4 py-2.5 font-semibold text-slate-900">{productLabel(p, (it as any).product_name || 'Item')}</td>
-                        <td className="px-3 py-2.5 text-right">{flowOrderedQty(it)}</td>
-                        <td className="px-3 py-2.5 text-right">{Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0}</td>
-                        <td className="px-3 py-2.5 text-right">{Number(it.cancelled_qty) || 0}</td>
-                        <td className={`px-3 py-2.5 text-right font-bold ${pending > 0 ? 'text-amber-800' : 'text-slate-500'}`}>{pending}</td>
-                        <td className="px-4 py-2.5 text-right">{formatINR(flowItemRate(it, p))}</td>
+                        <td data-label="" className="px-4 py-2.5 font-semibold text-slate-900">{productLabel(p, (it as any).product_name || 'Item')}</td>
+                        <td data-label="Ordered" className="px-3 py-2.5 text-right">{flowOrderedQty(it)}</td>
+                        <td data-label="Billed" className="px-3 py-2.5 text-right">{Number(it.fulfilled_qty ?? it.dispatched_qty ?? 0) || 0}</td>
+                        <td data-label="Cancelled" className="px-3 py-2.5 text-right">{Number(it.cancelled_qty) || 0}</td>
+                        <td data-label="Pending" className={`px-3 py-2.5 text-right font-bold ${pending > 0 ? 'text-amber-800' : 'text-slate-500'}`}>{pending}</td>
+                        <td data-label="Rate" className="px-4 py-2.5 text-right">{formatINR(flowItemRate(it, p))}</td>
                       </tr>
                     );
                   })}
@@ -412,7 +415,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
               {order.flow_pack_attempted_at && (
                 <li><span className="text-slate-600">{formatWhen(order.flow_pack_attempted_at)}</span> — <strong>Packed</strong>{order.flow_packed_by ? ` by ${order.flow_packed_by}` : ''}</li>
               )}
-              <li><span className="text-slate-600">{formatWhen(order.order_date || order.created_at)}</span> — <strong>Order placed</strong> ({flowChannelLabel(order)}{order.created_by ? `, ${order.created_by}` : ''})</li>
+              <li><span className="text-slate-600">{formatWhen(order.order_date || order.created_at)}</span> — <strong>Order placed</strong> ({fromOf(order)}{byOf(order) ? `, ${byOf(order)}` : ''})</li>
             </ol>
           </section>
         </div>

@@ -14,6 +14,7 @@ import type { Invoice, Order } from '@/lib/db';
 import { computeFreeStockByProduct, flowOrderStage, flowRemainingQty, flowShortQty, flowShopKey, flowChannelLabel, isWalkInRetailerId, FlowStage } from '@/lib/db';
 import PackerPanel from './PackerPanel';
 import BillerPanel from './BillerPanel';
+import { useOrderFrom } from './flowUi';
 import OrderDetailModal, { StageBadge } from './OrderDetailModal';
 import { orderNoteOf } from './OrderNotes';
 import {
@@ -49,6 +50,7 @@ function csvCell(v: unknown) {
 
 export default function OrdersHub() {
   const { orders, products, batches, retailers, invoices, activeCompany, flowSendToPacking } = useDb();
+  const { fromOf, byOf, nameOf } = useOrderFrom();
   // Tab and open order are kept in the URL so the Back button works step by step
   const [tab, setTabUrl] = useUrlStep<Tab>('tab', 'to_pack', ['to_pack', 'ready_to_bill', 'billed', 'backorder', 'all']);
   const setTab = (t: Tab) => setTabUrl(t);
@@ -161,7 +163,7 @@ export default function OrdersHub() {
       const r = retailers.find(x => x.id === o.retailer_id);
       rows.push([
         o.order_number, (o.order_date || o.created_at || '').slice(0, 10), customerName(o, retailers), r?.city || '',
-        flowChannelLabel(o), o.created_by || '', stageOf.get(o.id) || '', String((o.items || []).length),
+        fromOf(o), nameOf(o.created_by), stageOf.get(o.id) || '', String((o.items || []).length),
         String((o.items || []).reduce((s, it) => s + flowRemainingQty(it), 0)), String(o.total_amount || 0),
         (invoiceNumbersByOrder.get(o.id) || []).join(' ')
       ]);
@@ -280,7 +282,7 @@ export default function OrdersHub() {
             <label className="flex flex-col gap-1 text-xs font-semibold text-slate-600">Created by
               <select value={filter.createdBy} onChange={e => set({ createdBy: e.target.value })} className={selectCls}>
                 <option value="">Anyone</option>
-                {creators.map(c => <option key={c} value={c}>{c}</option>)}
+                {creators.map(c => <option key={c} value={c}>{nameOf(c)}</option>)}
               </select>
             </label>
             <label className="flex flex-col gap-1 text-xs font-semibold text-slate-600">City
@@ -312,7 +314,7 @@ export default function OrdersHub() {
             <span className="text-sm text-slate-600">Open an order to edit its bill. Payments are recorded in Payments &amp; Ledger.</span>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[780px] text-sm border-collapse">
+            <table className="m-cards w-full min-w-[780px] text-sm border-collapse">
               <thead>
                 <tr className="bg-slate-50 text-left text-slate-600">
                   <th className="px-5 py-2.5 font-semibold">Invoice</th>
@@ -324,24 +326,24 @@ export default function OrdersHub() {
                 </tr>
               </thead>
               <tbody>
-                {billedInvoices.length === 0 && <tr><td colSpan={6} className="px-5 py-8 text-center text-slate-600">No bills match.</td></tr>}
+                {billedInvoices.length === 0 && <tr><td data-label="" colSpan={6} className="px-5 py-8 text-center text-slate-600">No bills match.</td></tr>}
                 {billedInvoices.slice(0, 200).map(inv => {
                   const r = retailers.find(x => x.id === inv.retailer_id);
                   const firstOrderId = inv.source_order_ids?.find(id => orders.some(o => o.id === id)) || (orders.some(o => o.id === inv.order_ref_id) ? inv.order_ref_id : undefined);
                   return (
                     <tr key={inv.id} className="border-t border-slate-100">
-                      <td className="px-5 py-3">
+                      <td data-label="" className="px-5 py-3">
                         <div className="font-mono text-xs font-bold">{inv.invoice_number}</div>
                         <div className="text-xs text-slate-600">{formatWhen(inv.date)}</div>
                         {inv.revised && <span className="text-xs font-bold text-amber-900 bg-amber-100 rounded px-1.5 py-0.5">Revised</span>}
                       </td>
-                      <td className="px-5 py-3 font-semibold text-slate-900">{r?.shop_name || 'Counter / Walk-in'}</td>
-                      <td className="px-5 py-3 text-slate-700">{(inv.source_order_numbers || []).join(', ') || '—'}</td>
-                      <td className="px-5 py-3 text-slate-700">
+                      <td data-label="" className="px-5 py-3 font-semibold text-slate-900">{r?.shop_name || 'Counter / Walk-in'}</td>
+                      <td data-label="Orders" className="px-5 py-3 text-slate-700">{(inv.source_order_numbers || []).join(', ') || '—'}</td>
+                      <td data-label="Payment" className="px-5 py-3 text-slate-700">
                         {inv.payment_mode || 'Credit'}{(inv.outstanding_amount ?? 0) > 0 ? ` · Due ${formatINR(inv.outstanding_amount ?? 0)}` : ' · Paid'}
                       </td>
-                      <td className="px-5 py-3 text-right font-semibold">{formatINR(inv.grand_total)}</td>
-                      <td className="px-5 py-3 text-right whitespace-nowrap">
+                      <td data-label="Amount" className="px-5 py-3 text-right font-semibold">{formatINR(inv.grand_total)}</td>
+                      <td data-label="" className="m-actions px-5 py-3 text-right whitespace-nowrap">
                         <button type="button" onClick={() => setPreviewInvoice(inv)} className="min-h-9 px-3 rounded-lg border border-slate-300 text-sm font-semibold mr-1.5">View</button>
                         <a href={`/admin/terminal?invoice=${encodeURIComponent(inv.id)}`} className="inline-flex items-center min-h-9 px-3 rounded-lg border border-indigo-300 text-indigo-800 text-sm font-semibold mr-1.5">Edit</a>
                         {firstOrderId && (
@@ -364,7 +366,7 @@ export default function OrdersHub() {
             <span className="text-sm text-slate-600">These pieces come back to To Pack when stock is entered, with the shop's next order, or when you press Pack now.</span>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-sm border-collapse">
+            <table className="m-cards w-full min-w-[720px] text-sm border-collapse">
               <thead>
                 <tr className="bg-slate-50 text-left text-slate-600">
                   <th className="px-5 py-2.5 font-semibold">Order</th>
@@ -374,25 +376,25 @@ export default function OrdersHub() {
                 </tr>
               </thead>
               <tbody>
-                {backorder.length === 0 && <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-600">No backorders.</td></tr>}
+                {backorder.length === 0 && <tr><td data-label="" colSpan={4} className="px-5 py-8 text-center text-slate-600">No backorders.</td></tr>}
                 {backorder.map(o => (
                   <tr key={o.id} className="border-t border-slate-100 align-top">
-                    <td className="px-5 py-3">
+                    <td data-label="" className="px-5 py-3">
                       <div className="font-mono text-xs font-bold">{o.order_number}</div>
-                      <div className="text-xs text-slate-600">{flowChannelLabel(o)}</div>
+                      <div className="text-xs text-slate-600">{fromOf(o)}</div>
                     </td>
-                    <td className="px-5 py-3">
+                    <td data-label="" className="px-5 py-3">
                       <div className="font-semibold text-slate-900">{customerName(o, retailers)}</div>
                       <div className="text-xs text-slate-600">Since {formatWhen(o.flow_pack_attempted_at || o.dispatched_at || o.order_date)}</div>
                       {orderNoteOf(o) && <div className="text-xs text-amber-900 max-w-xs truncate" title={orderNoteOf(o)}>Note: {orderNoteOf(o)}</div>}
                       {o.flow_ready_to_bill && <div className="text-xs font-semibold text-indigo-800">Packed part is waiting for the bill</div>}
                     </td>
-                    <td className="px-5 py-3 text-slate-700">
+                    <td data-label="" className="px-5 py-3 text-slate-700">
                       {(o.items || []).filter(it => flowShortQty(o, it) > 0).map(it => (
                         <div key={it.id}>{productLabel(products.find(p => p.id === it.product_id), it.product_name || 'Item')}: <strong>{flowShortQty(o, it)} pcs</strong></div>
                       ))}
                     </td>
-                    <td className="px-5 py-3 text-right">
+                    <td data-label="" className="m-actions px-5 py-3 text-right">
                       <div className="flex flex-wrap justify-end gap-2">
                         {!o.flow_ready_to_bill && (
                           <button type="button" onClick={() => { try { flowSendToPacking(o.id); } catch (e: any) { alert(e?.message || 'Could not send to packing.'); } }}
@@ -421,7 +423,7 @@ export default function OrdersHub() {
 
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-sm border-collapse">
+            <table className="m-cards w-full min-w-[820px] text-sm border-collapse">
               <thead>
                 <tr className="bg-slate-50 text-left text-slate-600">
                   <th className="px-5 py-2.5 font-semibold">Order</th>
@@ -434,22 +436,22 @@ export default function OrdersHub() {
                 </tr>
               </thead>
               <tbody>
-                {pageRows.length === 0 && <tr><td colSpan={7} className="px-5 py-8 text-center text-slate-600">No orders match.</td></tr>}
+                {pageRows.length === 0 && <tr><td data-label="" colSpan={7} className="px-5 py-8 text-center text-slate-600">No orders match.</td></tr>}
                 {pageRows.map(o => (
                   <tr key={o.id} className="border-t border-slate-100">
-                    <td className="px-5 py-3">
+                    <td data-label="" className="px-5 py-3">
                       <div className="font-mono text-xs font-bold">{o.order_number}</div>
                       <div className="text-xs text-slate-600">{formatWhen(o.order_date || o.created_at)}</div>
                     </td>
-                    <td className="px-5 py-3">
+                    <td data-label="" className="px-5 py-3">
                       <div className="font-semibold text-slate-900">{customerName(o, retailers)}</div>
                       {orderNoteOf(o) && <div className="text-xs text-amber-900 max-w-xs truncate" title={orderNoteOf(o)}>Note: {orderNoteOf(o)}</div>}
                     </td>
-                    <td className="px-5 py-3 text-slate-700">{flowChannelLabel(o)}{o.created_by ? <div className="text-xs text-slate-600">{o.created_by}</div> : null}</td>
-                    <td className="px-5 py-3"><StageBadge stage={stageOf.get(o.id) || 'to_pack'} /></td>
-                    <td className="px-5 py-3 text-slate-700 text-xs">{(invoiceNumbersByOrder.get(o.id) || []).join(', ') || '—'}</td>
-                    <td className="px-5 py-3 text-right font-semibold">{formatINR(o.total_amount || 0)}</td>
-                    <td className="px-5 py-3 text-right">
+                    <td data-label="From" className="px-5 py-3 text-slate-700"><div>{fromOf(o)}{byOf(o) ? <div className="text-xs text-slate-600">by {byOf(o)}</div> : null}</div></td>
+                    <td data-label="Stage" className="px-5 py-3"><StageBadge stage={stageOf.get(o.id) || 'to_pack'} /></td>
+                    <td data-label="Invoice" className="px-5 py-3 text-slate-700 text-xs">{(invoiceNumbersByOrder.get(o.id) || []).join(', ') || '—'}</td>
+                    <td data-label="Amount" className="px-5 py-3 text-right font-semibold">{formatINR(o.total_amount || 0)}</td>
+                    <td data-label="" className="m-actions px-5 py-3 text-right">
                       <button type="button" onClick={() => setDetailId(o.id)} className="min-h-9 px-3 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-sm font-bold">Open</button>
                     </td>
                   </tr>
