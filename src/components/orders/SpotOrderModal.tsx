@@ -13,7 +13,7 @@ import {
   Package, DollarSign, Receipt, AlertCircle, ShoppingCart, 
   UserCheck, Barcode, ChevronDown, Check, ArrowDown, ArrowUp,
   Sparkles, Building2, MapPin, Phone, RefreshCw, CreditCard,
-  ShieldCheck, Tag, Box, Hash, TrendingUp, ArrowLeft, Minus, ChevronRight
+  ShieldCheck, Tag, Box, Hash, TrendingUp, ArrowLeft, Minus, ChevronRight, History
 } from 'lucide-react';
 
 interface SpotOrderItemRow {
@@ -25,6 +25,15 @@ interface SpotOrderItemRow {
   unitRate: number;
   discount: number;
   notes?: string;
+}
+
+interface PastBillLine {
+  invoiceId: string;
+  invoiceNumber: string;
+  date: string;
+  retailerId: string;
+  qty: number;
+  rate: number; // per piece, before GST
 }
 
 interface SpotOrderModalProps {
@@ -55,10 +64,39 @@ export default function SpotOrderModal({
     inventory, 
     placeOrder, 
     dispatchRetailerPackingLot, 
-    currentUser 
+    currentUser,
+    invoices
   } = useDb();
   // supplier-only parties do not place orders
   const retailers = useMemo(() => allParties.filter(isCustomerParty), [allParties]);
+
+  // ---- Last billing rates (per piece, newest first), built once from the saved bills ----
+  const [ratesForProductId, setRatesForProductId] = useState<string | null>(null);
+  const billedLinesByProduct = useMemo(() => {
+    const map = new Map<string, PastBillLine[]>();
+    const list = [...((invoices || []) as any[])]
+      .filter(inv => inv && inv.status !== 'Cancelled')
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    for (const inv of list) {
+      for (const it of (inv.items || []) as any[]) {
+        if (!it?.product_id) continue;
+        const qty = Number(it.base_qty ?? it.quantity) || 0;
+        const taxable = Number(it.taxable_value) || 0;
+        const pack = Number(it.units_per_trading_unit || it.units_per_box_carton) || 1;
+        // Rate per piece: from the line value when we have it, else the stored rate per pack
+        const perPiece = qty > 0 && taxable > 0
+          ? taxable / qty
+          : (Number(it.unit_rate) || (Number(it.carton_rate ?? it.rate) || 0) / pack);
+        const arr = map.get(it.product_id) || [];
+        if (arr.length >= 40) continue;
+        arr.push({ invoiceId: inv.id, invoiceNumber: inv.invoice_number, date: inv.date, retailerId: inv.retailer_id, qty, rate: Math.round(perPiece * 100) / 100 });
+        map.set(it.product_id, arr);
+      }
+    }
+    return map;
+  }, [invoices]);
+  const lastRates = (productId: string, retailerId?: string | null, limit = 5) =>
+    (billedLinesByProduct.get(productId) || []).filter(r => !retailerId || r.retailerId === retailerId).slice(0, limit);
 
   // Retailer state
   const [selectedRetailerId, setSelectedRetailerId] = useState<string>('');
@@ -589,6 +627,86 @@ export default function SpotOrderModal({
     );
   };
 
+  const partyIdForRates = !isWalkIn && selectedRetailerId ? selectedRetailerId : null;
+  const fmtDate = (iso: string) => {
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' });
+  };
+  // One line under each bill item: the last rate given to this party
+  const lastRateHint = (productId: string) => {
+    if (!partyIdForRates) return null;
+    const last = lastRates(productId, partyIdForRates, 1)[0];
+    return (
+      <span className="block mt-0.5 text-xs text-slate-500">
+        {last ? <>Last rate to this party: <strong className="text-slate-700">{formatINR(last.rate)}</strong> on {fmtDate(last.date)}</> : 'Not billed to this party before'}
+      </span>
+    );
+  };
+
+  const applyRateToItem = (productId: string, rate: number) => {
+    setItems(prev => prev.map(r => r.productId === productId ? { ...r, unitRate: rate } : r));
+    setRatesForProductId(null);
+  };
+
+  const ratesList = (rows: PastBillLine[], showParty: boolean, empty: string, productId: string) => (
+    rows.length === 0 ? (
+      <p className="text-sm text-slate-500 py-2">{empty}</p>
+    ) : (
+      <ul className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+        {rows.map((r, i) => {
+          const party = showParty ? (retailers.find(x => x.id === r.retailerId)?.shop_name || 'Counter / Walk-in') : '';
+          return (
+            <li key={`${r.invoiceId}-${i}`} className="px-3 py-2 flex items-center gap-3">
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold">{formatINR(r.rate)} <span className="text-xs font-normal text-slate-500">/ Pc · {r.qty} Pcs</span></span>
+                <span className="block text-xs text-slate-500 break-words">{fmtDate(r.date)} · {r.invoiceNumber}{party ? ` · ${party}` : ''}</span>
+              </span>
+              <button type="button" onClick={() => applyRateToItem(productId, r.rate)}
+                className="h-9 px-3 rounded-lg border border-indigo-300 text-indigo-700 text-sm font-semibold hover:bg-indigo-50 active:bg-indigo-50 cursor-pointer shrink-0">
+                Use
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    )
+  );
+
+  const ratesProduct = ratesForProductId ? products.find(p => p.id === ratesForProductId) : undefined;
+  const ratesRow = ratesForProductId ? orderCalculations.find(c => c.productId === ratesForProductId) : undefined;
+  const ratesSheet = ratesForProductId && ratesProduct ? (
+    <div className="fixed inset-0 z-[70] flex items-end md:items-center justify-center md:p-6" role="dialog" aria-modal="true" aria-labelledby="rates-title">
+      <div className="absolute inset-0 bg-slate-900/50" onClick={() => setRatesForProductId(null)} aria-hidden="true" />
+      <div className="relative w-full md:max-w-lg max-h-[85dvh] overflow-y-auto overscroll-contain bg-white rounded-t-2xl md:rounded-xl shadow-2xl">
+        <div className="sticky top-0 bg-white border-b border-slate-200 px-4 py-3 flex items-start gap-3">
+          <span className="min-w-0 flex-1">
+            <span id="rates-title" className="block text-[15px] md:text-sm font-bold leading-snug break-words">{ratesProduct.name}</span>
+            <span className="block text-xs text-slate-500 mt-0.5">
+              Rate on this bill: <strong className="text-slate-800">{formatINR(ratesRow?.unitRate || 0)}</strong> / Pc
+              {Number(ratesProduct.purchase_price) > 0 && <> · Purchase: <strong className="text-slate-800">{formatINR(Number(ratesProduct.purchase_price))}</strong></>}
+            </span>
+          </span>
+          <button type="button" onClick={() => setRatesForProductId(null)} aria-label="Close" className="w-9 h-9 shrink-0 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 cursor-pointer">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4 space-y-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          {partyIdForRates && (
+            <section>
+              <h4 className="text-xs font-semibold text-slate-500 mb-2">Last 5 bills to {selectedRetailer?.shop_name || 'this party'}</h4>
+              {ratesList(lastRates(ratesForProductId, partyIdForRates), false, 'Not billed to this party before.', ratesForProductId)}
+            </section>
+          )}
+          <section>
+            <h4 className="text-xs font-semibold text-slate-500 mb-2">Last 5 bills to any party</h4>
+            {ratesList(lastRates(ratesForProductId, null), true, 'This item has not been billed yet.', ratesForProductId)}
+          </section>
+          {!partyIdForRates && <p className="text-xs text-slate-500">Select the party to see the rates given to that party.</p>}
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   // ---- shared blocks ----
   const partyBlock = (
     <div>
@@ -772,7 +890,7 @@ export default function SpotOrderModal({
                     <th className="py-2 pl-4 pr-2 text-left font-semibold w-10">#</th>
                     <th className="py-2 px-2 text-left font-semibold">Item</th>
                     <th className="py-2 px-2 text-center font-semibold w-36">Qty (Pcs)</th>
-                    <th className="py-2 px-2 text-right font-semibold w-28">Rate (₹)</th>
+                    <th className="py-2 px-2 text-right font-semibold w-36">Rate / Pc (₹)</th>
                     <th className="py-2 px-2 text-right font-semibold w-16">GST</th>
                     <th className="py-2 px-2 text-right font-semibold w-32">Amount</th>
                     <th className="py-2 pr-4 pl-2 w-10"></th>
@@ -789,6 +907,7 @@ export default function SpotOrderModal({
                         <td className="py-2.5 px-2">
                           <span className="block font-semibold leading-snug break-words">{c.prod?.name || 'Item'}</span>
                           <span className="block mt-0.5">{itemMeta(c.prod)}</span>
+                          {lastRateHint(c.productId)}
                         </td>
                         <td className="py-2 px-2">
                           <div className="flex items-center justify-center">
@@ -799,8 +918,14 @@ export default function SpotOrderModal({
                           </div>
                         </td>
                         <td className="py-2 px-2">
-                          <input type="number" value={c.unitRate} onChange={e => setRowRate(c.id, parseFloat(e.target.value) || 0)}
-                            className="w-full h-8 px-2 text-right font-semibold border border-slate-300 rounded-lg outline-none focus:border-indigo-600" />
+                          <div className="flex items-center gap-1">
+                            <input type="number" value={c.unitRate} onChange={e => setRowRate(c.id, parseFloat(e.target.value) || 0)}
+                              className="w-full min-w-0 h-8 px-2 text-right font-semibold border border-slate-300 rounded-lg outline-none focus:border-indigo-600" />
+                            <button type="button" title="Last 5 billing rates" aria-label="Last 5 billing rates" onClick={() => setRatesForProductId(c.productId)}
+                              className="w-8 h-8 shrink-0 inline-flex items-center justify-center rounded-lg border border-slate-300 text-indigo-700 hover:bg-indigo-50 cursor-pointer">
+                              <History className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                         <td className="py-2.5 px-2 text-right text-slate-500">{Number(c.prod?.gst_percent || 0)}%</td>
                         <td className="py-2.5 px-2 text-right font-bold whitespace-nowrap">{formatINR(c.amounts.totalAmount)}</td>
@@ -833,6 +958,7 @@ export default function SpotOrderModal({
                         <span className="text-[15px] font-bold whitespace-nowrap">{formatINR(c.amounts.totalAmount)}</span>
                       </div>
                       <div className="mt-0.5">{itemMeta(c.prod, (c.prod?.gst_percent ?? 0) > 0 ? (<><span className="mx-1.5">·</span><span className="whitespace-nowrap">GST {c.prod?.gst_percent}%</span></>) : null)}</div>
+                      {lastRateHint(c.productId)}
                       <div className="mt-2 flex items-center gap-2">
                         <div className="flex items-center border border-slate-300 rounded-lg overflow-hidden">
                           <button type="button" aria-label="Less" onClick={() => setRowQty(c.id, qty - 1)} className="w-9 h-9 flex items-center justify-center text-slate-600 active:bg-slate-100"><Minus className="w-4 h-4" /></button>
@@ -846,7 +972,10 @@ export default function SpotOrderModal({
                           <input type="number" inputMode="decimal" value={c.unitRate} onChange={e => setRowRate(c.id, parseFloat(e.target.value) || 0)}
                             className="w-full h-full text-right text-base font-semibold outline-none bg-transparent" />
                         </div>
-                        <button type="button" aria-label="Remove item" onClick={() => removeRow(c.id)} className="ml-auto w-9 h-9 flex items-center justify-center rounded-lg text-slate-400 active:bg-rose-50 active:text-rose-600">
+                        <button type="button" aria-label="Last 5 billing rates" onClick={() => setRatesForProductId(c.productId)} className="ml-auto w-9 h-9 flex items-center justify-center rounded-lg border border-slate-300 text-indigo-700 active:bg-indigo-50">
+                          <History className="w-4 h-4" />
+                        </button>
+                        <button type="button" aria-label="Remove item" onClick={() => removeRow(c.id)} className="w-9 h-9 flex items-center justify-center rounded-lg text-slate-400 active:bg-rose-50 active:text-rose-600">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -996,6 +1125,8 @@ export default function SpotOrderModal({
           )}
         </div>
       )}
+
+      {ratesSheet}
     </div>
   );
 }
