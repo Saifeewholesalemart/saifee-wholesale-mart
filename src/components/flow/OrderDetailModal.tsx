@@ -9,7 +9,7 @@ import { hasWords } from '@/lib/searchWords';
  * cancel the order or close a backorder short.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useDb } from '@/context/DbContext';
 import type { Invoice, Product } from '@/lib/db';
 import {
@@ -195,6 +195,22 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
       .slice(0, 30);
   }, [itemActivityLogs, order, bills]);
 
+  // The edit box opens at the top of this panel. When "Edit bill" is pressed further down
+  // (Bills section), bring the edit box into view, otherwise it looks like nothing happened.
+  const editBoxRef = useRef<HTMLElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (mode === 'view') return;
+    const t = setTimeout(() => {
+      const panel = panelRef.current, box = editBoxRef.current;
+      if (!panel || !box) return;
+      const header = panel.querySelector('header') as HTMLElement | null;
+      const top = box.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop - (header?.offsetHeight || 0) - 12;
+      panel.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    }, 30);
+    return () => clearTimeout(t);
+  }, [mode, editInvoiceId]);
+
   if (!order) return null;
   const stage = flowOrderStage(order, free);
   const pendingTotal = (order.items || []).reduce((s, it) => s + flowRemainingQty(it), 0);
@@ -245,7 +261,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-labelledby="order-detail-title">
       <div className="absolute inset-0 bg-slate-950/50" onClick={onClose} aria-hidden="true" />
-      <div className="relative w-full max-w-3xl h-full bg-slate-50 overflow-y-auto shadow-2xl flex flex-col">
+      <div ref={panelRef} className="relative w-full max-w-3xl h-full bg-slate-50 overflow-y-auto shadow-2xl flex flex-col">
         <header className="sticky top-0 z-10 bg-white border-b border-slate-200 px-5 py-4 flex justify-between gap-3 items-start">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -269,7 +285,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
           {error && <div role="alert" className="text-sm font-semibold text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
 
           {mode === 'edit-order' && (
-            <section className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col gap-3">
+            <section ref={editBoxRef} className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col gap-3">
               <h3 className="font-bold text-slate-900">Edit order (items not billed yet)</h3>
               {order.flow_ready_to_bill && (
                 <p className="text-sm text-amber-900 bg-amber-50 rounded-lg px-3 py-2">This order is packed. Saving a change sends it back to To Pack.</p>
@@ -284,7 +300,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
           )}
 
           {mode === 'edit-bill' && (
-            <section className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col gap-3">
+            <section ref={editBoxRef} className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col gap-3">
               <h3 className="font-bold text-slate-900">Edit bill {bills.find(b => b.id === editInvoiceId)?.invoice_number}</h3>
               <p className="text-sm text-amber-900 bg-amber-50 rounded-lg px-3 py-2">
                 The invoice keeps its number and is marked “Revised”. Stock and the customer’s balance change by the difference. The old version is kept in the history.
@@ -304,7 +320,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
           )}
 
           {mode === 'confirm-cancel' && (
-            <section className="bg-white border border-red-200 rounded-xl p-4 flex flex-col gap-3">
+            <section ref={editBoxRef} className="bg-white border border-red-200 rounded-xl p-4 flex flex-col gap-3">
               <h3 className="font-bold text-red-900">{billedAny ? 'Close pending items?' : 'Cancel this order?'}</h3>
               <p className="text-sm text-slate-700">
                 {billedAny
@@ -395,7 +411,7 @@ export default function OrderDetailModal({ orderId, onClose }: { orderId: string
                       <strong className="text-base mr-1">{formatINR(b.grand_total)}</strong>
                       <button type="button" onClick={() => setPreview(b)} className="min-h-10 px-3 rounded-lg border border-slate-300 bg-white text-sm font-semibold">View</button>
                       {mode === 'view' && (
-                        <button type="button" onClick={() => startEditBill(b)} className="min-h-10 px-3 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-sm font-bold">Edit bill</button>
+                        <a href={`/admin/terminal?invoice=${encodeURIComponent(b.id)}`} className="min-h-10 px-3 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-sm font-bold inline-flex items-center">Edit bill</a>
                       )}
                     </div>
                   </li>
