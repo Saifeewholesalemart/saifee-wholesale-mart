@@ -149,12 +149,12 @@ export default function OrdersHub() {
   const creators = useMemo(() => Array.from(new Set(orders.map(o => o.created_by).filter(Boolean) as string[])).sort(), [orders]);
   const customers = useMemo(() => retailers.filter(r => !isWalkInRetailerId(r.id)).sort((a, b) => (a.shop_name || '').localeCompare(b.shop_name || '')), [retailers]);
 
-  const tabs: { key: Tab; label: string; count: number; hint: string }[] = [
-    { key: 'to_pack', label: 'To Pack', count: toPack.length, hint: `${shopsIn(toPack)} shop${shopsIn(toPack) === 1 ? '' : 's'}` },
-    { key: 'ready_to_bill', label: 'Ready to Bill', count: ready.length, hint: `${shopsIn(ready)} bill${shopsIn(ready) === 1 ? '' : 's'} to make` },
-    { key: 'billed', label: 'Billed', count: billedInvoices.length, hint: 'Invoices' },
-    { key: 'backorder', label: 'Backorder', count: backorder.length, hint: 'Waiting for stock' },
-    { key: 'all', label: 'All orders', count: filtered.length, hint: 'Full register' }
+  const tabs: { key: Tab; label: string; short: string; count: number; hint: string }[] = [
+    { key: 'to_pack', label: 'To Pack', short: 'To Pack', count: toPack.length, hint: `${shopsIn(toPack)} shop${shopsIn(toPack) === 1 ? '' : 's'}` },
+    { key: 'ready_to_bill', label: 'Ready to Bill', short: 'To Bill', count: ready.length, hint: `${shopsIn(ready)} bill${shopsIn(ready) === 1 ? '' : 's'} to make` },
+    { key: 'billed', label: 'Billed', short: 'Billed', count: billedInvoices.length, hint: 'Invoices' },
+    { key: 'backorder', label: 'Backorder', short: 'Backorder', count: backorder.length, hint: 'Waiting for stock' },
+    { key: 'all', label: 'All orders', short: 'All', count: filtered.length, hint: 'Full register' }
   ];
 
   const exportCsv = () => {
@@ -188,7 +188,6 @@ export default function OrdersHub() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Orders</h1>
-          <p className="text-sm text-slate-600">To Pack → Ready to Bill → Billed. Orders of one shop from any channel are packed and billed together.</p>
         </div>
         <div className="flex flex-wrap gap-2 relative">
           <button type="button" onClick={() => setSpotOpen(true)} className="min-h-11 px-4 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-sm">
@@ -210,15 +209,17 @@ export default function OrdersHub() {
         </div>
       </div>
 
-      <nav aria-label="Order stages" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      <nav aria-label="Order stages" className="grid grid-cols-5 sm:grid-cols-3 lg:grid-cols-5 gap-1.5 sm:gap-3">
         {tabs.map(t => {
           const active = tab === t.key;
           return (
             <button key={t.key} type="button" aria-pressed={active} onClick={() => { setTab(t.key); setPage(1); }}
-              className={`text-left p-3.5 rounded-xl flex flex-col gap-0.5 ${active ? 'border-2 border-indigo-700 bg-indigo-50' : 'border border-slate-200 bg-white hover:bg-slate-50'}`}>
-              <span className={`text-sm font-semibold ${active ? 'text-indigo-800' : 'text-slate-600'}`}>{t.label}</span>
-              <span className="text-2xl font-extrabold text-slate-900">{t.count}</span>
-              <span className="text-xs text-slate-600">{t.hint}</span>
+              className={`text-center sm:text-left px-1 py-1.5 sm:p-3.5 rounded-lg sm:rounded-xl flex flex-col gap-0 sm:gap-0.5 ${active ? 'border-2 border-indigo-700 bg-indigo-50' : 'border border-slate-200 bg-white hover:bg-slate-50'}`}>
+              <span className={`text-[10px] sm:text-sm font-semibold leading-tight truncate ${active ? 'text-indigo-800' : 'text-slate-600'}`}>
+                <span className="sm:hidden">{t.short}</span><span className="hidden sm:inline">{t.label}</span>
+              </span>
+              <span className="text-base sm:text-2xl font-extrabold text-slate-900 leading-tight">{t.count}</span>
+              <span className="hidden sm:block text-xs text-slate-600">{t.hint}</span>
             </button>
           );
         })}
